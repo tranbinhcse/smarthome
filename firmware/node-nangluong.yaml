@@ -1,0 +1,51 @@
+# Node năng lượng (tum kỹ thuật): ESP32 DevKit + 2 mạch TTL→RS485 tự đảo chiều.
+#   - Bus 1: cổng Modbus của inverter (gói inverter/<hãng>.yaml), GPIO17 TX / GPIO16 RX.
+#   - Bus 2: mạng RS485 nội bộ 3 pack JK (gói jk-bms/jk-bms.yaml của phần JK BMS), chân do gói đó chọn,
+#     không dùng GPIO16/17.
+# v1 CHỈ ĐỌC: gói inverter chỉ khai báo sensor; `go test ./...` chặn mọi khai báo ghi được.
+# Nạp: esphome run firmware/node-nangluong.yaml (lần đầu qua USB, sau đó OTA). Bí mật: firmware/secrets.yaml.
+
+substitutions:
+  inverter_tx_pin: GPIO17
+  inverter_rx_pin: GPIO16
+  inverter_modbus_address: "1" # XÁC NHẬN trên màn hình inverter
+  inverter_update_interval: 10s
+
+esphome:
+  name: node-nangluong
+  friendly_name: Node năng lượng
+
+esp32:
+  board: esp32dev
+
+logger:
+  level: INFO # DEBUG in mỗi khung Modbus
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: node-nangluong
+    password: !secret ap_password
+
+captive_portal: # vào AP dự phòng để nhập lại Wi-Fi
+
+# hubd chỉ nói MQTT. Trạng thái node: nangluong/status = online/offline (LWT).
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: nangluong
+  discovery: false
+  log_topic: null
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+packages:
+  # Chọn đúng một gói theo hãng/model (xem firmware/inverter/README.md):
+  #   deye-1pha.yaml · deye-3pha.yaml · luxpower.yaml · lumentree.yaml
+  inverter: !include inverter/deye-1pha.yaml
+  # Bỏ # khi firmware/jk-bms/jk-bms.yaml đã vào master:
+  # jk_bms: !include jk-bms/jk-bms.yaml

@@ -21,7 +21,8 @@ const RICH = new Set([...IR, 'vacuum']);             // thẻ có nút điều k
 const PASSIVE = new Set(['infra', 'router', 'camera']);   // chỉ báo trạng thái, không bật tắt
 // Số đo inverter Deye + pin JK. grid: + mua / − bán; jk.power: + sạc / − xả. *_today: kWh trong ngày.
 const ENERGY_IDS = new Set(['deye.pv', 'deye.grid', 'deye.load', 'jk.soc', 'jk.power', 'deye.pv_today', 'deye.load_today',
-  'deye.charge_today', 'deye.discharge_today', 'deye.buy_today', 'deye.sell_today']);
+  'deye.charge_today', 'deye.discharge_today', 'deye.buy_today', 'deye.sell_today',
+  'deye.battery', 'deye.soc', 'deye.grid_v', 'deye.grid_hz', 'deye.temp']); // chỉ lịch sử/luật, không phải cảm biến phòng
 const VAC = {cleaning: 'Đang lau', paused: 'Tạm dừng', returning: 'Đang về dock', docked: 'Đang sạc ở dock'};
 
 const ICON = {

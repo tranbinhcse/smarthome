@@ -1,0 +1,184 @@
+# LuxPower hybrid: SNA 3000–6000, LXP-LB-EU 3–12K (và EG4 cùng nhân). Modbus RTU 19200 8N1, địa chỉ 1.
+# Input register (hàm 0x04), giá trị big-endian khi hỏi bằng khung RTU chuẩn.
+# CHỈ ĐỌC: chỉ có sensor. (Cấu hình cộng đồng thường có sync_time/number ghi holding 11–14, 177… — không chép.)
+#
+# Nguồn thanh ghi:
+#   Lux "Modbus RTU Protocol" V58 (2023-10-28), bản trong jostd/ESPHome-Luxpower-8k-10k/Modbus-Protocol.pdf:
+#     tr.7 cổng RS-485 19200 8N1, hỏi ≥ 1 s, tối đa 40 thanh ghi/lần, không vượt bank 0–39/40–79/…;
+#     tr.8–14 bảng input register (5 = SOC byte thấp/SOH byte cao, 10/11 sạc/xả, 26/27 ra lưới/vào nhà…).
+#   celsworth/lxp-bridge, src/lxp/packet.rs: p_battery = p_charge − p_discharge, p_grid = p_to_user − p_to_grid.
+#   jsharkey/lxp-esphome @b5b2be1, 12000xp.yaml: modbus_controller thường ở 19200; tải =
+#     Ptouser − Ptogrid + Pinv − Prec + Peps (dòng ~150), kWh tải trong ngày tương tự (dòng ~158).
+#
+# Đấu dây:
+#   - SNA 5000/6000: cổng RJ45 "MPPT485/CT", chân 7 = B, chân 8 = A (f-garofalo/openlux docs/HARDWARE.md,
+#     nicolaERTT/ESP32-luxpower); cổng này chạy được khi dongle Wi-Fi vẫn cắm.
+#   - LXP-LB-EU: cổng và sơ đồ chân CHƯA XÁC MINH; có người dùng báo INV485 dùng chung bus với dongle → phải rút dongle.
+#   - Nếu dongle vẫn cắm trên cùng bus: đặt inverter_update_interval ≥ 60s (tài liệu Lux, Tip 2).
+#
+# XÁC NHẬN khi lắp:
+#   - Máy trả lời khung RTU chuẩn (6 dự án cộng đồng dùng được, nhưng chưa ai thử trên SNA 5000/6000 hay LXP-5K).
+#     Không trả lời → phương án: paulsteigel/luxpower_sna (ESPHome đọc dongle qua TCP 8000) hoặc lxp-bridge trên máy Ubuntu.
+#   - load_power/load_today là số TÍNH; firmware mới có sẵn ô 170/171 (Pload/Eload_day) — so với app Lux rồi chọn.
+#   - Nhiệt độ: ô 65 (tản nhiệt 1, °C nguyên); ô 67 (nhiệt pin) có máy báo kẹt.
+
+uart:
+  - id: uart_inverter
+    tx_pin: ${inverter_tx_pin}
+    rx_pin: ${inverter_rx_pin}
+    baud_rate: 19200
+
+modbus:
+  - id: modbus_inverter
+    uart_id: uart_inverter
+
+modbus_controller:
+  - id: inverter
+    modbus_id: modbus_inverter
+    address: ${inverter_modbus_address}
+    update_interval: ${inverter_update_interval}
+
+sensor:
+  # Thanh ghi thô (W hoặc 0,1 kWh), dùng để tính các khoá của lược đồ.
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_ppv1, internal: true, register_type: read, address: 7 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_ppv2, internal: true, register_type: read, address: 8 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_ppv3, internal: true, register_type: read, address: 9 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_pcharge, internal: true, register_type: read, address: 10 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_pdischarge, internal: true, register_type: read, address: 11 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_pinv, internal: true, register_type: read, address: 16 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_prec, internal: true, register_type: read, address: 17 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_peps, internal: true, register_type: read, address: 24 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_ptogrid, internal: true, register_type: read, address: 26 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_ptouser, internal: true, register_type: read, address: 27 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_epv1_day, internal: true, register_type: read, address: 28 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_epv2_day, internal: true, register_type: read, address: 29 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_epv3_day, internal: true, register_type: read, address: 30 }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_einv_day, internal: true, register_type: read, address: 31, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_erec_day, internal: true, register_type: read, address: 32, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: lux_eeps_day, internal: true, register_type: read, address: 35, filters: [ { multiply: 0.1 } ] }
+
+  - platform: combination
+    type: sum
+    name: Điện mặt trời
+    id: inv_pv_power
+    state_topic: nangluong/inverter/pv_power
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    sources: [ { source: lux_ppv1 }, { source: lux_ppv2 }, { source: lux_ppv3 } ]
+
+  - platform: combination
+    type: linear
+    name: Tải tiêu thụ
+    id: inv_load_power
+    state_topic: nangluong/inverter/load_power
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    sources:
+      - { source: lux_ptouser, coefficient: 1 }
+      - { source: lux_ptogrid, coefficient: -1 }
+      - { source: lux_pinv, coefficient: 1 }
+      - { source: lux_prec, coefficient: -1 }
+      - { source: lux_peps, coefficient: 1 }
+
+  - platform: combination
+    type: linear
+    name: Điện lưới
+    id: inv_grid_power
+    state_topic: nangluong/inverter/grid_power
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    sources: [ { source: lux_ptouser, coefficient: 1 }, { source: lux_ptogrid, coefficient: -1 } ]
+
+  - platform: combination
+    type: linear
+    name: Pin sạc xả
+    id: inv_battery_power
+    state_topic: nangluong/inverter/battery_power
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    sources: [ { source: lux_pcharge, coefficient: 1 }, { source: lux_pdischarge, coefficient: -1 } ]
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: SOC pin
+    id: inv_battery_soc
+    state_topic: nangluong/inverter/battery_soc
+    register_type: read
+    address: 5
+    bitmask: 0x00FF # byte cao là SOH
+    unit_of_measurement: "%"
+    device_class: battery
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Điện áp lưới
+    id: inv_grid_voltage
+    state_topic: nangluong/inverter/grid_voltage
+    register_type: read
+    address: 12 # pha R
+    unit_of_measurement: V
+    device_class: voltage
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Tần số lưới
+    id: inv_grid_frequency
+    state_topic: nangluong/inverter/grid_frequency
+    register_type: read
+    address: 15
+    unit_of_measurement: Hz
+    device_class: frequency
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Nhiệt độ inverter
+    id: inv_temperature
+    state_topic: nangluong/inverter/temperature
+    register_type: read
+    address: 65
+    reuse_previous_range: false # bank 40–79: không gộp với bank 0–39
+    value_type: S_WORD
+    unit_of_measurement: °C
+    device_class: temperature
+    accuracy_decimals: 0
+
+  - platform: combination
+    type: sum
+    name: PV hôm nay
+    id: inv_pv_today
+    state_topic: nangluong/inverter/pv_today
+    unit_of_measurement: kWh
+    device_class: energy
+    accuracy_decimals: 1
+    sources: [ { source: lux_epv1_day }, { source: lux_epv2_day }, { source: lux_epv3_day } ]
+    filters:
+      - multiply: 0.1
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Mua lưới hôm nay, id: inv_buy_today, state_topic: nangluong/inverter/buy_today, register_type: read, address: 37, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Bán lưới hôm nay, id: inv_sell_today, state_topic: nangluong/inverter/sell_today, register_type: read, address: 36, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Sạc pin hôm nay, id: inv_charge_today, state_topic: nangluong/inverter/charge_today, register_type: read, address: 33, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Xả pin hôm nay, id: inv_discharge_today, state_topic: nangluong/inverter/discharge_today, register_type: read, address: 34, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - platform: combination
+    type: linear
+    name: Tiêu thụ hôm nay
+    id: inv_load_today
+    state_topic: nangluong/inverter/load_today
+    unit_of_measurement: kWh
+    device_class: energy
+    accuracy_decimals: 1
+    sources:
+      - { source: inv_buy_today, coefficient: 1 }
+      - { source: inv_sell_today, coefficient: -1 }
+      - { source: lux_einv_day, coefficient: 1 }
+      - { source: lux_erec_day, coefficient: -1 }
+      - { source: lux_eeps_day, coefficient: 1 }
