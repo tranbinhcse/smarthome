@@ -15,7 +15,7 @@ iPad: Safari → mở địa chỉ trên → nhập PIN → Chia sẻ → **Thê
 
 ## Kết nối thiết bị Tuya
 
-1. Lấy `devices.json` bằng `tinytuya wizard` (cần link tài khoản Smart Life vào project Tuya IoT), đặt vào `tuya/devices.json`. Thư mục `tuya/` **không commit** (chứa local key).
+1. Lấy `devices.json` bằng đăng nhập QR của app, không cần Tuya IoT Platform: `~/tuya-venv/bin/python scripts/tuya_qr_login.py` (chạy bằng root), nhập User Code (Smart Life → Tôi → ⚙️ → Tài khoản và bảo mật), quét QR trong app. Script tự điền IP + version từ broadcast LAN và ghi `tuya/devices.json`. Xem IP thiết bị: thêm `--scan`. Thư mục `tuya/` **không commit** (chứa local key).
 2. Nếu thiết bị thiếu IP (quét UDP bị ufw chặn), tạo `tuya/overrides.json`:
    ```json
    {"<device id>": {"ip": "192.168.1.11", "version": "3.4", "dp": "1"}}
