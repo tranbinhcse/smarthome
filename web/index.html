@@ -6,43 +6,42 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Nhà">
-<meta name="theme-color" content="#0b151e">
+<meta name="apple-mobile-web-app-title" content="Hub Center">
+<meta name="theme-color" content="#0a1119">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="icon" href="/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600&display=swap">
-<link rel="stylesheet" href="/dash.css?v=20261026211932">
-<title>Nhà của tôi</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap">
+<link rel="stylesheet" href="/dash.css?v=20261027002606">
+<title>Hub Center</title>
 </head>
 <body>
+<div id="bgs" aria-hidden="true"></div>
+<div id="rain" aria-hidden="true"></div>
 <div class="app">
   <header class="top">
-    <div class="brand">Nhà của tôi</div>
-    <div class="when" id="when"></div>
-    <div class="sp"></div>
-    <span id="demo-chip"></span>
-    <button class="chip" id="sky" type="button"></button>
-    <a class="chip" href="/history.html">Biểu đồ</a>
-    <span class="chip" id="conn"><i class="dot"></i><span>Đang kết nối</span></span>
+    <div class="brand"><svg class="ic sunlogo" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Hub Center</div>
+    <nav class="tabs" id="tabs" aria-label="Chọn tầng"></nav>
+    <div class="topr">
+      <span id="demo-chip"></span>
+      <div class="clock" id="when"></div>
+      <a class="rbtn" href="/history.html" title="Biểu đồ lịch sử" aria-label="Biểu đồ lịch sử"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></a>
+      <button class="rbtn" id="bell" type="button" aria-label="Cần chú ý"></button>
+      <button class="rbtn" type="button" data-go="caidat" title="Cài đặt" aria-label="Cài đặt"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+      <button class="rbtn" id="sky" type="button"></button>
+      <span class="rbtn conn" id="conn" title="Đang kết nối"><i class="dot"></i></span>
+    </div>
   </header>
-  <div class="main">
-    <section class="hero" aria-label="Ngôi nhà">
-      <div class="hero-text"><div id="heroText"></div><nav class="tabs" id="tabs" aria-label="Chọn tầng"></nav></div>
-      <div class="hero-chips" id="heroChips"></div>
-      <div class="scene" id="house" aria-label="Ảnh ngôi nhà"></div>
-    </section>
-    <main class="stage" id="stage"></main>
-  </div>
+  <main class="view" id="view"></main>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <dialog class="modal" id="modal"></dialog>
 <div id="loginbox"></div>
-<script src="/app.js?v=20261026211932"></script>
-<script src="/scene.js?v=20261026211932"></script>
-<script src="/demo.js?v=20261026211932"></script>
-<script src="/dash.js?v=20261026211932"></script>
+<script src="/app.js?v=20261027002606"></script>
+<script src="/scene.js?v=20261027002606"></script>
+<script src="/demo.js?v=20261027002606"></script>
+<script src="/dash.js?v=20261027002606"></script>
 </body>
 </html>

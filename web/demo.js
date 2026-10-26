@@ -14,16 +14,18 @@ const DEMO_DATA = (() => {
   ];
   const n = (count, prefix, zone, kind, onIdx = []) =>
     Array.from({length: count}, (_, i) => [`${zone}_${kind}${i + 1}`, `${prefix} ${i + 1}`, zone, kind, onIdx.includes(i + 1) ? 1 : 0]);
-  // [id, tên, phòng, loại, bật?]
+  // Ổ cắm nhiều lỗ: mỗi lỗ một thiết bị, chung group (thật: cùng một Tuya, mỗi lỗ một dp).
+  const strip = (id, group, zone, on) => ['Ổ 1', 'Ổ 2', 'Ổ 3', 'USB'].map((nm, i) => [`${id}_${i + 1}`, nm, zone, 'socket', on[i], group]);
+  // [id, tên, phòng, loại, bật?, nhóm?]
   const devs = [
     // Sân trước: bơm nước, tưới cây, đèn bảng hiệu
     ['st_bom', 'Bơm nước', 'santruoc', 'pump', 0], ['st_tuoi', 'Tưới cây', 'santruoc', 'water', 0],
     ['st_bh', 'Đèn bảng hiệu', 'santruoc', 'light', 1], ['cam_st', 'Camera sân trước', 'santruoc', 'camera', 1],
     // Khu cafe: 8 công tắc đèn, 2 quạt trần, 2 máy lạnh, 1 TV, robot lau nhà, 3 camera (+ ổ cắm hồ cá đang có thật)
     ['cafe_lanh', 'Đèn phòng lạnh', 'cafe', 'light', 1], ...n(7, 'Đèn', 'cafe', 'light', [1, 2, 5]),
-    ['cafe_hoca', 'Ổ cắm hồ cá', 'cafe', 'socket', 1], ...n(3, 'Camera', 'cafe', 'camera', [1, 2, 3]),
+    ['cafe_hoca', 'Ổ cắm hồ cá', 'cafe', 'socket', 1], ...strip('cafe_quay', 'Ổ cắm quầy', 'cafe', [1, 1, 0, 1]), ...n(3, 'Camera', 'cafe', 'camera', [1, 2, 3]),
     ...n(2, 'Quạt trần', 'cafe', 'fan', [1]), ...n(2, 'Máy lạnh', 'cafe', 'ac', [1]),
-    ['cafe_tv', 'TV', 'cafe', 'tv', 1], ['cafe_robot', 'Robot lau nhà', 'cafe', 'vacuum', 0],
+    ['cafe_tv', 'TV', 'cafe', 'tv', 1], ['cafe_loa', 'Loa quán', 'cafe', 'speaker', 1], ['cafe_robot', 'Robot lau nhà', 'cafe', 'vacuum', 0],
     // Bếp: chỉ có CB (thiết bị bếp, tủ lạnh không điều khiển)
     ['cam_bep', 'Camera bếp', 'bep', 'camera', 1],
     // Phòng kho: 1 công tắc, 1 máy lạnh. WC: 3 công tắc
@@ -32,7 +34,7 @@ const DEMO_DATA = (() => {
     ['sansau_den', 'Đèn sân sau', 'sansau', 'light', 1], ['cam_ss', 'Camera sân sau', 'sansau', 'camera', 1],
     ['wifi_t1', 'Router Wi-Fi tầng 1', 'tudien1', 'router', 1],
     // Phòng làm việc: 1 máy lạnh, 1 TV, 1 quạt, 6 công tắc, 1 máy lọc nước, robot lau nhà
-    ...n(6, 'Đèn', 'lamviec', 'light', [1, 2]), ['lv_loc', 'Máy lọc nước', 'lamviec', 'socket', 1],
+    ...n(6, 'Đèn', 'lamviec', 'light', [1, 2]), ['lv_loc', 'Máy lọc nước', 'lamviec', 'socket', 1], ...strip('lv_ban', 'Ổ cắm bàn làm việc', 'lamviec', [1, 0, 0, 1]),
     ['cam_lv', 'Camera phòng làm việc', 'lamviec', 'camera', 1],
     ['lv_ml', 'Máy lạnh', 'lamviec', 'ac', 1], ['lv_tv', 'TV', 'lamviec', 'tv', 0], ['lv_quat', 'Quạt', 'lamviec', 'fan', 0],
     ['lv_robot', 'Robot lau nhà', 'lamviec', 'vacuum', 0],
@@ -57,7 +59,7 @@ const DEMO_DATA = (() => {
     ['n1.t', 'Nhiệt độ', '°C', 'ngu1', '28.3'], ['n2.t', 'Nhiệt độ', '°C', 'ngu2', '28'],
     ['ds.t', 'Nhiệt độ', '°C', 'docsach', '26.5'],
     ['gt.mua', 'Mưa', '', 'gieng_troi', 'Không'], ['gt.lux', 'Ánh sáng', 'lx', 'gieng_troi', '18400'],
-    ['gt.t', 'Ngoài trời', '°C', 'gieng_troi', '31.6'],
+    ['gt.t', 'Ngoài trời', '°C', 'gieng_troi', '31.6'], ['gt.h', 'Độ ẩm ngoài trời', '%', 'gieng_troi', '68'],
   ];
   // Ánh sáng giếng trời + điện mặt trời theo giờ thật để chế độ "Tự động" ngày/đêm khớp với bên ngoài.
   const hr = new Date().getHours(), day = hr >= 6 && hr < 18;
@@ -86,22 +88,25 @@ const DEMO_DATA = (() => {
   const scenes = [
     {name: 'Mở quán', icon: 'store', note: 'Đèn, máy lạnh, TV khu cafe và đèn bảng hiệu',
       steps: [...steps(ids(d => inZ('cafe')(d) && isK('light', 'ac', 'tv')(d)), 'on'), {d: 'st_bh', to: 'on'}]},
-    {name: 'Đóng quán', icon: 'door', note: 'Tắt khu cafe rồi cho robot lau',
-      steps: [...steps(ids(d => inZ('cafe')(d) && isK('light', 'ac', 'tv', 'fan')(d)), 'off'), {d: 'st_bh', to: 'off'}, {d: 'cafe_robot', act: 'start'}]},
+    {name: 'Đóng quán', icon: 'lock', note: 'Tắt khu cafe rồi cho robot lau',
+      steps: [...steps(ids(d => inZ('cafe')(d) && isK('light', 'ac', 'tv', 'fan', 'speaker')(d)), 'off'), {d: 'st_bh', to: 'off'}, {d: 'cafe_robot', act: 'start'}]},
+    {name: 'Về nhà', icon: 'home', note: 'Bật đèn và máy lạnh phòng làm việc',
+      steps: [...steps(ids(d => inZ('lamviec')(d) && isK('light')(d)).slice(0, 2), 'on'), {d: 'lv_ml', to: 'on'}]},
     {name: 'Đi ngủ', icon: 'moon', note: 'Tắt đèn trong nhà, bật máy lạnh phòng ngủ',
       steps: [...steps(ids(d => isK('light')(d) && !inZ('santruoc', 'sansau')(d)), 'off'), {d: 'n1_ml', to: 'on'}, {d: 'n2_ml', to: 'on'}]},
-    {name: 'Ra khỏi nhà', icon: 'home', note: 'Tắt hết đèn, máy lạnh, quạt, TV; robot lau',
+    {name: 'Ra khỏi nhà', icon: 'door', note: 'Tắt hết đèn, máy lạnh, quạt, TV; robot lau',
       steps: [...steps(ids(isK('light', 'ac', 'fan', 'tv', 'pump', 'water')), 'off'), {d: 'cafe_robot', act: 'start'}, {d: 'lv_robot', act: 'start'}]},
   ];
 
   const cfg = {
     zones, scenes,
-    devices: devs.map(([id, name, zone, kind]) => ({id, name, zone, kind, protected: kind === 'breaker'})),
+    devices: devs.map(([id, name, zone, kind, , group]) => ({id, name, zone, kind, protected: kind === 'breaker', ...(group && {group})})),
     entities: ents.map(([id, name, unit, zone, , device]) => ({id, name, unit, zone, device})),
   };
   const state = {'online:kho_den': 'offline', 'x:cafe_ac1:temp': '25', 'x:lv_ml:temp': '26',
     'x:cafe_fan1:speed': '2', 'x:ds_quat:speed': '1',
-    'x:cafe_robot:status': 'docked', 'x:cafe_robot:battery': '100', 'x:lv_robot:status': 'cleaning', 'x:lv_robot:battery': '72'};
+    'x:cafe_robot:status': 'docked', 'x:cafe_robot:battery': '100', 'x:lv_robot:status': 'cleaning', 'x:lv_robot:battery': '72',
+    'x:cafe_loa:play': '1', 'x:cafe_loa:track': 'Nhạc quán buổi tối', 'x:cafe_loa:vol': '40'};
   for (const [id, , , kind, on] of devs) {
     state['dev:' + id] = on ? 'ON' : 'OFF';
     if (!['tv', 'speaker', 'fan', 'ac', 'vacuum'].includes(kind) && id !== 'kho_den') state['online:' + id] = 'online';

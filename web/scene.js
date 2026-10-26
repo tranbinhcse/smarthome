@@ -1,27 +1,19 @@
-// Ảnh nhà và vùng từng phòng trên ảnh, đơn vị % theo chiều rộng / cao của ảnh: [x, y, rộng, cao].
-// Khoá phòng = id khu trong config.yaml. Căn vùng: mở /?demo&vung để thấy khung từng phòng rồi sửa số ở đây.
+// Ảnh nền từng trang (bản ngày + bản đêm) và vị trí nhãn trên ảnh, đơn vị % theo chiều rộng / cao của ảnh: [x, y].
+// Thay ảnh: bỏ file .webp vào web/images rồi sửa đường dẫn ở đây. Tìm toạ độ nhãn: mở /?demo&vung, chạm lên ảnh để xem %.
 const SCENE = {
-  house: {
-    src: '/img/nha.webp', w: 1024, h: 687,
-    floors: {3: [8, 33], 2: [33, 58], 1: [58, 94]},   // dải dọc [từ, tới] của từng tầng
-    rooms: {
-      gieng_troi: [38.6, 14.6, 29.8, 17.8], kythuat: [68.4, 13.8, 10.9, 18.5],
-      lamviec: [22.5, 33.8, 18.6, 23.3], ngu1: [41.5, 33.8, 15.6, 23.3], ngu2: [57.6, 33.8, 10.7, 23.3],
-      docsach: [78.6, 33.8, 10.3, 23.3],
-      santruoc: [7.3, 68.4, 21, 24.7], cafe: [29.3, 58.2, 26.4, 34.2], bep: [55.7, 58.2, 12.7, 34.2],
-      kho: [68.4, 58.2, 9.8, 34.2], wc: [78.6, 58.2, 6.8, 34.2], sansau: [85.9, 58.2, 8.3, 30],
-    },
-  },
+  floorNames: {1: 'Tầng trệt', 2: 'Tầng 1', 3: 'Tầng tum'},
+  // Cả nhà: ảnh phủ kín màn hình; nhãn là từng tầng.
+  home: {day: '/images/tongquan-sang.webp', night: '/images/tongquan-toi.webp', w: 1448, h: 1086,
+    chips: {3: [17, 33], 2: [14, 50], 1: [16, 67]}},
+  // Từng tầng: ảnh đặt trong vùng trống giữa các widget (nền là chính ảnh đó làm mờ); nhãn là từng phòng.
   floors: {
-    1: {src: '/img/tang1.webp', w: 2000, h: 667, wifi: [55.3, 33], rooms: {
-      santruoc: [0, 25, 18.5, 56], cafe: [20, 26, 33.75, 51.7], bep: [56.5, 26, 14, 51.7],
-      kho: [70.75, 26, 10.5, 51.7], wc: [82, 26, 6.75, 51.7], sansau: [89.5, 26, 10.5, 51.7]}},
-    2: {src: '/img/tang2.webp', w: 2000, h: 667, wifi: [76.5, 46], rooms: {
-      lamviec: [5.25, 28.5, 25.5, 48.7], ngu1: [31.5, 28.5, 18.5, 48.7], ngu2: [50.75, 28.5, 17.75, 48.7],
-      docsach: [80, 28.5, 18, 48.7]}},
-    3: {src: '/img/tang3.webp', w: 2000, h: 667, wifi: [79, 40], rooms: {
-      gieng_troi: [3.75, 28.5, 50.75, 59], kythuat: [56.25, 27.7, 41.25, 59.3]}},
+    1: {day: '/images/tang-tret-sang.webp', night: '/images/tang-tret-toi.webp', w: 1672, h: 941,
+      chips: {santruoc: [24, 60], cafe: [39, 47], wc: [58, 22], kho: [73, 28], bep: [70, 64], sansau: [89, 45]}},
+    2: {day: '/images/tang-1-sang.webp', night: '/images/tang-1-toi.webp', w: 1672, h: 941,
+      chips: {lamviec: [17, 54], docsach: [53, 64], ngu1: [77, 68]}},
+    3: {day: '/images/tang-tum-sang.webp', night: '/images/tang-tum-toi.webp', w: 1672, h: 941,
+      chips: {kythuat: [22, 67], gieng_troi: [62, 66]}},
   },
-  // Ảnh thật từng phòng (16:9). Phòng chưa có ảnh: phóng to vùng phòng đó trên ảnh tầng.
-  photos: {santruoc: '/img/phong-santruoc.webp', cafe: '/img/phong-cafe.webp', bep: '/img/phong-bep.webp'},
+  // Ảnh riêng từng phòng (16:9). Phòng chưa có ảnh: dùng ảnh tầng, nhãn phòng đó được làm nổi.
+  rooms: {santruoc: '/img/phong-santruoc.webp', cafe: '/img/phong-cafe.webp', bep: '/img/phong-bep.webp'},
 };
