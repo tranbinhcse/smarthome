@@ -1,0 +1,98 @@
+# Một pack trên bus RS485 (n = địa chỉ DIP), include từ jk-bms.yaml. Topic: nangluong/jk/p<n>/<số đo>.
+# Số đo thô của BMS đến dày (mỗi lần master hỏi) nên lấy trung bình 10 s trước khi gửi.
+
+jk_rs485_bms:
+  - id: jk_bms${n}
+    rs485_address: ${n}
+    jk_rs485_sniffer_id: jk_sniffer
+    update_interval: 10s   # chu kỳ xét mất kết nối; mất thì mọi số đo của pack thành NAN
+
+sensor:
+  - platform: jk_rs485_bms
+    jk_rs485_bms_id: jk_bms${n}
+    battery_capacity_state_of_charge:
+      id: jk_p${n}_soc
+      name: "Pin ${n} SOC"
+      state_topic: nangluong/jk/p${n}/soc
+      filters: [throttle_average: 10s]
+    battery_voltage:
+      id: jk_p${n}_voltage
+      name: "Pin ${n} điện áp"
+      state_topic: nangluong/jk/p${n}/voltage
+      accuracy_decimals: 2
+      filters: [throttle_average: 10s]
+    battery_current:
+      id: jk_p${n}_current
+      name: "Pin ${n} dòng"
+      state_topic: nangluong/jk/p${n}/current
+      accuracy_decimals: 1
+      filters: [throttle_average: 10s]
+    battery_power:   # điện áp × dòng: + sạc, − xả
+      id: jk_p${n}_power
+      name: "Pin ${n} công suất"
+      state_topic: nangluong/jk/p${n}/power
+      accuracy_decimals: 0
+      filters: [throttle_average: 10s]
+    cell_voltage_min:
+      id: jk_p${n}_cell_min
+      name: "Pin ${n} cell thấp nhất"
+      state_topic: nangluong/jk/p${n}/cell_min
+      unit_of_measurement: mV
+      accuracy_decimals: 0
+      filters: [multiply: 1000, throttle_average: 10s]
+    cell_voltage_max:
+      id: jk_p${n}_cell_max
+      name: "Pin ${n} cell cao nhất"
+      state_topic: nangluong/jk/p${n}/cell_max
+      unit_of_measurement: mV
+      accuracy_decimals: 0
+      filters: [multiply: 1000, throttle_average: 10s]
+    cell_delta_voltage:
+      id: jk_p${n}_cell_delta
+      name: "Pin ${n} chênh lệch cell"
+      state_topic: nangluong/jk/p${n}/cell_delta
+      unit_of_measurement: mV
+      accuracy_decimals: 0
+      filters: [multiply: 1000, throttle_average: 10s]
+    charging_cycles:
+      id: jk_p${n}_cycles
+      name: "Pin ${n} số chu kỳ"
+      state_topic: nangluong/jk/p${n}/cycles
+      filters: [delta: 0.5]   # chỉ gửi khi đổi
+    errors_bitmask:
+      id: jk_p${n}_alarms
+      name: "Pin ${n} số lỗi"
+      state_topic: nangluong/jk/p${n}/alarms
+      unit_of_measurement: ""
+      accuracy_decimals: 0
+      filters:
+        - lambda: |-
+            return std::isnan(x) ? NAN : jkt::alarms((uint32_t) x, ${jk_alarm_mask});
+        - delta: 0.5
+    temperature_sensor_1:
+      id: jk_p${n}_t1
+      internal: true
+    temperature_sensor_2:
+      id: jk_p${n}_t2
+      internal: true
+    temperature_powertube:
+      id: jk_p${n}_tmos
+      internal: true
+
+  - platform: template   # nóng nhất trong 2 cảm biến pin và MOS
+    id: jk_p${n}_temp
+    name: "Pin ${n} nhiệt độ"
+    state_topic: nangluong/jk/p${n}/temp
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: |-
+      if (std::isnan(id(jk_p${n}_soc).state)) return NAN;   // mất pack: component không xoá T1/T2, đừng gửi số cũ
+      return jkt::largest({id(jk_p${n}_t1).state, id(jk_p${n}_t2).state, id(jk_p${n}_tmos).state});
+
+text_sensor:
+  - platform: jk_rs485_bms
+    jk_rs485_bms_id: jk_bms${n}
+    errors:   # tên các lỗi đang bật, "" khi không lỗi, "Offline" khi mất pack
+      name: "Pin ${n} lỗi"
+      state_topic: nangluong/jk/p${n}/errors

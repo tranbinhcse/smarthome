@@ -1,0 +1,47 @@
+# Pack 2 mất kết nối: firmware gửi nan, tổng chỉ gộp 2 pack.
+# Dòng: topic payload (giống node năng lượng gửi). Phát lại: scripts/jk-sim.sh <file>.
+# alerts: pin_mat_ket_noi
+nangluong/jk/p0/soc 86
+nangluong/jk/p0/voltage 54.12
+nangluong/jk/p0/current 21.5
+nangluong/jk/p0/power 1164
+nangluong/jk/p0/temp 31.4
+nangluong/jk/p0/cell_min 3378
+nangluong/jk/p0/cell_max 3386
+nangluong/jk/p0/cell_delta 8
+nangluong/jk/p0/cycles 412
+nangluong/jk/p0/alarms 0
+nangluong/jk/p0/errors
+nangluong/jk/p1/soc 85
+nangluong/jk/p1/voltage 54.10
+nangluong/jk/p1/current 20.8
+nangluong/jk/p1/power 1125
+nangluong/jk/p1/temp 30.9
+nangluong/jk/p1/cell_min 3377
+nangluong/jk/p1/cell_max 3388
+nangluong/jk/p1/cell_delta 11
+nangluong/jk/p1/cycles 398
+nangluong/jk/p1/alarms 0
+nangluong/jk/p1/errors
+nangluong/jk/p2/soc nan
+nangluong/jk/p2/voltage nan
+nangluong/jk/p2/current nan
+nangluong/jk/p2/power nan
+nangluong/jk/p2/temp nan
+nangluong/jk/p2/cell_min nan
+nangluong/jk/p2/cell_max nan
+nangluong/jk/p2/cell_delta nan
+nangluong/jk/p2/cycles nan
+nangluong/jk/p2/alarms nan
+nangluong/jk/p2/errors Offline
+nangluong/jk/soc 85.5
+nangluong/jk/power 2289
+nangluong/jk/voltage 54.11
+nangluong/jk/current 42.3
+nangluong/jk/temp 31.4
+nangluong/jk/cell_min 3377
+nangluong/jk/cell_max 3388
+nangluong/jk/cell_delta 11
+nangluong/jk/cycles 412
+nangluong/jk/alarms 0
+nangluong/jk/online 2

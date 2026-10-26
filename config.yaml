@@ -35,7 +35,54 @@ entities:
   - { id: deye.pv,   name: "Điện mặt trời", unit: "W", topic: nangluong/deye/pv_power,   zone: kythuat }
   - { id: deye.load, name: "Tải tiêu thụ",  unit: "W", topic: nangluong/deye/load_power, zone: kythuat }
   - { id: deye.grid, name: "Điện lưới",     unit: "W", topic: nangluong/deye/grid_power, zone: kythuat }
-  - { id: jk.soc,    name: "Pin lưu trữ",   unit: "%", topic: nangluong/jk/soc,          zone: kythuat }
+  # Pin: 3 pack JK-PB song song qua node năng lượng (firmware/jk-bms, lược đồ MQTT ở README trong đó).
+  # jk.<số đo> là tổng: SOC trung bình theo dung lượng Σ(SOC×Ah)/ΣAh; công suất, dòng cộng dồn (+ sạc, − xả);
+  # điện áp trung bình; nhiệt, cell, chênh lệch lấy pack xấu nhất; chỉ gộp các pack đang kết nối (jk.online).
+  # jk.p<n>.<số đo>: từng pack, n = địa chỉ DIP (0 = master). Cell tính bằng mV.
+  - { id: jk.soc,           name: "Pin lưu trữ",             unit: "%",  topic: nangluong/jk/soc,              zone: kythuat }
+  - { id: jk.power,         name: "Pin sạc/xả",              unit: "W",  topic: nangluong/jk/power,            zone: kythuat }
+  - { id: jk.voltage,       name: "Pin điện áp",             unit: "V",  topic: nangluong/jk/voltage,          zone: kythuat }
+  - { id: jk.current,       name: "Pin dòng điện",           unit: "A",  topic: nangluong/jk/current,          zone: kythuat }
+  - { id: jk.temp,          name: "Pin nóng nhất",           unit: "°C", topic: nangluong/jk/temp,             zone: kythuat }
+  - { id: jk.cell_min,      name: "Cell thấp nhất",          unit: "mV", topic: nangluong/jk/cell_min,         zone: kythuat }
+  - { id: jk.cell_max,      name: "Cell cao nhất",           unit: "mV", topic: nangluong/jk/cell_max,         zone: kythuat }
+  - { id: jk.cell_delta,    name: "Chênh lệch cell",         unit: "mV", topic: nangluong/jk/cell_delta,       zone: kythuat }
+  - { id: jk.cycles,        name: "Số chu kỳ pin",           unit: "",   topic: nangluong/jk/cycles,           zone: kythuat }
+  - { id: jk.alarms,        name: "Lỗi BMS",                 unit: "",   topic: nangluong/jk/alarms,           zone: kythuat }
+  - { id: jk.online,        name: "Pack đang kết nối",       unit: "",   topic: nangluong/jk/online,           zone: kythuat }
+  - { id: jk.p0.soc,        name: "Pack 0 SOC",              unit: "%",  topic: nangluong/jk/p0/soc,           zone: kythuat }
+  - { id: jk.p0.voltage,    name: "Pack 0 điện áp",          unit: "V",  topic: nangluong/jk/p0/voltage,       zone: kythuat }
+  - { id: jk.p0.current,    name: "Pack 0 dòng điện",        unit: "A",  topic: nangluong/jk/p0/current,       zone: kythuat }
+  - { id: jk.p0.power,      name: "Pack 0 sạc/xả",           unit: "W",  topic: nangluong/jk/p0/power,         zone: kythuat }
+  - { id: jk.p0.temp,       name: "Pack 0 nóng nhất",        unit: "°C", topic: nangluong/jk/p0/temp,          zone: kythuat }
+  - { id: jk.p0.cell_min,   name: "Pack 0 cell thấp nhất",   unit: "mV", topic: nangluong/jk/p0/cell_min,      zone: kythuat }
+  - { id: jk.p0.cell_max,   name: "Pack 0 cell cao nhất",    unit: "mV", topic: nangluong/jk/p0/cell_max,      zone: kythuat }
+  - { id: jk.p0.cell_delta, name: "Pack 0 chênh lệch cell",  unit: "mV", topic: nangluong/jk/p0/cell_delta,    zone: kythuat }
+  - { id: jk.p0.cycles,     name: "Pack 0 số chu kỳ",        unit: "",   topic: nangluong/jk/p0/cycles,        zone: kythuat }
+  - { id: jk.p0.alarms,     name: "Pack 0 số lỗi",           unit: "",   topic: nangluong/jk/p0/alarms,        zone: kythuat }
+  - { id: jk.p0.errors,     name: "Pack 0 lỗi",              unit: "",   topic: nangluong/jk/p0/errors,        zone: kythuat }
+  - { id: jk.p1.soc,        name: "Pack 1 SOC",              unit: "%",  topic: nangluong/jk/p1/soc,           zone: kythuat }
+  - { id: jk.p1.voltage,    name: "Pack 1 điện áp",          unit: "V",  topic: nangluong/jk/p1/voltage,       zone: kythuat }
+  - { id: jk.p1.current,    name: "Pack 1 dòng điện",        unit: "A",  topic: nangluong/jk/p1/current,       zone: kythuat }
+  - { id: jk.p1.power,      name: "Pack 1 sạc/xả",           unit: "W",  topic: nangluong/jk/p1/power,         zone: kythuat }
+  - { id: jk.p1.temp,       name: "Pack 1 nóng nhất",        unit: "°C", topic: nangluong/jk/p1/temp,          zone: kythuat }
+  - { id: jk.p1.cell_min,   name: "Pack 1 cell thấp nhất",   unit: "mV", topic: nangluong/jk/p1/cell_min,      zone: kythuat }
+  - { id: jk.p1.cell_max,   name: "Pack 1 cell cao nhất",    unit: "mV", topic: nangluong/jk/p1/cell_max,      zone: kythuat }
+  - { id: jk.p1.cell_delta, name: "Pack 1 chênh lệch cell",  unit: "mV", topic: nangluong/jk/p1/cell_delta,    zone: kythuat }
+  - { id: jk.p1.cycles,     name: "Pack 1 số chu kỳ",        unit: "",   topic: nangluong/jk/p1/cycles,        zone: kythuat }
+  - { id: jk.p1.alarms,     name: "Pack 1 số lỗi",           unit: "",   topic: nangluong/jk/p1/alarms,        zone: kythuat }
+  - { id: jk.p1.errors,     name: "Pack 1 lỗi",              unit: "",   topic: nangluong/jk/p1/errors,        zone: kythuat }
+  - { id: jk.p2.soc,        name: "Pack 2 SOC",              unit: "%",  topic: nangluong/jk/p2/soc,           zone: kythuat }
+  - { id: jk.p2.voltage,    name: "Pack 2 điện áp",          unit: "V",  topic: nangluong/jk/p2/voltage,       zone: kythuat }
+  - { id: jk.p2.current,    name: "Pack 2 dòng điện",        unit: "A",  topic: nangluong/jk/p2/current,       zone: kythuat }
+  - { id: jk.p2.power,      name: "Pack 2 sạc/xả",           unit: "W",  topic: nangluong/jk/p2/power,         zone: kythuat }
+  - { id: jk.p2.temp,       name: "Pack 2 nóng nhất",        unit: "°C", topic: nangluong/jk/p2/temp,          zone: kythuat }
+  - { id: jk.p2.cell_min,   name: "Pack 2 cell thấp nhất",   unit: "mV", topic: nangluong/jk/p2/cell_min,      zone: kythuat }
+  - { id: jk.p2.cell_max,   name: "Pack 2 cell cao nhất",    unit: "mV", topic: nangluong/jk/p2/cell_max,      zone: kythuat }
+  - { id: jk.p2.cell_delta, name: "Pack 2 chênh lệch cell",  unit: "mV", topic: nangluong/jk/p2/cell_delta,    zone: kythuat }
+  - { id: jk.p2.cycles,     name: "Pack 2 số chu kỳ",        unit: "",   topic: nangluong/jk/p2/cycles,        zone: kythuat }
+  - { id: jk.p2.alarms,     name: "Pack 2 số lỗi",           unit: "",   topic: nangluong/jk/p2/alarms,        zone: kythuat }
+  - { id: jk.p2.errors,     name: "Pack 2 lỗi",              unit: "",   topic: nangluong/jk/p2/errors,        zone: kythuat }
 
 # Thiết bị Tuya: phần giữa BEGIN/END do tuya-bridge/gen_config.py sinh từ tuya/devices.json.
 # Gắn zone / protected: true bằng cách sửa tay NGOÀI đoạn sinh, hoặc dùng tuya/overrides (xem README).
@@ -61,3 +108,14 @@ devices:
 #     for: 2m
 #     then:     [ { set: tuya_xxx, to: on } ]
 #     on_clear: [ { set: tuya_xxx, to: off } ]
+
+# Cảnh báo pin 3 pack JK (ngưỡng khởi điểm cho LiFePO4, chỉnh lại sau 2 tuần chạy thật — thiết kế mục 10).
+# alert: hiện ở chuông trên dashboard (state "alert:<id>"); chưa gửi Telegram. Kịch bản thử: testdata/jk/.
+rules:
+  - { id: pin_yeu,         entity: jk.soc,        below: 20,   clear_above: 25,   for: 1m,  alert: "Pin lưu trữ dưới 20%" }
+  - { id: pin_cell_thap,   entity: jk.cell_min,   below: 2900, clear_above: 3000, for: 30s, alert: "Có cell pin dưới 2,90 V" }
+  - { id: pin_cell_cao,    entity: jk.cell_max,   above: 3600, clear_below: 3500, for: 30s, alert: "Có cell pin trên 3,60 V" }
+  - { id: pin_lech_cell,   entity: jk.cell_delta, above: 50,   clear_below: 30,   for: 2m,  alert: "Chênh lệch cell pin trên 50 mV" }
+  - { id: pin_qua_nhiet,   entity: jk.temp,       above: 45,   clear_below: 40,   for: 1m,  alert: "Pin hoặc BMS nóng trên 45°C" }
+  - { id: pin_bms_loi,     entity: jk.alarms,     above: 0,                       for: 30s, alert: "BMS pin đang báo lỗi" }
+  - { id: pin_mat_ket_noi, entity: jk.online,     below: 3,                       for: 2m,  alert: "Mất kết nối với pack pin" }

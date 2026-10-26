@@ -1,0 +1,47 @@
+# Pack 1 lệch cell 65 mV.
+# Dòng: topic payload (giống node năng lượng gửi). Phát lại: scripts/jk-sim.sh <file>.
+# alerts: pin_lech_cell
+nangluong/jk/p0/soc 86
+nangluong/jk/p0/voltage 54.12
+nangluong/jk/p0/current 21.5
+nangluong/jk/p0/power 1164
+nangluong/jk/p0/temp 31.4
+nangluong/jk/p0/cell_min 3378
+nangluong/jk/p0/cell_max 3386
+nangluong/jk/p0/cell_delta 8
+nangluong/jk/p0/cycles 412
+nangluong/jk/p0/alarms 0
+nangluong/jk/p0/errors
+nangluong/jk/p1/soc 85
+nangluong/jk/p1/voltage 54.10
+nangluong/jk/p1/current 20.8
+nangluong/jk/p1/power 1125
+nangluong/jk/p1/temp 30.9
+nangluong/jk/p1/cell_min 3350
+nangluong/jk/p1/cell_max 3415
+nangluong/jk/p1/cell_delta 65
+nangluong/jk/p1/cycles 398
+nangluong/jk/p1/alarms 0
+nangluong/jk/p1/errors
+nangluong/jk/p2/soc 87
+nangluong/jk/p2/voltage 54.13
+nangluong/jk/p2/current 21.9
+nangluong/jk/p2/power 1185
+nangluong/jk/p2/temp 32.0
+nangluong/jk/p2/cell_min 3379
+nangluong/jk/p2/cell_max 3385
+nangluong/jk/p2/cell_delta 6
+nangluong/jk/p2/cycles 405
+nangluong/jk/p2/alarms 0
+nangluong/jk/p2/errors
+nangluong/jk/soc 86.0
+nangluong/jk/power 3474
+nangluong/jk/voltage 54.12
+nangluong/jk/current 64.2
+nangluong/jk/temp 32.0
+nangluong/jk/cell_min 3350
+nangluong/jk/cell_max 3415
+nangluong/jk/cell_delta 65
+nangluong/jk/cycles 412
+nangluong/jk/alarms 0
+nangluong/jk/online 3
