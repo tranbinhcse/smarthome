@@ -17,7 +17,7 @@ if [ $# -eq 2 ]; then
 fi
 
 n=0
-for t in $(grep -o 'topic: node-[^ ,}]*' config.yaml | sed 's/^topic: //'); do
+for t in $(grep -o '[ {]topic: node-[^ ,}]*' config.yaml | sed 's/^. *topic: //'); do
   s=${t%/state}; s=${s##*/}
   case "$t" in node-gieng-troi/*) out=1 ;; *) out=0 ;; esac
   case "$s" in

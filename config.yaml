@@ -66,7 +66,7 @@ entities:
   - { id: gt.mua,     name: "Mưa",           unit: "",      zone: gieng_troi, topic: node-gieng-troi/sensor/mua/state }
   - { id: ro.tds_in,  name: "Nước nguồn",    unit: "ppm",   zone: cafe,    topic: node-ro/sensor/tds_nguon/state }
   - { id: ro.tds,     name: "Nước sau lọc",  unit: "ppm",   zone: cafe,    topic: node-ro/sensor/tds_sau_loc/state }
-  - { id: ro.loai_bo, name: "Tỉ lệ loại bỏ TDS", unit: "%", zone: cafe,    topic: node-ro/sensor/ti_le_loai_bo/state }
+  - { id: ro.loai_bo, name: "Tỉ lệ loại bỏ", unit: "%",     zone: cafe,    topic: node-ro/sensor/ti_le_loai_bo/state }
   - { id: ro.loc_l,   name: "Đã lọc hôm nay", unit: "L",    zone: cafe,    topic: node-ro/sensor/da_loc_hom_nay/state }
   - { id: ro.loi,     name: "Lõi lọc còn",   unit: "%",     zone: cafe,    topic: node-ro/sensor/loi_loc_con/state }
   - { id: ro.ro_nuoc, name: "Rò nước",       unit: "",      zone: cafe,    topic: node-ro/sensor/ro_nuoc/state }

@@ -62,3 +62,41 @@ func TestConfigTopicsMatchFirmware(t *testing.T) {
 	}
 	t.Logf("%d/%d entity node-* khớp firmware", checked, checked)
 }
+
+// Dashboard chọn vài chỉ số chỉ theo tên (web/dash.js: /sau lọc|tds/i, /mưa/i, at(/lõi/i)...). Entity khác đơn vị mà tên
+// trùng mẫu sẽ bị hiện nhầm, vd "Tỉ lệ loại bỏ TDS" 94 % thành "Nước lọc 94 ppm". Mẫu lấy từ dash.js; mẫu mới phải khai đơn vị.
+func TestEntityNamesDoNotHijackDashboardMetrics(t *testing.T) {
+	unit := map[string]string{ // "-": dashboard tự kiểm thêm đơn vị
+		"sau lọc|tds": "ppm", "nguồn": "ppm", "lõi": "%", "đã lọc": "L", "mưa": "",
+		"ngoài trời": "-", "ẩm": "-", "co": "-",
+	}
+	js, err := os.ReadFile("web/dash.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pats := map[string]bool{}
+	for _, m := range regexp.MustCompile(`/([^/]+)/i(?:\.test\(e\.name\)|\))`).FindAllStringSubmatch(string(js), -1) {
+		pats[m[1]] = true
+	}
+	if len(pats) < 6 {
+		t.Fatalf("chỉ thấy %d mẫu tên trong dash.js, biểu thức dò đã lỗi thời", len(pats))
+	}
+	cfg, _, err := LoadConfig("config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p := range pats {
+		u, ok := unit[p]
+		if !ok {
+			t.Errorf("dash.js có mẫu tên mới /%s/i: khai đơn vị nó chọn vào bảng của test này", p)
+			continue
+		}
+		re := regexp.MustCompile("(?i)" + p)
+		for _, e := range cfg.Entities {
+			if u != "-" && e.Device == "" && re.MatchString(e.Name) && e.Unit != u {
+				t.Errorf("%s %q (%s) trùng mẫu /%s/i của dashboard vốn chọn đơn vị %q", e.ID, e.Name, e.Unit, p, u)
+			}
+		}
+	}
+	t.Logf("%d mẫu tên × %d entity", len(pats), len(cfg.Entities))
+}
