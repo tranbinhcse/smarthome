@@ -70,6 +70,16 @@ func LoadConfig(path string) (Config, string, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return cfg, "", err
 	}
+	// Mục nào thiếu trong YAML thì slice là nil → JSON null làm dashboard vỡ; luôn trả [].
+	if cfg.Zones == nil {
+		cfg.Zones = []Zone{}
+	}
+	if cfg.Entities == nil {
+		cfg.Entities = []Entity{}
+	}
+	if cfg.Devices == nil {
+		cfg.Devices = []Device{}
+	}
 	if cfg.HTTP.Listen == "" {
 		cfg.HTTP.Listen = ":8080"
 	}
