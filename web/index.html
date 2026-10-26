@@ -7,92 +7,42 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Nhà">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#0b151e">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="icon" href="/icon.svg">
-<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="/dash.css?v=20261026201008">
 <title>Nhà của tôi</title>
 </head>
 <body>
-<header>Nhà của tôi <span class="sp"></span><span id="conn">đang kết nối…</span><a href="/history.html">Biểu đồ</a></header>
-<main id="main"></main>
+<div class="app">
+  <header class="top">
+    <div class="brand">Nhà của tôi</div>
+    <div class="when" id="when"></div>
+    <div class="sp"></div>
+    <span id="demo-chip"></span>
+    <button class="chip" id="sky" type="button"></button>
+    <a class="chip" href="/history.html">Biểu đồ</a>
+    <span class="chip" id="conn"><i class="dot"></i><span>Đang kết nối</span></span>
+  </header>
+  <div class="main">
+    <section class="hero" aria-label="Ngôi nhà">
+      <div class="orb" aria-hidden="true"></div>
+      <div class="hero-text"><div id="heroText"></div><nav class="tabs" id="tabs" aria-label="Chọn tầng"></nav></div>
+      <div class="hero-chips" id="heroChips"></div>
+      <nav class="house" id="house" aria-label="Mặt cắt 3D các tầng"><div class="iso-cam"><div class="iso-scene"></div></div></nav>
+    </section>
+    <main class="stage" id="stage"></main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog class="modal" id="modal"></dialog>
 <div id="loginbox"></div>
-<script src="/app.js"></script>
-<script>
-document.getElementById('loginbox').innerHTML = LOGIN_HTML;
-let cfg = {zones: [], entities: [], devices: []}, state = {};
-const fresh = {};   // id -> thời điểm nhận cuối (ms)
-const STALE = 10 * 60 * 1000;
-
-// Khu hiển thị: 3 khu vực + giếng trời + năng lượng + nước RO + khu "khác" cho mục chưa gán zone.
-const ZONE_ORDER = ['khu1', 'khu2', 'khu3', 'gieng_troi', 'nang_luong', 'nuoc_ro'];
-
-async function load() {
-  cfg = await (await api('/api/config')).json();
-  state = await (await api('/api/state')).json();
-  render();
-}
-function zonesList() {
-  const z = cfg.zones || [], known = new Set(z.map(x => x.id));
-  const extra = new Set([...(cfg.entities || []), ...(cfg.devices || [])].map(x => x.zone || '').filter(i => !known.has(i)));
-  return [...z, ...[...extra].map(i => ({id: i, name: i ? i : 'Khác'}))];
-}
-function render() {
-  const main = document.getElementById('main');
-  main.innerHTML = '';
-  const zs = zonesList();
-  if (!(cfg.entities.length || cfg.devices.length)) {
-    main.innerHTML = '<p class="empty">Chưa có thiết bị nào. Kết nối Tuya xong sẽ hiện ở đây.</p>'; return;
-  }
-  for (const z of zs) {
-    const es = cfg.entities.filter(e => (e.zone || '') === z.id), ds = cfg.devices.filter(d => (d.zone || '') === z.id);
-    if (!es.length && !ds.length) continue;
-    const wide = z.id === 'nang_luong' ? ' wide' : '';
-    main.insertAdjacentHTML('beforeend', `<section class="${wide.trim()}"><h2>${esc(z.name)}</h2><div class="tiles">` +
-      es.map(entityHTML).join('') + ds.map(deviceHTML).join('') + '</div></section>');
-  }
-  main.querySelectorAll('button[data-dev]').forEach(b => b.onclick = () => toggle(b));
-}
-function entityHTML(e) {
-  const v = state[e.id], stale = fresh[e.id] && Date.now() - fresh[e.id] > STALE;
-  return `<div class="card${stale ? ' stale' : ''}" data-ent="${esc(e.id)}"><div class="name">${esc(e.name)}</div><div class="val"><span class="v">${v ?? '—'}</span> <span class="unit">${esc(e.unit || '')}</span></div></div>`;
-}
-function deviceHTML(d) {
-  const st = state['dev:' + d.id], on = /^\s*(on|1|true)\s*$/i.test(st || '');
-  const off = state['online:' + d.id] === 'offline';
-  const label = st === undefined ? '—' : on ? 'BẬT' : 'TẮT';
-  return `<div class="card dev${off ? ' offline' : ''}" data-card="${esc(d.id)}"><div class="name">${esc(d.name)}${d.protected ? ' <span class="lock">🔒</span>' : ''}${off ? ' · mất kết nối' : ''}</div>
-    <button data-dev="${esc(d.id)}" data-on="${on ? 1 : 0}" class="${st === undefined ? 'unk' : on ? '' : 'off'}">${label}</button></div>`;
-}
-async function toggle(b) {
-  const d = cfg.devices.find(x => x.id === b.dataset.dev);
-  if (d && d.protected && !confirm('Thiết bị được bảo vệ: ' + d.name + '. Vẫn thay đổi?')) return;
-  const to = b.dataset.on === '1' ? 'off' : 'on';
-  b.style.opacity = .6;
-  const r = await api('/api/cmd', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({device: b.dataset.dev, to})});
-  if (!r.ok) b.style.opacity = 1;   // thành công thì chờ SSE cập nhật trạng thái thật
-  setTimeout(() => b.style.opacity = 1, 3000);
-}
-
-let es, retry = 1000;
-function connect() {
-  const c = document.getElementById('conn');
-  es = new EventSource('/events');
-  es.onopen = () => { retry = 1000; c.textContent = 'trực tuyến'; c.className = ''; load(); };   // nạp lại để bù tin bị lỡ khi mất mạng
-  es.onmessage = ev => {
-    const m = JSON.parse(ev.data); state[m.id] = m.value; fresh[m.id] = Date.now();
-    if (m.id.startsWith('dev:') || m.id.startsWith('online:')) { render(); return; }
-    const v = document.querySelector(`[data-ent="${CSS.escape(m.id)}"]`);
-    if (v) { v.querySelector('.v').textContent = m.value; v.classList.remove('stale'); }
-  };
-  es.onerror = () => {
-    c.textContent = 'mất kết nối — đang thử lại'; c.className = 'bad';
-    es.close(); setTimeout(connect, retry); retry = Math.min(retry * 2, 15000);
-  };
-}
-load().then(connect);
-document.addEventListener('visibilitychange', () => { if (!document.hidden && es && es.readyState === 2) connect(); });
-</script>
+<script src="/app.js?v=20261026201008"></script>
+<script src="/demo.js?v=20261026201008"></script>
+<script src="/dash.js?v=20261026201008"></script>
 </body>
 </html>
