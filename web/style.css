@@ -1,0 +1,29 @@
+:root{--bg:#0f1115;--card:#1b1f27;--fg:#e8eaed;--mut:#9aa0a6;--acc:#2d7ef7;--on:#2e7d32;--warn:#e0a030;--bad:#d64545}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:-apple-system,system-ui,Roboto,sans-serif;background:var(--bg);color:var(--fg);padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+header{display:flex;align-items:center;gap:12px;padding:14px 20px;font-size:22px;font-weight:600}
+header .sp{flex:1}header a{color:var(--mut);font-size:16px;text-decoration:none;padding:10px}
+#conn{font-size:14px;color:var(--mut)}#conn.bad{color:var(--bad)}
+main{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:0 20px 28px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+section{background:#14171d;border-radius:18px;padding:14px}
+section.wide{grid-column:span 3}@media(max-width:900px){section.wide{grid-column:auto}}
+h2{margin:0 0 10px;color:var(--mut);font-size:15px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.card{background:var(--card);border-radius:14px;padding:12px;min-height:84px}
+.card .name{color:var(--mut);font-size:14px}
+.card .val{font-size:28px;font-weight:600;margin-top:4px}
+.card .unit{font-size:14px;color:var(--mut);font-weight:400}
+.card.stale .val{color:var(--mut)}
+.dev button{width:100%;min-height:56px;margin-top:8px;border:0;border-radius:12px;font-size:18px;font-weight:600;color:#fff;background:var(--on)}
+.dev button.off{background:#3a3f4b}.dev button.unk{background:#3a3f4b;color:var(--mut)}
+.dev.offline{opacity:.45}
+.dev .lock{font-size:12px;color:var(--warn)}
+.empty{color:var(--mut);font-size:15px}
+#login{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:9}
+#login input{font-size:32px;text-align:center;width:220px;padding:12px;border-radius:12px;border:1px solid #3a3f4b;background:var(--card);color:var(--fg)}
+#login button{min-height:56px;width:220px;font-size:20px;border:0;border-radius:12px;background:var(--acc);color:#fff}
+#login p{color:var(--bad);margin:0;min-height:1.2em}
+.chart{background:var(--card);border-radius:14px;padding:10px;margin-bottom:14px}
+.chart svg{width:100%;height:160px}.chart .t{color:var(--mut);font-size:14px;display:flex;justify-content:space-between}
+.tabs{display:flex;gap:8px;padding:0 20px 14px}.tabs button{min-height:44px;padding:0 18px;border:0;border-radius:10px;background:var(--card);color:var(--fg);font-size:16px}.tabs button.on{background:var(--acc)}

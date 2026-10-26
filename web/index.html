@@ -3,76 +3,96 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nhà">
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/style.css">
 <title>Nhà của tôi</title>
-<style>
-  :root { --bg:#0f1115; --card:#1b1f27; --fg:#e8eaed; --mut:#9aa0a6; --acc:#2d7ef7; --on:#2e7d32; }
-  * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,system-ui,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
-  header { padding:16px; font-size:20px; font-weight:600; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; padding:0 16px 32px; }
-  .card { background:var(--card); border-radius:14px; padding:14px; }
-  .card .name { color:var(--mut); font-size:14px; }
-  .card .val { font-size:26px; font-weight:600; margin-top:6px; }
-  .card .unit { font-size:14px; color:var(--mut); font-weight:400; }
-  .dev button { width:100%; min-height:48px; margin-top:10px; border:0; border-radius:10px; font-size:16px; color:#fff; background:var(--acc); }
-  .dev button.off { background:#3a3f4b; }
-  h2 { padding:8px 16px 0; color:var(--mut); font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
-  .empty { color:var(--mut); padding:0 16px; }
-</style>
 </head>
 <body>
-<header>Nhà của tôi</header>
-<h2>Cảm biến</h2>
-<div class="grid" id="entities"></div>
-<h2>Thiết bị</h2>
-<div class="grid" id="devices"></div>
-<p class="empty" id="empty">Chưa có thiết bị nào. Kết nối Tuya xong sẽ hiện ở đây.</p>
-
+<header>Nhà của tôi <span class="sp"></span><span id="conn">đang kết nối…</span><a href="/history.html">Biểu đồ</a></header>
+<main id="main"></main>
+<div id="loginbox"></div>
+<script src="/app.js"></script>
 <script>
-let state = {};
+document.getElementById('loginbox').innerHTML = LOGIN_HTML;
+let cfg = {zones: [], entities: [], devices: []}, state = {};
+const fresh = {};   // id -> thời điểm nhận cuối (ms)
+const STALE = 10 * 60 * 1000;
+
+// Khu hiển thị: 3 khu vực + giếng trời + năng lượng + nước RO + khu "khác" cho mục chưa gán zone.
+const ZONE_ORDER = ['khu1', 'khu2', 'khu3', 'gieng_troi', 'nang_luong', 'nuoc_ro'];
+
 async function load() {
-  const cfg = await (await fetch('/api/config')).json();
-  state = await (await fetch('/api/state')).json();
-  renderEntities(cfg.entities || []);
-  renderDevices(cfg.devices || []);
-  document.getElementById('empty').style.display =
-    (cfg.entities?.length || cfg.devices?.length) ? 'none' : 'block';
+  cfg = await (await api('/api/config')).json();
+  state = await (await api('/api/state')).json();
+  render();
 }
-function renderEntities(ents) {
-  const g = document.getElementById('entities'); g.innerHTML = '';
-  for (const e of ents) {
-    const v = state[e.id];
-    g.insertAdjacentHTML('beforeend',
-      `<div class="card" data-ent="${e.id}"><div class="name">${e.name}</div>
-       <div class="val"><span class="v">${v ?? '—'}</span> <span class="unit">${e.unit||''}</span></div></div>`);
+function zonesList() {
+  const z = cfg.zones || [], known = new Set(z.map(x => x.id));
+  const extra = new Set([...(cfg.entities || []), ...(cfg.devices || [])].map(x => x.zone || '').filter(i => !known.has(i)));
+  return [...z, ...[...extra].map(i => ({id: i, name: i ? i : 'Khác'}))];
+}
+function render() {
+  const main = document.getElementById('main');
+  main.innerHTML = '';
+  const zs = zonesList();
+  if (!(cfg.entities.length || cfg.devices.length)) {
+    main.innerHTML = '<p class="empty">Chưa có thiết bị nào. Kết nối Tuya xong sẽ hiện ở đây.</p>'; return;
   }
-}
-function renderDevices(devs) {
-  const g = document.getElementById('devices'); g.innerHTML = '';
-  for (const d of devs) {
-    const st = state['dev:'+d.id] || '';
-    const on = /on|1|true/i.test(st);
-    g.insertAdjacentHTML('beforeend',
-      `<div class="card dev"><div class="name">${d.name}</div>
-       <button data-dev="${d.id}" class="${on?'':'off'}">${on?'BẬT':'TẮT'}</button></div>`);
+  for (const z of zs) {
+    const es = cfg.entities.filter(e => (e.zone || '') === z.id), ds = cfg.devices.filter(d => (d.zone || '') === z.id);
+    if (!es.length && !ds.length) continue;
+    const wide = z.id === 'nang_luong' ? ' wide' : '';
+    main.insertAdjacentHTML('beforeend', `<section class="${wide.trim()}"><h2>${esc(z.name)}</h2><div class="tiles">` +
+      es.map(entityHTML).join('') + ds.map(deviceHTML).join('') + '</div></section>');
   }
-  g.querySelectorAll('button[data-dev]').forEach(b => b.onclick = () => {
-    const to = b.classList.contains('off') ? 'on' : 'off';
-    fetch('/api/cmd', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({device:b.dataset.dev, to})});
-  });
+  main.querySelectorAll('button[data-dev]').forEach(b => b.onclick = () => toggle(b));
 }
+function entityHTML(e) {
+  const v = state[e.id], stale = fresh[e.id] && Date.now() - fresh[e.id] > STALE;
+  return `<div class="card${stale ? ' stale' : ''}" data-ent="${esc(e.id)}"><div class="name">${esc(e.name)}</div><div class="val"><span class="v">${v ?? '—'}</span> <span class="unit">${esc(e.unit || '')}</span></div></div>`;
+}
+function deviceHTML(d) {
+  const st = state['dev:' + d.id], on = /^\s*(on|1|true)\s*$/i.test(st || '');
+  const off = state['online:' + d.id] === 'offline';
+  const label = st === undefined ? '—' : on ? 'BẬT' : 'TẮT';
+  return `<div class="card dev${off ? ' offline' : ''}" data-card="${esc(d.id)}"><div class="name">${esc(d.name)}${d.protected ? ' <span class="lock">🔒</span>' : ''}${off ? ' · mất kết nối' : ''}</div>
+    <button data-dev="${esc(d.id)}" data-on="${on ? 1 : 0}" class="${st === undefined ? 'unk' : on ? '' : 'off'}">${label}</button></div>`;
+}
+async function toggle(b) {
+  const d = cfg.devices.find(x => x.id === b.dataset.dev);
+  if (d && d.protected && !confirm('Thiết bị được bảo vệ: ' + d.name + '. Vẫn thay đổi?')) return;
+  const to = b.dataset.on === '1' ? 'off' : 'on';
+  b.style.opacity = .6;
+  const r = await api('/api/cmd', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({device: b.dataset.dev, to})});
+  if (!r.ok) b.style.opacity = 1;   // thành công thì chờ SSE cập nhật trạng thái thật
+  setTimeout(() => b.style.opacity = 1, 3000);
+}
+
+let es, retry = 1000;
 function connect() {
-  const es = new EventSource('/events');
+  const c = document.getElementById('conn');
+  es = new EventSource('/events');
+  es.onopen = () => { retry = 1000; c.textContent = 'trực tuyến'; c.className = ''; load(); };   // nạp lại để bù tin bị lỡ khi mất mạng
   es.onmessage = ev => {
-    const m = JSON.parse(ev.data); state[m.id] = m.value;
-    const card = document.querySelector(`[data-ent="${m.id}"] .v`);
-    if (card) card.textContent = m.value;
-    if (m.id.startsWith('dev:')) load();
+    const m = JSON.parse(ev.data); state[m.id] = m.value; fresh[m.id] = Date.now();
+    if (m.id.startsWith('dev:') || m.id.startsWith('online:')) { render(); return; }
+    const v = document.querySelector(`[data-ent="${CSS.escape(m.id)}"]`);
+    if (v) { v.querySelector('.v').textContent = m.value; v.classList.remove('stale'); }
   };
-  es.onerror = () => setTimeout(connect, 2000);
+  es.onerror = () => {
+    c.textContent = 'mất kết nối — đang thử lại'; c.className = 'bad';
+    es.close(); setTimeout(connect, retry); retry = Math.min(retry * 2, 15000);
+  };
 }
-load(); connect();
+load().then(connect);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && es && es.readyState === 2) connect(); });
 </script>
 </body>
 </html>

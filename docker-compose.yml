@@ -7,6 +7,7 @@ services:
       - "1883:1883"
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
       - mosquitto-data:/mosquitto/data
 
   hubd:
@@ -16,10 +17,31 @@ services:
     depends_on: [mosquitto]
     environment:
       HUBD_CONFIG: /data/config.yaml
+      HUBD_DB: /db/hubd.db
+      HUBD_PIN: ${HUBD_PIN}
+      HUBD_MQTT_USER: ${HUBD_MQTT_USER}
+      HUBD_MQTT_PASS: ${HUBD_MQTT_PASS}
     volumes:
       - ./config.yaml:/data/config.yaml:ro
+      - hubd-db:/db
     ports:
       - "8080:8080"
 
+  # Cầu nối Tuya <-> MQTT. network_mode host để TCP ra thiết bị trong LAN (cổng 6668) không qua NAT docker.
+  tuya-bridge:
+    build: ./tuya-bridge
+    container_name: tuya-bridge
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    network_mode: host
+    environment:
+      MQTT_HOST: 127.0.0.1
+      MQTT_USER: ${TUYA_MQTT_USER}
+      MQTT_PASS: ${TUYA_MQTT_PASS}
+      TUYA_DIR: /tuya
+    volumes:
+      - ./tuya:/tuya:ro   # devices.json (+ overrides.json) — chứa local key, KHÔNG commit
+
 volumes:
   mosquitto-data:
+  hubd-db:

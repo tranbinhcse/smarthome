@@ -1,14 +1,36 @@
 mqtt:
-  broker: tcp://mosquitto:1883
+  broker: tcp://mosquitto:1883   # user/mật khẩu lấy từ .env (HUBD_MQTT_USER/PASS)
 
 http:
   listen: ":8080"
 
-# Cảm biến: mỗi dòng là một entity, lấy giá trị từ một topic MQTT.
-# Khi node ESPHome / bridge Tuya gửi lên topic, giá trị hiện trên web.
-entities:
-  - { id: demo.nhietdo, name: "Nhiệt độ (demo)", unit: "°C", topic: demo/nhietdo }
+db: /db/hubd.db
 
-# Thiết bị bật/tắt: gửi lệnh ra command_topic, đọc trạng thái từ state_topic.
-# Để trống tới khi có local key Tuya và bridge Tuya→MQTT.
-devices: []
+# Các khu hiển thị trên dashboard (đổi tên cho đúng nhà). Mục không gán zone vào nhóm "Khác".
+zones:
+  - { id: khu1, name: "Khu vực 1" }
+  - { id: khu2, name: "Khu vực 2" }
+  - { id: khu3, name: "Khu vực 3" }
+  - { id: gieng_troi, name: "Giếng trời" }
+  - { id: nang_luong, name: "Năng lượng" }
+  - { id: nuoc_ro, name: "Nước RO" }
+
+# Cảm biến: mỗi dòng là một entity, giá trị lấy từ một topic MQTT (ESPHome sẽ gửi vào đây).
+entities:
+  - { id: demo.nhietdo, name: "Nhiệt độ (demo)", unit: "°C", topic: demo/nhietdo, zone: khu1 }
+
+# Thiết bị Tuya: phần giữa BEGIN/END do tuya-bridge/gen_config.py sinh từ tuya/devices.json.
+# Gắn zone / protected: true bằng cách sửa tay NGOÀI đoạn sinh, hoặc dùng tuya/overrides (xem README).
+devices:
+  # BEGIN tuya-devices (gen_config.py — đừng sửa tay)
+  # END tuya-devices
+
+# Luật tự động hoá (ví dụ, bỏ # để bật). Thiết bị protected không bao giờ bị luật tắt.
+# rules:
+#   - id: co2_cao
+#     entity: demo.co2
+#     above: 1000
+#     clear_below: 900
+#     for: 2m
+#     then:     [ { set: tuya_xxx, to: on } ]
+#     on_clear: [ { set: tuya_xxx, to: off } ]

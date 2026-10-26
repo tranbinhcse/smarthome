@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/style.css">
+<title>Biểu đồ — Nhà của tôi</title>
+</head>
+<body>
+<header>Biểu đồ <span class="sp"></span><a href="/">← Tổng quan</a></header>
+<div class="tabs" id="tabs"></div>
+<div style="padding:0 20px 28px" id="charts"></div>
+<div id="loginbox"></div>
+<script src="/app.js"></script>
+<script>
+document.getElementById('loginbox').innerHTML = LOGIN_HTML;
+let hours = 24;
+const RANGES = [[6, '6 giờ'], [24, '24 giờ'], [168, '7 ngày'], [720, '30 ngày']];
+document.getElementById('tabs').innerHTML = RANGES.map(([h, l]) => `<button data-h="${h}" class="${h === hours ? 'on' : ''}">${l}</button>`).join('');
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  hours = +b.dataset.h; document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b)); draw();
+});
+let cfg;
+// Vẽ đường bằng SVG thuần, không thư viện. points: [{t,v}]
+function svgLine(pts) {
+  if (pts.length < 2) return '<p class="empty" style="padding:30px 0;text-align:center">Chưa đủ dữ liệu</p>';
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const X = t => 40 + (t - t0) / (t1 - t0 || 1) * 540, Y = v => 140 - (v - lo) / (hi - lo) * 120;
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + X(p.t).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join(' ');
+  return `<svg viewBox="0 0 600 160" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#2d7ef7" stroke-width="2"/>
+    <text x="2" y="24" fill="#9aa0a6" font-size="12">${+hi.toFixed(1)}</text><text x="2" y="142" fill="#9aa0a6" font-size="12">${+lo.toFixed(1)}</text></svg>`;
+}
+async function draw() {
+  if (!cfg) cfg = await (await api('/api/config')).json();
+  const items = [...cfg.entities.map(e => ({id: e.id, name: e.name, unit: e.unit})),
+                 ...cfg.devices.map(d => ({id: 'dev:' + d.id, name: d.name + ' (bật/tắt)', unit: ''}))];
+  const box = document.getElementById('charts'); box.innerHTML = '';
+  if (!items.length) { box.innerHTML = '<p class="empty">Chưa có dữ liệu.</p>'; return; }
+  for (const it of items) {
+    const pts = await (await api(`/api/history?id=${encodeURIComponent(it.id)}&hours=${hours}`)).json();
+    const last = pts.length ? +pts[pts.length - 1].v.toFixed(1) : '—';
+    box.insertAdjacentHTML('beforeend', `<div class="chart"><div class="t"><span>${esc(it.name)}</span><span>${last} ${esc(it.unit)}</span></div>${svgLine(pts)}</div>`);
+  }
+}
+draw();
+</script>
+</body>
+</html>

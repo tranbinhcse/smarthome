@@ -1,0 +1,7 @@
+.git
+tuya
+tuya-bridge
+scripts
+.env
+mosquitto
+*.md
