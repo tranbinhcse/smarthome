@@ -55,7 +55,11 @@ const DEMO_DATA = (() => {
     ['cafe.t', 'Nhiệt độ', '°C', 'cafe', '26.8'], ['cafe.h', 'Độ ẩm', '%', 'cafe', '61'],
     ['cafe.co2', 'CO₂', 'ppm', 'cafe', '780'], ['cafe.pm', 'Bụi mịn PM2.5', 'µg/m³', 'cafe', '14'],
     ['lv.t', 'Nhiệt độ', '°C', 'lamviec', '26.1'], ['lv.h', 'Độ ẩm', '%', 'lamviec', '58'], ['lv.co2', 'CO₂', 'ppm', 'lamviec', '690'],
-    ['lv.tds', 'Nước sau lọc', 'ppm', 'lamviec', '12'],
+    // Máy lọc nước: TDS nước nguồn và sau lọc, lượng nước đã lọc hôm nay, độ bền lõi lọc
+    ['lv.tds_in', 'Nước nguồn', 'ppm', 'lamviec', '185'], ['lv.tds', 'Nước sau lọc', 'ppm', 'lamviec', '12'],
+    ['lv.loc_l', 'Đã lọc hôm nay', 'L', 'lamviec', '18.5'], ['lv.loi', 'Lõi lọc còn', '%', 'lamviec', '62'],
+    ['cafe.tds_in', 'Nước nguồn', 'ppm', 'cafe', '190'], ['cafe.tds', 'Nước sau lọc', 'ppm', 'cafe', '9'],
+    ['cafe.loc_l', 'Đã lọc hôm nay', 'L', 'cafe', '64'], ['cafe.loi', 'Lõi lọc còn', '%', 'cafe', '18'],
     ['n1.t', 'Nhiệt độ', '°C', 'ngu1', '28.3'], ['n2.t', 'Nhiệt độ', '°C', 'ngu2', '28'],
     ['ds.t', 'Nhiệt độ', '°C', 'docsach', '26.5'],
     ['gt.mua', 'Mưa', '', 'gieng_troi', 'Không'], ['gt.lux', 'Ánh sáng', 'lx', 'gieng_troi', '18400'],
@@ -114,3 +118,27 @@ const DEMO_DATA = (() => {
   for (const [id, , , , v] of ents) state[id] = v;
   return {cfg, state};
 })();
+
+// Lịch sử mẫu cho biểu đồ (/?demo): dạng ngày/đêm theo loại số đo, điểm cuối gần giá trị hiện tại.
+// Nhiễu dùng bộ sinh số cố định theo id + giờ nên vẽ lại không nhảy lung tung.
+function demoHist(id, unit, hours, cur) {
+  const n = 240, t1 = Date.now(), dt = hours * 3600e3 / (n - 1);
+  const noise = t => { let x = Math.floor(t / 300e3) ^ [...id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7); x = (x ^ (x >>> 13)) * 1274126177 >>> 0; return (x % 1000) / 1000; };
+  const hr = t => { const d = new Date(t); return d.getHours() + d.getMinutes() / 60; }, day = h => Math.max(0, Math.sin((h - 6) / 12 * Math.PI));
+  const busy = h => (h > 6.5 && h < 9 ? 0.7 : 0) + (h > 17.5 && h < 22.5 ? 1 : 0) + (h > 9 && h < 17.5 ? 0.4 : 0);
+  let f, shift = true;
+  if (id === 'deye.pv') { f = t => 3200 * day(hr(t)) ** 1.5 * (0.75 + 0.25 * noise(t)); shift = false; }
+  else if (id === 'deye.load' || unit === 'W') f = t => (cur || 300) * (0.45 + 0.6 * busy(hr(t)) + 0.15 * noise(t));
+  else if (id === 'deye.grid') f = t => (hr(t) > 18 && hr(t) < 23 ? 180 : 25) * noise(t);
+  else if (id === 'jk.soc') { f = t => { const h = hr(t); return h < 7 ? 72 - h * 3.5 : h < 15 ? 47 + (h - 7) * 5.8 : h < 18 ? 93 : 93 - (h - 18) * 4.3; }; shift = false; }
+  else if (unit === 'lx') { f = t => 42000 * day(hr(t)) * (0.7 + 0.3 * noise(t)); shift = false; }
+  else if (unit === '°C') f = t => (/ngoài/i.test(id) || id.startsWith('gt') ? 4 : 1.4) * Math.sin((hr(t) - 9) / 24 * 2 * Math.PI) + 0.3 * noise(t);
+  else if (unit === '%' && /\.h$/.test(id)) f = t => -8 * Math.sin((hr(t) - 9) / 24 * 2 * Math.PI) + 2 * noise(t);
+  else if (/co2/.test(id)) f = t => 480 + 420 * busy(hr(t)) + 60 * noise(t);
+  else if (unit === 'µg/m³') f = t => 9 + 8 * busy(hr(t)) + 4 * noise(t);
+  else if (unit === 'L') { f = t => cur * Math.min(1, hr(t) / Math.max(hr(t1), 1)); shift = false; }
+  else f = () => cur;   // TDS, lõi lọc, điện áp...: gần như phẳng
+  const pts = Array.from({length: n}, (_, i) => { const t = t1 - (n - 1 - i) * dt; return {t, v: f(t)}; });
+  const off = shift && !isNaN(cur) ? cur - pts.at(-1).v : 0;
+  return pts.map(p => ({t: p.t, v: Math.round((p.v + off + (f.length ? 0 : (noise(p.t) - 0.5) * cur * 0.04)) * 10) / 10}));
+}

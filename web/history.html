@@ -4,49 +4,72 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a1119">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="stylesheet" href="/style.css">
-<title>Biểu đồ — Nhà của tôi</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap">
+<link rel="stylesheet" href="/dash.css?v=20261027004452">
+<title>Biểu đồ</title>
+<style>
+  body { overflow: auto; background: radial-gradient(120% 80% at 70% 0%, #13283a 0%, #0a1119 60%); min-height: 100dvh; }
+  .hist { max-width: 1280px; margin: 0 auto; padding: 18px 20px 32px; display: flex; flex-direction: column; gap: 16px; }
+  .hh { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .hh h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -.02em; flex: 1; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 14px; }
+  .card { padding: 18px 20px 14px; border-radius: 24px; background: var(--glass); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; }
+  .card h2 { margin: 0; font-size: 16px; font-weight: 500; }
+</style>
 </head>
 <body>
-<header>Biểu đồ <span class="sp"></span><a href="/">← Tổng quan</a></header>
-<div class="tabs" id="tabs"></div>
-<div style="padding:0 20px 28px" id="charts"></div>
+<main class="hist">
+  <div class="hh"><a class="edit" id="back" href="/" aria-label="Về bảng điều khiển"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></a>
+    <h1>Biểu đồ</h1><div class="seg" id="ranges" role="tablist" aria-label="Khoảng thời gian"></div></div>
+  <div class="cards" id="cards"><p class="empty">Đang tải số liệu...</p></div>
+</main>
 <div id="loginbox"></div>
-<script src="/app.js"></script>
+<script src="/app.js?v=20261027004452"></script>
+<script src="/chart.js?v=20261027004452"></script>
+<script src="/demo.js?v=20261027004452"></script>
 <script>
+const DEMO = new URLSearchParams(location.search).has('demo');
 document.getElementById('loginbox').innerHTML = LOGIN_HTML;
-let hours = 24;
+if (DEMO) document.getElementById('back').href = '/?demo';
 const RANGES = [[6, '6 giờ'], [24, '24 giờ'], [168, '7 ngày'], [720, '30 ngày']];
-document.getElementById('tabs').innerHTML = RANGES.map(([h, l]) => `<button data-h="${h}" class="${h === hours ? 'on' : ''}">${l}</button>`).join('');
-document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
-  hours = +b.dataset.h; document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b)); draw();
-});
-let cfg;
-// Vẽ đường bằng SVG thuần, không thư viện. points: [{t,v}]
-function svgLine(pts) {
-  if (pts.length < 2) return '<p class="empty" style="padding:30px 0;text-align:center">Chưa đủ dữ liệu</p>';
-  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
-  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
-  if (hi === lo) { hi += 1; lo -= 1; }
-  const X = t => 40 + (t - t0) / (t1 - t0 || 1) * 540, Y = v => 140 - (v - lo) / (hi - lo) * 120;
-  const d = pts.map((p, i) => (i ? 'L' : 'M') + X(p.t).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join(' ');
-  return `<svg viewBox="0 0 600 160" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#2d7ef7" stroke-width="2"/>
-    <text x="2" y="24" fill="#9aa0a6" font-size="12">${+hi.toFixed(1)}</text><text x="2" y="142" fill="#9aa0a6" font-size="12">${+lo.toFixed(1)}</text></svg>`;
+// Màu theo loại số đo; ngưỡng tham khảo: PM2.5 trung bình 24 giờ theo EPA, CO₂ quá 1.000 ppm nên thông gió.
+const COLOR = {'°C': '#ff9f5a', '%': '#4cc9f0', 'ppm': '#34d17a', 'µg/m³': '#a78bfa', 'W': '#f6b93b', 'lx': '#facc15', 'L': '#4cc9f0', 'V': '#94a3b8'};
+const LIMIT = e => e.unit === 'µg/m³' ? {v: 35, label: 'Ngưỡng 24 giờ (EPA) 35 µg/m³'} : /co₂|co2/i.test(e.name) ? {v: 1000, label: 'Nên thông gió từ 1.000 ppm'} : undefined;
+const nfv = new Intl.NumberFormat('vi-VN', {maximumFractionDigits: 1});
+const fw = v => Math.abs(v) >= 1000 ? `${nfv.format(v / 1000)} kW` : `${nfv.format(v)} W`;
+let hours = 24, cfg, state;
+
+async function series(e) {
+  if (DEMO) return demoHist(e.id, e.unit, hours, Number(state[e.id]));
+  return (await api(`/api/history?id=${encodeURIComponent(e.id)}&hours=${hours}`)).json();
 }
 async function draw() {
-  if (!cfg) cfg = await (await api('/api/config')).json();
-  const items = [...cfg.entities.map(e => ({id: e.id, name: e.name, unit: e.unit})),
-                 ...cfg.devices.map(d => ({id: 'dev:' + d.id, name: d.name + ' (bật/tắt)', unit: ''}))];
-  const box = document.getElementById('charts'); box.innerHTML = '';
-  if (!items.length) { box.innerHTML = '<p class="empty">Chưa có dữ liệu.</p>'; return; }
-  for (const it of items) {
-    const pts = await (await api(`/api/history?id=${encodeURIComponent(it.id)}&hours=${hours}`)).json();
-    const last = pts.length ? +pts[pts.length - 1].v.toFixed(1) : '—';
-    box.insertAdjacentHTML('beforeend', `<div class="chart"><div class="t"><span>${esc(it.name)}</span><span>${last} ${esc(it.unit)}</span></div>${svgLine(pts)}</div>`);
+  document.getElementById('ranges').innerHTML = RANGES.map(([h, l]) => `<button class="rb${h === hours ? ' sel' : ''}" role="tab" aria-selected="${h === hours}" data-h="${h}">${l}</button>`).join('');
+  const zone = id => cfg.zones.find(z => z.id === id), groups = [];
+  const metric = async (e, label) => ({label, unit: e.unit, color: COLOR[e.unit] || '#4cc9f0', pts: await series(e), now: Number(state[e.id]),
+    limit: LIMIT(e), zero: ['W', 'lx', 'L'].includes(e.unit), fmt: e.unit === 'W' ? fw : undefined});
+  const power = [['deye.load', 'Tiêu thụ'], ['deye.pv', 'Mặt trời'], ['deye.grid', 'Lưới điện'], ['jk.soc', 'Pin']]
+    .map(([id, l]) => [cfg.entities.find(e => e.id === id), l]).filter(([e]) => e);
+  if (power.length) groups.push(['dien', 'Điện năng', power]);
+  const mcb = cfg.entities.filter(e => e.device && e.unit === 'W' && zone(e.zone));
+  if (mcb.length) groups.push(['khu', 'Điện từng khu (MCB)', mcb.map(e => [e, zone(e.zone).name])]);
+  for (const z of cfg.zones) {
+    const es = cfg.entities.filter(e => e.zone === z.id && !e.device && e.unit && !/^(deye|jk)\./.test(e.id));
+    if (es.length) groups.push(['z-' + z.id, z.name, es.map(e => [e, e.name])]);
   }
+  const html = await Promise.all(groups.map(async ([id, title, list]) =>
+    `<section class="card"><h2>${esc(title)}</h2>${chartHtml(id, await Promise.all(list.map(([e, l]) => metric(e, l))), hours)}</section>`));
+  document.getElementById('cards').innerHTML = html.join('') || '<p class="empty">Chưa có số đo nào được ghi lại.</p>';
 }
-draw();
+document.addEventListener('click', e => { const b = e.target.closest('[data-h]'); if (b) { hours = Number(b.dataset.h); draw(); } });
+(async () => {
+  if (DEMO) ({cfg, state} = DEMO_DATA);
+  else { cfg = await (await api('/api/config')).json(); state = await (await api('/api/state')).json(); }
+  draw();
+})();
 </script>
 </body>
 </html>

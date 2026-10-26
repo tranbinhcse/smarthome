@@ -63,6 +63,10 @@ const ICON = {
   shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l6.5-6.5M10 14l-6.5 6.5"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   eyeoff: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/>',
+  thermo: '<path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/><path d="M12 9v7"/>', wind: '<path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/>',
+  filter: '<path d="M4 5h16l-6 7.5V18l-4 2v-7.5z"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>', plus: '<path d="M12 5v14M5 12h14"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   mute: '<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4zM16 9.5l5 5M21 9.5l-5 5"/>', input: '<path d="M10 18H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5"/><path d="M14 16h7M18 13l3 3-3 3"/>',
   swing: '<path d="M4 15a8 8 0 0 1 16 0"/><path d="M1.5 12.5 4 15l2.5-2.5M17.5 12.5 20 15l2.5-2.5"/>',
@@ -220,7 +224,7 @@ function chipsHtml() {
 }
 function stageHtml() {
   if (view.page === 'settings') return settingsBox();
-  if (view.page === 'energy') { const fm = flowMap(); return fm ? `<div class="ebox"><div class="wh">${icon('bolt', 'wi amber')}<h3>Dòng điện lúc này</h3></div>${fm}</div>` : ''; }
+  if (view.page === 'energy') { const fm = flowMap(); return (fm ? `<div class="ebox"><div class="wh">${icon('bolt', 'wi amber')}<h3>Dòng điện lúc này</h3></div>${fm}</div>` : '') + energyChart(); }
   const sc = sceneNow(), pos = sc.pos || [50, 50];
   return `<div class="cover" style="--ar:${(sc.w / sc.h).toFixed(4)};--px:${pos[0] / 100};--py:${pos[1] / 100}"><div id="chips"></div></div>`;
 }
@@ -246,13 +250,24 @@ function draw() {
   if (c) c.innerHTML = chipsHtml();
   if (view.page) $('#stage').innerHTML = stageHtml();
   const [side, bottom, scroll] = zonesHtml(), keep = {};
-  for (const e of $('#view').querySelectorAll('[data-keep]')) keep[e.dataset.keep] = [e.scrollLeft, e.scrollTop];
+  for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w] = [e.scrollLeft, e.scrollTop];
   $('#side').innerHTML = side;
   $('#bottom').innerHTML = bottom;
-  for (const e of $('#view').querySelectorAll('[data-keep]')) if (keep[e.dataset.keep]) [e.scrollLeft, e.scrollTop] = keep[e.dataset.keep];
+  for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) { const k = keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w]; if (k) [e.scrollLeft, e.scrollTop] = k; }
   $('#bottom').classList.toggle('scroll', !!scroll);
   if (sheet && $('#modal').open) $('#modal').innerHTML = sheetHtml(sheet);
+  masonry();
 }
+// Cột phải xếp kiểu gạch: lưới chia hàng 6px, mỗi widget chiếm số hàng đúng bằng chiều cao của nó (+ khoảng cách),
+// nên widget nhỏ kế tiếp nằm ngay dưới widget cùng cột thay vì chờ widget cao bên cạnh.
+function masonry() {
+  const side = $('#side');
+  if (!side) return;
+  const on = getComputedStyle(side).gridAutoRows === '6px';   // màn hẹp: xếp dọc bình thường
+  for (const w of side.children) w.style.gridRowEnd = on && !w.classList.contains('dragging') ? `span ${Math.ceil((w.getBoundingClientRect().height + 12) / 6)}` : '';
+}
+addEventListener('resize', masonry);
+document.fonts?.ready.then(masonry);
 let raf = 0;
 const soon = () => { raf = raf || requestAnimationFrame(() => { raf = 0; draw(); }); };
 
@@ -284,7 +299,7 @@ function greetHtml() {
   }
   const back = t === 'room' ? `<button class="edit" data-go="${view.floor}">${icon('back')}</button>` : view.page ? `<button class="edit" data-go="">${icon('back')}</button>` : '';
   const edit = t === 'home' || t === 'floor'
-    ? `${editing ? '<button class="edit" data-wreset>Về mặc định</button>' : ''}<button class="edit${editing ? ' primary' : ''}" data-edit>${editing ? 'Xong' : 'Sắp xếp'}</button>` : '';
+    ? `${editing ? `<button class="edit" data-sheet="add:">${icon('plus')}Thêm widget</button><button class="edit" data-wreset>Về mặc định</button>` : ''}<button class="edit${editing ? ' primary' : ''}" data-edit>${editing ? 'Xong' : 'Sắp xếp'}</button>` : '';
   return `<div class="gtop">${back}<div><h1>${h}</h1><p>${esc(p)}</p></div>${edit}</div>${extra}`;
 }
 
@@ -301,9 +316,8 @@ function loadLayout() {
   for (const [pg, zs] of Object.entries(DEF_LAYOUT)) {
     out[pg] = {hidden: Array.isArray(saved[pg]?.hidden) ? saved[pg].hidden.filter(id => W[id]) : [],
       opt: saved[pg]?.opt && typeof saved[pg].opt === 'object' ? saved[pg].opt : {}};
-    const all = [...zs.side, ...zs.bottom];
     for (const zn of ['side', 'bottom']) {
-      const s = Array.isArray(saved[pg]?.[zn]) ? saved[pg][zn].filter(id => all.includes(id)) : [];
+      const s = Array.isArray(saved[pg]?.[zn]) ? saved[pg][zn].filter(id => W[id]) : [];
       out[pg][zn] = s.length ? s : [...zs[zn]];
     }
     // widget mới thêm sau: đặt về chỗ mặc định nếu chưa có ở đâu
@@ -332,6 +346,17 @@ function cfgPanel(id) {
       `<button class="pick${hid(id, k) ? '' : ' on'}" data-wpick="${id}:${esc(k)}" aria-pressed="${!hid(id, k)}">${icon('check')}<span>${esc(l)}</span></button>`).join('')}</div></div>` : ''}
     <div class="m-act"><button class="m-btn" data-go="caidat">Cài đặt nâng cao</button><button value="1" class="m-btn ok">Xong</button></div></div>`;
 }
+// Thêm widget: mọi widget chưa có trên trang này (kể cả widget của trang khác) mà có dữ liệu để hiện.
+let addZone = 'side';
+function addPanel() {
+  const L = layout[pageType()], on = id => (L.side.includes(id) || L.bottom.includes(id)) && !L.hidden.includes(id);
+  const ids = Object.keys(W).filter(id => !on(id) && W[id].r(view.floor));
+  return `<div class="m-box sheet"><header class="wh">${icon('plus', 'wi amber')}<h3>Thêm widget<small>${pageType() === 'home' ? 'Trang Cả nhà' : 'Các trang tầng'}</small></h3></header>
+    <div class="acrow"><span>Thêm vào</span><div class="seg">${[['side', 'Cột phải'], ['bottom', 'Hàng dưới']].map(([v, l]) => `<button class="rb${addZone === v ? ' sel' : ''}" data-wzone="${v}">${l}</button>`).join('')}</div></div>
+    ${ids.length ? `<div class="list">${ids.map(id => `<button class="setrow" data-wadd="${id}"><span>${icon(W[id].i)}${W[id].t}</span>${icon('plus')}</button>`).join('')}</div>`
+      : '<p class="empty">Trang này đã có đủ các widget.</p>'}
+    <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
+}
 function zonesHtml() {
   const t = pageType();
   if (t === 'room') return roomZones(zone(view.room));
@@ -341,15 +366,15 @@ function zonesHtml() {
   const one = (id, zn) => {
     const d = W[id], hidden = L.hidden.includes(id);
     const body = d.r(f);
-    if (!editing && (hidden || !body)) return '';
+    if (hidden || (!editing && !body)) return '';
     const meta = d.m ? d.m(f) : '';
     const sz = sizeOf(id), tools = editing ? `<div class="wtools"><button class="wt" data-wsize="${id}:${sz === 'L' ? 'S' : 'L'}" aria-label="${sz === 'L' ? 'Thu nhỏ' : 'Phóng to'}">${icon(sz === 'L' ? 'shrink' : 'grow')}</button>
       <button class="wt" data-sheet="cfg:${id}" aria-label="Cấu hình ${d.t}">${icon('gear')}</button>
-      <button class="wt" data-whide="${id}" aria-label="${hidden ? 'Hiện' : 'Ẩn'} ${d.t}">${icon(hidden ? 'eyeoff' : 'eye')}</button>
+      <button class="wt" data-wdel="${id}" aria-label="Xoá ${d.t} khỏi trang">${icon('close')}</button>
       <span class="grip" data-grip aria-label="Giữ và kéo để đổi chỗ">${icon('grip')}</span></div>` : '';
     const link = !editing && d.go ? `<button class="more" data-go="${typeof d.go === 'function' ? d.go(f) : d.go}" aria-label="Xem chi tiết">${icon('more')}</button>` : '';
     const cls = zn === 'side' ? (sz === 'S' ? ' half' : '') : sz === 'L' ? ' big2' : '';
-    return `<section class="w${cls}${hidden ? ' off' : ''}" data-w="${id}"><header class="wh">${icon(d.i, 'wi ' + (d.c || ''))}<h3>${d.t}${meta ? `<small>${meta}</small>` : ''}</h3>${link}</header>${tools}
+    return `<section class="w${cls}" data-w="${id}"><header class="wh">${icon(d.i, 'wi ' + (d.c || ''))}<h3>${d.t}${meta ? `<small>${meta}</small>` : ''}</h3>${link}</header>${tools}
       ${body || '<p class="empty">Chưa có dữ liệu cho mục này.</p>'}</section>`;
   };
   return [L.side.map(id => one(id, 'side')).join(''), L.bottom.map(id => one(id, 'bottom')).join('')];
@@ -415,7 +440,7 @@ function tvPanel(id) {
 }
 // Bảng mở rộng đang mở ('ac:<phòng>', 'tv:<thiết bị>', 'cam:<camera>'); draw() vẽ lại khi trạng thái đổi.
 let sheet = '';
-const SHEETS = {ac: acPanel, tv: tvPanel, cam: camPanel, cfg: cfgPanel};
+const SHEETS = {ac: acPanel, tv: tvPanel, cam: camPanel, cfg: cfgPanel, add: addPanel};
 const sheetHtml = key => SHEETS[key.slice(0, key.indexOf(':'))](key.slice(key.indexOf(':') + 1));
 function openSheet(key) {
   const m = $('#modal');
@@ -434,6 +459,13 @@ async function acGroup(zid, code, label) {
   }
   draw();
   if (bad) toast(`${bad} máy lạnh chưa nhận lệnh “${label}”`);
+}
+// Nhiệt độ cảm nhận (chỉ số nhiệt NWS, Rothfusz khi từ 80°F, công thức đơn giản dưới đó); vào/ra °C.
+function heatIndex(tc, rh) {
+  const T = tc * 9 / 5 + 32, simple = 0.5 * (T + 61 + (T - 68) * 1.2 + rh * 0.094);
+  const F = (simple + T) / 2 < 80 ? simple : -42.379 + 2.04901523 * T + 10.14333127 * rh - 0.22475541 * T * rh - 6.83783e-3 * T * T
+    - 5.481717e-2 * rh * rh + 1.22874e-3 * T * T * rh + 8.5282e-4 * T * rh * rh - 1.99e-6 * T * T * rh * rh;
+  return (F - 32) * 5 / 9;
 }
 const QUICK = [['light', 'Đèn'], ['fan', 'Quạt'], ['ac', 'Điều hoà'], ['socket', 'Ổ cắm'], ['speaker', 'Loa'], ['tv', 'TV'], ['pump', 'Bơm nước'], ['water', 'Tưới cây']];
 const W = {
@@ -470,10 +502,15 @@ const W = {
       <div class="kv">${pm ? `<span>PM2.5 <b>${val(pm)}</b></span>` : ''}${co2 ? `<span>CO₂ <b>${val(co2)}</b></span>` : ''}</div>`;
   }},
   water: {t: 'Nước lọc', i: 'drop', c: 'cyan', half: ['floor'], r: f => {
-    const tds = sensorsOn(f).find(e => /nước|tds/i.test(e.name));
-    if (!tds) return '';
-    const v = num(tds.id), [lb, cls] = v <= 50 ? ['Tốt', 'good'] : v <= 150 ? ['Đạt', 'mid'] : ['Thay lõi lọc', 'bad'];
-    return `<div class="aq"><b class="${cls}">${val(tds)}</b><span>${lb}<small>TDS, ppm</small></span></div>`;
+    // máy lọc tệ nhất trên tầng (TDS sau lọc cao nhất); kèm nước nguồn, lượng lọc hôm nay, độ bền lõi lọc của chính máy đó
+    const es = sensorsOn(f), outs = es.filter(e => /sau lọc|tds/i.test(e.name) && !/nguồn/i.test(e.name));
+    if (!outs.length) return '';
+    const o = outs.reduce((a, b) => num(b.id) > num(a.id) ? b : a), at = re => es.find(e => e.zone === o.zone && re.test(e.name));
+    const v = num(o.id), src = at(/nguồn/i), lit = at(/đã lọc/i), core = at(/lõi/i), [lb, cls] = v <= 50 ? ['Tốt', 'good'] : v <= 150 ? ['Đạt', 'mid'] : ['Thay lõi lọc', 'bad'];
+    const rej = src && num(src.id) > 0 ? Math.round((1 - v / num(src.id)) * 100) : NaN, c = core ? num(core.id) : NaN;
+    return `<div class="aq"><b class="${cls}">${val(o)}</b><span>${lb}<small>TDS sau lọc, ppm</small></span></div>
+      ${isNaN(c) ? '' : `<div class="core"><span>Lõi lọc còn <b>${c}%</b></span><div class="bt"><i class="${c <= 20 ? 'bad' : c <= 40 ? 'mid' : 'good'}" style="width:${Math.min(100, c)}%"></i></div></div>`}
+      <div class="kv">${src ? `<span>Nguồn <b>${val(src)}</b></span>` : ''}${isNaN(rej) ? '' : `<span>Lọc bỏ <b>${rej}%</b></span>`}${lit ? `<span>Hôm nay <b>${val(lit)}</b> L</span>` : ''}</div>`;
   }},
   ac: {t: 'Điều hoà', i: 'snow', c: 'blue', o: f => acRooms(f).map(z => [z, zone(z)?.name || z]), m: f => { const r = acRooms(f); return r.length ? `${r.filter(z => acsIn(z).some(isOn)).length}/${r.length} phòng đang bật` : ''; }, r: f => {
     const rs = acRooms(f).filter(z => !hid('ac', z)).sort((a, b) => acsIn(b).some(isOn) - acsIn(a).some(isOn));
@@ -487,20 +524,22 @@ const W = {
     return lr.length ? `<div class="thumbs" data-keep="lights">${lr.map(z => `<button class="th" data-go="${z.floor}/${esc(z.id)}" style="${thumbBg(z)}"><span>${esc(z.name)}</span></button>`).join('')}</div>`
       : '<p class="empty">Không phòng nào đang bật đèn.</p>';
   }},
-  climate: {t: 'Khí hậu trong nhà', i: 'leaf', c: 'green', o: () => [['t', 'Nhiệt độ'], ['h', 'Độ ẩm'], ['pm', 'Bụi PM2.5'], ['co2', 'CO₂'], ['tds', 'Nước lọc']], r: f => {
+  climate: {t: 'Khí hậu trong nhà', i: 'leaf', c: 'green', o: () => [['t', 'Nhiệt độ'], ['hi', 'Cảm giác'], ['h', 'Độ ẩm'], ['pm', 'Bụi PM2.5'], ['co2', 'CO₂'], ['tds', 'Nước lọc']], r: f => {
     // nhiệt độ, độ ẩm lấy trung bình các phòng; bụi, CO₂, nước lấy chỗ tệ nhất
     const es = sensorsOn(f).filter(e => !/ngoài trời/i.test(e.name)), vs = test => es.filter(test).map(e => num(e.id)).filter(v => !isNaN(v));
     const avg = a => a.reduce((x, y) => x + y, 0) / a.length, t = vs(e => e.unit === '°C'), h = vs(e => e.unit === '%' && /ẩm/i.test(e.name)),
-      pm = vs(e => e.unit === 'µg/m³'), co2 = vs(e => /co/i.test(e.name) && e.unit === 'ppm'), tds = vs(e => /nước|tds/i.test(e.name));
+      pm = vs(e => e.unit === 'µg/m³'), co2 = vs(e => /co/i.test(e.name) && e.unit === 'ppm'), tds = vs(e => /sau lọc|tds/i.test(e.name) && !/nguồn/i.test(e.name));
+    const hi = t.length && h.length ? heatIndex(avg(t), avg(h)) : NaN;
     const lvl = (v, ok, mid) => v <= ok ? 'good' : v <= mid ? 'mid' : 'bad';
     const tiles = [
-      t.length && ['t', 'Nhiệt độ', nf.format(avg(t)), '°', ''],
-      h.length && ['h', 'Độ ẩm', Math.round(avg(h)), '%', avg(h) >= 40 && avg(h) <= 70 ? 'good' : 'mid'],
-      pm.length && ['pm', 'Bụi PM2.5', Math.max(...pm), 'µg/m³', aqiLabel(aqi(Math.max(...pm)))[1]],
-      co2.length && ['co2', 'CO₂', Math.max(...co2), 'ppm', lvl(Math.max(...co2), 800, 1200)],
-      tds.length && ['tds', 'Nước lọc', Math.max(...tds), 'ppm', lvl(Math.max(...tds), 50, 150)],
+      t.length && ['t', 'thermo', 'Nhiệt độ', nf.format(avg(t)), '°', ''],
+      !isNaN(hi) && ['hi', 'sun', 'Cảm giác', nf.format(hi), '°', hi < 27 ? 'good' : hi < 32 ? 'mid' : 'bad'],
+      h.length && ['h', 'drop', 'Độ ẩm', Math.round(avg(h)), '%', avg(h) >= 40 && avg(h) <= 70 ? 'good' : 'mid'],
+      pm.length && ['pm', 'wind', 'Bụi PM2.5', Math.max(...pm), 'µg/m³', aqiLabel(aqi(Math.max(...pm)))[1]],
+      co2.length && ['co2', 'leaf', 'CO₂', Math.max(...co2), 'ppm', lvl(Math.max(...co2), 800, 1200)],
+      tds.length && ['tds', 'filter', 'Nước lọc', Math.max(...tds), 'ppm', lvl(Math.max(...tds), 50, 150)],
     ].filter(x => x && !hid('climate', x[0])).map(x => x.slice(1));
-    return tiles.length ? `<div class="clim">${tiles.map(([l, v, u, cls]) => `<div class="cl ${cls}"><small>${l}</small><b>${v}<small>${u}</small></b></div>`).join('')}</div>` : '';
+    return tiles.length ? `<div class="clim">${tiles.map(([ic, l, v, u, cls]) => `<div class="cl ${cls}" title="${l}"><small>${icon(ic)}<em class="lb">${l}</em></small><b>${v}<small>${u}</small></b></div>`).join('')}</div>` : '';
   }},
   cameras: {t: 'Camera', i: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
     const cs = devsOf(f, 'camera').filter(d => !hid('cameras', d.id));
@@ -510,15 +549,15 @@ const W = {
   security: {t: 'An ninh', i: 'shield', c: 'green', r: () => {
     const cs = cfg.devices.filter(d => kindOf(d) === 'camera'), lost = cfg.devices.filter(offline);
     return `<div class="sec ${lost.length ? 'warn' : 'ok'}">${lost.length ? `${lost.length} thiết bị mất kết nối` : 'Bình thường'}</div>
-      <div class="ics"><button data-alerts><span class="ib">${icon('camera')}</span>Camera<span class="n">${cs.length - cs.filter(offline).length}</span></button>
-      <button data-alerts><span class="ib">${icon('warn')}</span>Cảnh báo<span class="n">${lost.length}</span></button>
-      <span title="Hệ báo cháy CBX chưa nối vào hub"><span class="ib">${icon('flame')}</span>Báo cháy</span></div>`;
+      <div class="ics"><button data-alerts title="Camera" aria-label="Camera"><span class="ib">${icon('camera')}</span><em class="lb">Camera</em><span class="n">${cs.length - cs.filter(offline).length}</span></button>
+      <button data-alerts title="Cảnh báo" aria-label="Cảnh báo"><span class="ib">${icon('warn')}</span><em class="lb">Cảnh báo</em><span class="n">${lost.length}</span></button>
+      <span title="Hệ báo cháy CBX chưa nối vào hub"><span class="ib">${icon('flame')}</span><em class="lb">Báo cháy</em></span></div>`;
   }},
   devices: {t: 'Thiết bị', i: 'cube', o: () => [['light', 'Đèn'], ['socket', 'Ổ cắm'], ['ac', 'Điều hoà'], ['fan', 'Quạt'], ['other', 'Khác']], m: f => { const ds = devsOf(f); return `${ds.length} thiết bị, ${ds.filter(d => !offline(d)).length} trực tuyến`; }, r: f => {
     const ds = devsOf(f), G = [['light', 'Đèn'], ['socket', 'Ổ cắm'], ['ac', 'Điều hoà'], ['fan', 'Quạt']];
     const other = ds.filter(d => !G.some(([k]) => kindOf(d) === k)).length;
-    return `<div class="ics">${G.map(([k, n]) => { const c = ds.filter(d => kindOf(d) === k).length; return c && !hid('devices', k) ? `<span><span class="ib">${icon(k)}</span>${n}<span class="n">${c}</span></span>` : ''; }).join('')}
-      ${other && !hid('devices', 'other') ? `<span><span class="ib">${icon('cube')}</span>Khác<span class="n">${other}</span></span>` : ''}</div>`;
+    return `<div class="ics">${G.map(([k, n]) => { const c = ds.filter(d => kindOf(d) === k).length; return c && !hid('devices', k) ? `<span title="${n}"><span class="ib">${icon(k)}</span><em class="lb">${n}</em><span class="n">${c}</span></span>` : ''; }).join('')}
+      ${other && !hid('devices', 'other') ? `<span title="Khác"><span class="ib">${icon('cube')}</span><em class="lb">Khác</em><span class="n">${other}</span></span>` : ''}</div>`;
   }},
   quick: {t: 'Thao tác nhanh', i: 'bolt', c: 'amber', o: f => QUICK.filter(([k]) => devsOf(f, k).length), r: f => {
     const rows = QUICK.map(([k, n]) => [k, n, devsOf(f, k).filter(d => !d.protected)]).filter(([k, , ds]) => ds.length && !hid('quick', k));
@@ -673,6 +712,27 @@ async function setVolume(id, nv) {
 }
 
 /* ---------- Điện năng ---------- */
+// Lịch sử số đo cho biểu đồ: nạp nền, vẽ lại khi có; làm mới sau 5 phút. Dữ liệu mẫu sinh tại chỗ.
+const HIST = {};
+function hist(id, hours = 24) {
+  const k = `${id}|${hours}`, h = HIST[k];
+  if (!h || (h.at && Date.now() - h.at > 300e3)) {
+    HIST[k] = {pts: h?.pts || [], at: 0};
+    const e = cfg.entities.find(x => x.id === id);
+    (DEMO ? Promise.resolve(demoHist(id, e?.unit, hours, num(id))) : api(`/api/history?id=${encodeURIComponent(id)}&hours=${hours}`).then(r => r.json()))
+      .then(p => { HIST[k] = {pts: p || [], at: Date.now()}; soon(); }, () => { HIST[k] = {pts: [], at: Date.now()}; });
+  }
+  return HIST[k].pts;
+}
+const kTick = v => Math.abs(v) >= 1000 ? `${nf.format(v / 1000)}k` : nf.format(v);
+function energyChart() {
+  const M = [['deye.load', 'Tiêu thụ', '#e8eef4'], ['deye.pv', 'Mặt trời', '#f6b93b'], ['deye.grid', 'Lưới điện', '#4cc9f0'], ['jk.soc', 'Pin', '#34d17a']]
+    .filter(([id]) => cfg.entities.some(e => e.id === id)).map(([id, label, color]) => {
+      const w = cfg.entities.find(e => e.id === id).unit === 'W';
+      return {label, color, unit: w ? 'W' : '%', now: num(id), pts: hist(id), zero: true, fmt: w ? fw : undefined, tick: w ? kTick : undefined};
+    });
+  return M.length ? `<div class="ebox chbox"><div class="wh">${icon('chart', 'wi amber')}<h3>24 giờ qua</h3><a class="more" href="/history.html${DEMO ? '?demo' : ''}" aria-label="Xem tất cả biểu đồ">${icon('more')}</a></div>${chartHtml('energy', M, 24, 150)}</div>` : '';
+}
 // Sơ đồ vẽ trọn trong một SVG tỉ lệ cố định nên đường nối luôn khớp nút và không đè lên chữ.
 // Mỗi path đi từ nguồn tới đích (vào/ra tâm inverter, bị vòng tròn che); rev = chảy ngược (bán lên lưới, sạc pin).
 function flowMap() {
@@ -685,7 +745,7 @@ function flowMap() {
     <text class="v" x="${x}" y="${y + 64}">${value}</text><text class="l" x="${x}" y="${y + 86}">${label}</text></g>`;
   const gridLbl = isNaN(grid) ? 'Điện lưới' : grid > 5 ? 'Đang mua từ lưới' : grid < -5 ? 'Đang bán lên lưới' : 'Lưới, không dùng';
   const batLbl = isNaN(bat) ? 'Pin lưu trữ' : bat > 5 ? `Đang sạc ${fw(bat)}` : bat < -5 ? `Đang xả ${fw(bat)}` : 'Pin nghỉ';
-  return `<svg class="flowmap" viewBox="0 0 640 410" role="img" aria-label="Dòng điện giữa mặt trời, lưới, pin và nhà">
+  return `<svg class="flowmap" viewBox="40 44 560 362" role="img" aria-label="Dòng điện giữa mặt trời, lưới, pin và nhà">
     ${fl('M120 90 H276 Q296 90 296 110 V200', pv, 'var(--amber)')}${fl('M520 90 H364 Q344 90 344 110 V200', grid, '#4cc9f0', grid < 0)}
     ${fl('M120 310 H276 Q296 310 296 290 V200', bat, 'var(--green)', bat > 0)}${fl('M344 200 V290 Q344 310 364 310 H520', load, '#e8eef4')}
     ${node(120, 90, 'sun', 'var(--amber)', live(pv), fw(pv), 'Mặt trời')}${node(520, 90, 'grid', '#4cc9f0', live(grid), fw(Math.abs(grid)), gridLbl)}
@@ -738,6 +798,21 @@ function settingsZones() {
     ''];
 }
 
+/* ---------- Kéo bằng chuột để cuộn ngang (cảm ứng đã tự cuộn); kéo quá 5px thì bỏ cú click lúc thả ---------- */
+let hs = null, hsBlock = 0;
+document.addEventListener('pointerdown', e => {
+  const el = e.pointerType === 'mouse' && !e.target.closest('[data-grip], [data-volt]') && e.target.closest('.thumbs, .cams, .bottom.scroll');
+  if (el && el.scrollWidth > el.clientWidth) hs = {el, x: e.clientX, left: el.scrollLeft, moved: false};
+});
+document.addEventListener('pointermove', e => {
+  if (!hs) return;
+  const dx = e.clientX - hs.x;
+  if (!hs.moved && Math.abs(dx) > 5) { hs.moved = true; hs.el.classList.add('xdrag'); }
+  if (hs.moved) hs.el.scrollLeft = hs.left - dx;
+});
+addEventListener('pointerup', () => { if (hs?.moved) { hsBlock = Date.now() + 100; hs.el.classList.remove('xdrag'); } hs = null; });
+addEventListener('click', e => { if (Date.now() < hsBlock) { e.stopPropagation(); e.preventDefault(); } }, true);
+
 /* ---------- Kéo thả widget (Pointer Events: chạy được với cảm ứng iPad) ---------- */
 document.addEventListener('pointerdown', e => {
   const grip = editing && e.target.closest('[data-grip]');
@@ -746,29 +821,35 @@ document.addEventListener('pointerdown', e => {
   const el = grip.closest('.w'), r = el.getBoundingClientRect(), ph = document.createElement('div');
   ph.className = el.className + ' ph';
   ph.style.height = `${r.height}px`;
+  ph.style.gridRowEnd = el.style.gridRowEnd;
   el.after(ph);
   Object.assign(el.style, {position: 'fixed', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`});
   el.classList.add('dragging');
-  drag = {el, ph, zone: el.parentElement, dx: e.clientX - r.left, dy: e.clientY - r.top};
+  drag = {el, ph, dx: e.clientX - r.left, dy: e.clientY - r.top};
 });
 document.addEventListener('pointermove', e => {
   if (!drag) return;
   drag.el.style.left = `${e.clientX - drag.dx}px`;
   drag.el.style.top = `${e.clientY - drag.dy}px`;
-  const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('.wz .w:not(.ph):not(.dragging)');
-  if (!over || over.parentElement !== drag.zone) return;   // chỉ đổi chỗ trong cùng một vùng
-  const r = over.getBoundingClientRect(), horiz = drag.zone.id === 'bottom' || over.classList.contains('half');
+  const hit = document.elementFromPoint(e.clientX, e.clientY), over = hit?.closest('.wz .w:not(.ph):not(.dragging)');
+  if (!over) {   // vào chỗ trống của vùng kia (cột phải <-> hàng dưới): đặt vào cuối vùng đó
+    const z = hit?.closest('.wz');
+    if (z && !z.contains(drag.ph)) z.append(drag.ph);
+    return;
+  }
+  const r = over.getBoundingClientRect(), horiz = over.parentElement.id === 'bottom' || over.classList.contains('half');
   const after = horiz ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
   if (after ? over.nextElementSibling !== drag.ph : over.previousElementSibling !== drag.ph) over[after ? 'after' : 'before'](drag.ph);
 });
 function endDrag() {
   if (!drag) return;
-  const {el, ph, zone: z} = drag;
+  const {el, ph} = drag, L = layout[pageType()];
   drag = null;
   ph.replaceWith(el);
   el.removeAttribute('style');
   el.classList.remove('dragging');
-  layout[pageType()][z.dataset.zone] = [...z.children].map(w => w.dataset.w).filter(Boolean);
+  // widget đã xoá không có trên màn hình: giữ chúng ở cuối danh sách để "Về mặc định" và "Thêm widget" vẫn đúng
+  for (const z of $('#view').querySelectorAll('.wz')) { const zn = z.dataset.zone; L[zn] = [...[...z.children].map(w => w.dataset.w).filter(Boolean), ...L[zn].filter(id => L.hidden.includes(id))]; }
   saveLayout();
   shellKey = '';
   draw();
@@ -967,10 +1048,22 @@ document.addEventListener('click', async e => {
     return setOpt(id, {off: off.includes(k) ? off.filter(x => x !== k) : [...off, k]});
   }
   if ((el = pick('[data-skyset]'))) { skyMode = el.dataset.skyset; try { localStorage.setItem('hubd.sky', skyMode); } catch (_) { /* bỏ qua */ } return draw(); }
-  if ((el = pick('[data-whide]'))) {
-    const L = layout[pageType()], id = el.dataset.whide;
-    L.hidden = L.hidden.includes(id) ? L.hidden.filter(x => x !== id) : [...L.hidden, id];
+  if ((el = pick('[data-wdel]'))) {
+    const L = layout[pageType()], id = el.dataset.wdel;
+    L.hidden = [...new Set([...L.hidden, id])];
     saveLayout();
+    toast(`Đã xoá ${W[id].t}. Thêm lại bằng nút Thêm widget.`);
+    return draw();
+  }
+  if ((el = pick('[data-wzone]'))) { addZone = el.dataset.wzone; return draw(); }
+  if ((el = pick('[data-wadd]'))) {
+    const L = layout[pageType()], id = el.dataset.wadd;
+    L.hidden = L.hidden.filter(x => x !== id);
+    L.side = L.side.filter(x => x !== id);
+    L.bottom = L.bottom.filter(x => x !== id);
+    L[addZone].push(id);
+    saveLayout();
+    toast(`Đã thêm ${W[id].t}`);
     return draw();
   }
   if (pick('[data-grip]')) return;
@@ -1005,6 +1098,7 @@ async function init() {
   if (DEMO) {
     cfg = DEMO_DATA.cfg; state = {...DEMO_DATA.state};
     $('#conn').hidden = true;
+    $('a[href="/history.html"]').href = '/history.html?demo';
     $('#demo-chip').innerHTML = '<a class="chipdemo" href="/" title="Về dữ liệu thật của nhà">Dữ liệu mẫu</a>';
   } else {
     cfg = await (await api('/api/config')).json();
