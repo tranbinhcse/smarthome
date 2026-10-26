@@ -21,11 +21,19 @@ services:
       HUBD_PIN: ${HUBD_PIN}
       HUBD_MQTT_USER: ${HUBD_MQTT_USER}
       HUBD_MQTT_PASS: ${HUBD_MQTT_PASS}
+      # Trợ lý giọng nói (mục 15.2): token riêng, quyền bằng người chưa nhập PIN; trống = tắt.
+      HUBD_ASSISTANT_TOKEN: ${HUBD_ASSISTANT_TOKEN:-}
+      HUBD_VOICED_URL: http://voiced:8090
+      # HTTPS cổng 8443 cho nút nói trên iPad (scripts/tls-selfsigned.sh); trống = chỉ HTTP.
+      HUBD_TLS_CERT: ${HUBD_TLS_CERT:-}
+      HUBD_TLS_KEY: ${HUBD_TLS_KEY:-}
     volumes:
       - ./config.yaml:/data/config.yaml:ro
       - hubd-db:/db
+      - ./tls:/tls:ro
     ports:
       - "8080:8080"
+      - "8443:8443"
 
   # Cầu nối Tuya <-> MQTT. network_mode host để TCP ra thiết bị trong LAN (cổng 6668) không qua NAT docker.
   tuya-bridge:
@@ -42,6 +50,24 @@ services:
     volumes:
       - ./tuya:/tuya:ro   # devices.json (+ overrides.json) — chứa local key, KHÔNG commit
 
+  # Trợ lý giọng nói: STT/TTS cục bộ, Claude cho câu tự do. Không mở cổng: dashboard đi qua hubd /voice/*.
+  # Tắt service này thì lõi (luật, cảnh báo, điều khiển) vẫn chạy đủ.
+  voiced:
+    build: ./voiced
+    container_name: voiced
+    restart: unless-stopped
+    depends_on: [mosquitto, hubd]
+    environment:
+      HUBD_URL: http://hubd:8080
+      HUBD_ASSISTANT_TOKEN: ${HUBD_ASSISTANT_TOKEN:-}
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${VOICED_MQTT_USER:-}
+      MQTT_PASS: ${VOICED_MQTT_PASS:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - voiced-cache:/cache   # âm thanh đã đọc (cache theo câu)
+
 volumes:
   mosquitto-data:
   hubd-db:
+  voiced-cache:

@@ -3,6 +3,8 @@
 .env
 mosquitto/passwd
 tuya/
+tls/
+tls-ca/
 tuya_keys*
 secrets*
 snapshot.json

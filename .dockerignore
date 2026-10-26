@@ -6,3 +6,6 @@ scripts
 mosquitto
 *.md
 web/images/*.png
+voiced
+tls
+tls-ca
