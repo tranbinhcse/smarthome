@@ -18,11 +18,14 @@ type Rule struct {
 	For        time.Duration `yaml:"for"`
 	Then       []Action      `yaml:"then"`
 	OnClear    []Action      `yaml:"on_clear"`
+	Alert      string        `yaml:"alert"` // lời cảnh báo: khi kích hoạt, state "alert:<id>" = chuỗi này; khi nhả = ""
 }
 
 type Action struct {
-	Set string `yaml:"set"`
-	To  string `yaml:"to"` // on | off
+	Set   string `yaml:"set"`
+	To    string `yaml:"to"` // on | off
+	Alert string `yaml:"-"`  // engine tự tạo cho luật có alert: id luật; Text rỗng = nhả cảnh báo
+	Text  string `yaml:"-"`
 }
 
 type ruleState struct {
@@ -76,6 +79,9 @@ func (e *Engine) eval(only string, now time.Time) []Action {
 			if r.cleared(v) {
 				s.active, s.pending = false, false
 				out = append(out, r.OnClear...)
+				if r.Alert != "" {
+					out = append(out, Action{Alert: r.ID})
+				}
 			}
 			continue
 		}
@@ -89,6 +95,9 @@ func (e *Engine) eval(only string, now time.Time) []Action {
 		if now.Sub(s.since) >= r.For {
 			s.active = true
 			out = append(out, r.Then...)
+			if r.Alert != "" {
+				out = append(out, Action{Alert: r.ID, Text: r.Alert})
+			}
 		}
 	}
 	return out
