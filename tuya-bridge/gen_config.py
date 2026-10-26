@@ -21,10 +21,12 @@ def render(devs, over=None):
         item = {"id": "tuya_" + i, "name": d.get("name") or i,
                 "command_topic": f"tuya/{i}/cmd", "state_topic": f"tuya/{i}/state",
                 "online_topic": f"tuya/{i}/online"}
+        if d.get("category"):
+            item["kind"] = d["category"]  # dashboard chọn biểu tượng theo loại (kg, dlq, pc...)
         o = over.get(i, {})
         if o.get("name"):
             item["name"] = o["name"]
-        for k in ("zone", "protected"):
+        for k in ("zone", "protected", "kind"):
             if k in o:
                 item[k] = o[k]
         lines.append("  - " + json.dumps(item, ensure_ascii=False))  # JSON flow là YAML hợp lệ

@@ -22,23 +22,33 @@ type Config struct {
 	Rules    []Rule   `yaml:"rules"`
 }
 
+// Zone là một phòng/khu trên một tầng. Type "panel" = tủ điện của tầng (hiện như dải CB, không phải phòng).
 type Zone struct {
-	ID   string `yaml:"id" json:"id"`
-	Name string `yaml:"name" json:"name"`
-}
-
-type Entity struct {
 	ID    string `yaml:"id" json:"id"`
 	Name  string `yaml:"name" json:"name"`
-	Unit  string `yaml:"unit" json:"unit"`
-	Zone  string `yaml:"zone" json:"zone"`
-	Topic string `yaml:"topic" json:"-"`
+	Floor int    `yaml:"floor" json:"floor"`
+	Type  string `yaml:"type" json:"type,omitempty"`
 }
 
+// Entity là một số đo. Field: đọc một khoá của payload JSON (vd dps Tuya), nhân Scale.
+// Device: gắn số đo này lên thẻ của thiết bị đó trên dashboard.
+type Entity struct {
+	ID     string  `yaml:"id" json:"id"`
+	Name   string  `yaml:"name" json:"name"`
+	Unit   string  `yaml:"unit" json:"unit"`
+	Zone   string  `yaml:"zone" json:"zone"`
+	Device string  `yaml:"device" json:"device,omitempty"`
+	Topic  string  `yaml:"topic" json:"-"`
+	Field  string  `yaml:"field" json:"-"`
+	Scale  float64 `yaml:"scale" json:"-"`
+}
+
+// Kind: loại thiết bị để dashboard chọn biểu tượng (category Tuya: kg công tắc, dlq CB, pc ổ cắm...).
 type Device struct {
 	ID           string `yaml:"id" json:"id"`
 	Name         string `yaml:"name" json:"name"`
 	Zone         string `yaml:"zone" json:"zone"`
+	Kind         string `yaml:"kind" json:"kind"`
 	Protected    bool   `yaml:"protected" json:"protected"`
 	CommandTopic string `yaml:"command_topic" json:"-"`
 	StateTopic   string `yaml:"state_topic" json:"-"`

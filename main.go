@@ -42,32 +42,16 @@ func main() {
 		}
 	})
 
-	// topic -> khoá trạng thái
-	topics := map[string]string{}
-	for _, e := range cfg.Entities {
-		if e.Topic != "" {
-			topics[e.Topic] = e.ID
-		}
-	}
-	for _, d := range cfg.Devices {
-		if d.StateTopic != "" {
-			topics[d.StateTopic] = "dev:" + d.ID
-		}
-		if d.OnlineTopic != "" {
-			topics[d.OnlineTopic] = "online:" + d.ID
-		}
-	}
-
 	opts := mqtt.NewClientOptions().AddBroker(cfg.MQTT.Broker).SetClientID("hubd")
 	if cfg.MQTT.Username != "" {
 		opts.SetUsername(cfg.MQTT.Username).SetPassword(cfg.MQTT.Password)
 	}
 	opts.SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(3 * time.Second)
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		for topic, id := range topics {
-			eid := id
+		topics := hub.Topics()
+		for _, topic := range topics {
 			c.Subscribe(topic, 1, func(_ mqtt.Client, m mqtt.Message) {
-				hub.Ingest(eid, string(m.Payload()), time.Now())
+				hub.Handle(m.Topic(), string(m.Payload()), time.Now())
 			})
 		}
 		log.Printf("MQTT đã kết nối, đăng ký %d topic", len(topics))
@@ -96,7 +80,11 @@ func main() {
 func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	sub, _ := fs.Sub(webEmbed, "web")
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	static := http.FileServer(http.FS(sub))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache") // iPad luôn lấy giao diện mới sau khi cập nhật hub
+		static.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /api/login", auth.Login)
 	mux.HandleFunc("GET /api/config", auth.Require(func(w http.ResponseWriter, r *http.Request) {

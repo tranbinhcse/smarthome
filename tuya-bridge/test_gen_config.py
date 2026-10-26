@@ -24,5 +24,13 @@ class T2(unittest.TestCase):
         self.assertIn('"protected": true', out)
         self.assertIn("Tủ lạnh", out)
 
+    def test_kind_from_category_and_override(self):
+        out = g.apply("devices: []\n", [{"id": "x1", "name": "A", "category": "dlq"},
+                                         {"id": "x2", "name": "B", "category": "kg"},
+                                         {"id": "x3", "name": "C"}], {"x2": {"kind": "light"}})
+        self.assertIn('"kind": "dlq"', out)
+        self.assertIn('"kind": "light"', out)
+        self.assertEqual(out.count('"kind"'), 2)  # không có category thì không ghi kind
+
 if __name__ == "__main__":
     unittest.main()
