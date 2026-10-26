@@ -62,66 +62,45 @@ b { font-variant-numeric: tabular-nums; }
 .tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 
-/* Mặt cắt 3D isometric: mỗi tầng là một sàn, phòng xếp dọc chiều sâu nhà ống (trước gần, sau xa),
-   bỏ tường mặt trước để nhìn vào trong. Chọn tầng thì các tầng trên bay lên, lộ hết tầng đang chọn. */
-.house { position: absolute; left: 0; right: 0; bottom: 0; height: 68%; overflow: hidden; perspective: 2400px; --wall: rgba(203, 224, 245, .34); }
-.iso-cam { position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .9s var(--ease); }
-.iso-scene { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; transform: rotateX(58deg) rotateZ(-38deg); }
-.slab { --L: 440px; --D: 136px; --gap: 132px; --wh: 44px;
-  position: absolute; left: calc(var(--L) / -2); top: calc(var(--D) / -2); width: var(--L); height: var(--D); transform-style: preserve-3d;
-  transform: translateZ(calc((var(--i) - 1) * var(--gap) + var(--lift, 0) * 120px)); transition: transform .9s var(--ease); }
-.slab::before { /* tường sau, cạnh dài phía xa */
-  content: ""; position: absolute; left: 0; top: 0; width: 100%; height: var(--wh); transform-origin: top; transform: rotateX(90deg);
-  background: linear-gradient(0deg, rgba(203, 224, 245, .14), rgba(203, 224, 245, .04)); border: 1px solid var(--wall); border-top: 0; }
-.slab::after { /* tường hồi phía sau nhà */
-  content: ""; position: absolute; right: 0; top: 0; width: var(--wh); height: 100%; transform-origin: right; transform: rotateY(90deg);
-  background: linear-gradient(90deg, rgba(203, 224, 245, .04), rgba(203, 224, 245, .12)); border: 1px solid var(--wall); border-right: 0; }
-.face { position: absolute; inset: 0; display: flex; transform-style: preserve-3d; border-radius: 3px;
-  background: rgba(19, 37, 53, .5); border: 1.5px solid var(--wall); transition: background .6s, border-color .6s; }
-.edge { position: absolute; background: #0c1a26; }
-.edge.ef { left: 0; bottom: 0; width: 100%; height: 9px; transform-origin: bottom; transform: rotateX(90deg); }
-.edge.es { left: 0; top: 0; width: 9px; height: 100%; transform-origin: left; transform: rotateY(90deg); }
-.rm { flex: var(--w, 1) 1 0; min-width: 0; position: relative; transform-style: preserve-3d; border-right: 1px solid rgba(203, 224, 245, .16);
-  transition: background .6s var(--ease), box-shadow .6s var(--ease); }
-.rm:last-child { border-right: 0; }
-.rm::after { /* vách ngăn giữa hai phòng */
-  content: ""; position: absolute; right: 0; top: 0; width: calc(var(--wh) * .7); height: 100%; transform-origin: right; transform: rotateY(90deg);
-  background: rgba(203, 224, 245, .07); border-left: 1px solid var(--wall); }
-.rm:last-child::after { display: none; }
-.rm.lit { background: radial-gradient(75% 75% at 50% 50%, rgba(255, 214, 150, .85), rgba(244, 184, 96, .3) 70%, rgba(244, 184, 96, .1));
-  box-shadow: 0 0 38px rgba(244, 184, 96, .55); }
-.rm.out { background: repeating-linear-gradient(45deg, rgba(203, 224, 245, .05) 0 6px, transparent 6px 12px); }
-.rm.out.lit { background: radial-gradient(70% 70% at 50% 50%, rgba(244, 184, 96, .5), transparent 80%); }
-.rm.sel { outline: 2px solid var(--ink); outline-offset: -3px; }
-/* Nhãn luôn quay mặt về người xem: xoay ngược phép xoay của cảnh */
-.bb, .flab, .wifi3 { position: absolute; left: 50%; top: 50%; transform-style: flat; white-space: nowrap; }
-.bb { display: flex; flex-direction: column; align-items: center; pointer-events: none;
-  transform: translate(-50%, -50%) translateZ(24px) rotateZ(38deg) rotateX(-58deg); }
-.bb b { font-size: 11.5px; font-weight: 500; color: var(--ink); text-shadow: 0 1px 6px rgba(0, 0, 0, .8); }
-.bb small { font-size: 10.5px; font-weight: 600; color: #ffd9a3; text-shadow: 0 1px 6px rgba(0, 0, 0, .8); }
-.flab { left: 0; transform: translate(-115%, -50%) rotateZ(38deg) rotateX(-58deg); font-size: 12px; color: var(--ink2);
-  padding: 4px 8px; border-radius: 999px; background: rgba(8, 18, 27, .5); border: 1px solid var(--line); }
-.slab.on .flab { color: #0b151e; background: var(--lamp); border-color: transparent; }
-.wifi3 { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; pointer-events: none;
-  transform: translate(-50%, -50%) translateZ(64px) rotateZ(38deg) rotateX(-58deg);
-  background: #0f2131; border: 1.5px solid var(--ok); color: var(--ok); box-shadow: 0 0 14px rgba(111, 211, 154, .4); }
-.wifi3 .ic { width: 15px; height: 15px; stroke-width: 2; }
-.wifi3.bad { border-color: var(--alert); color: var(--alert); box-shadow: 0 0 14px rgba(255, 122, 102, .45); }
-/* Tầng không chọn: mờ đi. Không đặt opacity lên phần tử có con 3D (sẽ bị ép phẳng) nên ẩn vách + nhãn rồi mờ từng ô. */
-.slab.dim .face { background: rgba(19, 37, 53, .3); border-color: rgba(203, 224, 245, .12); }
-.slab.dim .rm { opacity: .25; }
-.slab.dim .rm::after, .slab.dim .bb, .slab.dim .wifi3 { display: none; }
-.slab.dim::before, .slab.dim::after, .slab.dim .edge { opacity: .25; }
-.slab.on .face { border-color: rgba(244, 184, 96, .7); }
-/* Điện năng: sàn nhuộm theo công suất MCB */
-.house.heat .rm { background: rgba(244, 184, 96, calc(.06 + var(--heat, 0) * .62)); box-shadow: none; }
-[data-sky="day"] .house { --wall: rgba(14, 35, 53, .45); }
-[data-sky="day"] .face { background: rgba(255, 255, 255, .55); }
-[data-sky="day"] .edge { background: #9fb5c6; }
-[data-sky="day"] .bb b { color: #0e2335; text-shadow: 0 1px 4px rgba(255, 255, 255, .8); }
-[data-sky="day"] .bb small { color: #7a4a06; text-shadow: none; }
-[data-sky="day"] .flab { background: rgba(255, 255, 255, .55); color: #2c4a61; }
-[data-sky="day"] .wifi3 { background: #eef4f9; }
+/* Ảnh nhà: ảnh render thật + vùng chạm từng phòng. Ban đêm ảnh nền tối đi, phòng bật đèn lấy lại vùng sáng từ ảnh gốc. */
+.hero { display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 18px; }
+.hero-text { position: relative; inset: auto; margin-right: 128px; }
+.scene { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; gap: 12px; z-index: 1; }
+.scene::-webkit-scrollbar { display: none; }
+.pic { position: relative; width: 100%; flex: none; border-radius: 18px; overflow: hidden; background: #0b1520; }
+.pic img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; -webkit-user-drag: none; }
+.pic .base, .pic.off img { transition: filter 1.2s var(--ease); }
+:root:not([data-sky="day"]) .pic .base, :root:not([data-sky="day"]) .pic.off img { filter: brightness(.36) saturate(.7); }
+.pic.heat .base { filter: brightness(.3) saturate(.45) !important; }
+.band { position: absolute; left: 0; right: 0; background: rgba(5, 11, 17, .66); pointer-events: none; }
+.hs { position: absolute; border-radius: 6px; display: flex; align-items: flex-end; padding: 5px; text-align: left; transition: box-shadow .3s, background .6s; }
+.hs.sel { box-shadow: inset 0 0 0 2px var(--lamp), 0 0 24px rgba(244, 184, 96, .35); }
+[data-sky="day"] .hs.lit { box-shadow: inset 0 0 0 2px rgba(244, 184, 96, .85); }
+.pic.heat .hs { background: rgba(244, 184, 96, calc(var(--heat, 0) * .5)); }
+.hl { display: inline-flex; flex-direction: column; gap: 1px; max-width: 100%; padding: 3px 7px; border-radius: 8px;
+  background: rgba(8, 18, 27, .66); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.hl b { font-size: 11px; font-weight: 500; line-height: 1.2; }
+.hl small { font-size: 10px; color: #ffd9a3; white-space: nowrap; }
+.pic.mini { width: 74%; align-self: center; }
+.scene.debug .hs { outline: 1.5px dashed #ff5ea8; outline-offset: -1px; }
+.wf { position: absolute; width: 24px; height: 24px; transform: translate(-50%, -50%); border-radius: 50%; display: grid; place-items: center;
+  background: rgba(8, 18, 27, .72); border: 1.5px solid var(--ok); color: var(--ok); pointer-events: none; box-shadow: 0 0 12px rgba(111, 211, 154, .4); }
+.wf .ic { width: 14px; height: 14px; stroke-width: 2; }
+.wf.bad { border-color: var(--alert); color: var(--alert); }
+.pic.photo, .pic.zoom { aspect-ratio: 16 / 9; }
+.pic.photo img { object-fit: cover; }
+.pic.zoom img { inset: auto; left: 0; top: 50%; height: auto; }
+.fcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; flex: none; }
+.fcard { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; border-radius: 16px; text-align: left;
+  background: rgba(8, 18, 27, .45); border: 1px solid var(--line); }
+.fcard b { font-size: 15px; font-weight: 500; }
+.fcard > span { font-size: 12.5px; color: var(--ink2); }
+.fcard .fx { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 4px; font-size: 12.5px; color: var(--ink2); }
+.fcard .fx .ic { width: 15px; height: 15px; vertical-align: -3px; }
+.fcard .ok { color: var(--ok); }
+.fcard .bad { color: var(--alert); }
+[data-sky="day"] .fcard { background: rgba(255, 255, 255, .5); border-color: rgba(14, 35, 53, .1); color: #0e2335; }
+[data-sky="day"] .fcard > span, [data-sky="day"] .fcard .fx { color: #2c4a61; }
 
 
 /* Ngày / đêm: lớp trời ban ngày + sao ban đêm nằm sau mặt cắt nhà, đổi dần khi data-sky đổi */
@@ -137,11 +116,7 @@ b { font-variant-numeric: tabular-nums; }
 [data-sky="day"] .hero::before { opacity: 1; }
 [data-sky="day"] .hero::after { opacity: 0; }
 .hero > * { z-index: 1; }
-.orb { position: absolute; right: 70px; top: 128px; width: 46px; height: 46px; border-radius: 50%;
-  background: #e8eef5; box-shadow: inset -12px -4px 0 0 #9fb1c2, 0 0 40px rgba(232, 238, 245, .35);
-  transition: background 1.4s, box-shadow 1.4s, top 1.4s var(--ease); }
-[data-sky="day"] .orb { top: 120px; background: #fff3c4; box-shadow: 0 0 60px 18px rgba(255, 236, 170, .55); }
-[data-sky="day"] .hero-text h1 { color: #0e2335; }
+[data-sky="day"] [data-sky="day"] .hero-text h1 { color: #0e2335; }
 [data-sky="day"] .hero-text p { color: #2c4a61; }
 [data-sky="day"] .tabs { background: rgba(255, 255, 255, .42); border-color: rgba(14, 35, 53, .1); }
 [data-sky="day"] .tabs button { color: #2c4a61; }
@@ -149,7 +124,6 @@ b { font-variant-numeric: tabular-nums; }
 [data-sky="day"] .hero-chips .chip { background: rgba(255, 255, 255, .45); border-color: rgba(14, 35, 53, .1); color: #2c4a61; }
 [data-sky="day"] .hero-chips .chip b { color: #0e2335; }
 .hero-text h1, .hero-text p, .tabs, .tabs button { transition: color 1s, background-color 1s, border-color 1s; }
-.hero-text { right: 140px; }
 .hero-chips { position: absolute; top: 26px; right: 24px; z-index: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .hero-chips .chip { height: 34px; background: rgba(8, 18, 27, .4); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .hero-chips .chip em { font-style: normal; }

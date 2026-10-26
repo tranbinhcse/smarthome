@@ -159,36 +159,55 @@ function renderHero() {
     (isNaN(w) ? '' : `<button class="chip" data-go="dien" title="${esc(src)}. Chạm để xem điện năng.">${icon('bolt')}<b>${fw(w)}</b></button>`);
 }
 
-/* ---------- Mặt cắt 3D: sàn từng tầng xếp chồng, phòng dọc chiều sâu nhà ống ---------- */
-function roomBox(z, f, heat, maxW) {
-  const ds = devsIn(z.id), on = onIn(z.id).length, aw = areaW(z.id), bad = ds.some(offline);
-  const w = z.type === 'outdoor' ? .85 : 1 + Math.min(ds.length, 10) * .1;   // phòng nhiều thiết bị vẽ dài hơn
-  const sub = heat ? fw(aw) : bad ? 'mất kết nối' : on ? `${on} đang bật` : '';
-  return `<button class="rm${!heat && lit(z.id) ? ' lit' : ''}${z.type === 'outdoor' ? ' out' : ''}${view.room === z.id ? ' sel' : ''}"
-      style="--w:${w.toFixed(2)};--heat:${heat && !isNaN(aw) ? (aw / maxW).toFixed(2) : 0}" data-go="${f}/${esc(z.id)}" aria-label="${esc(z.name)}, tầng ${f}">
-    <span class="bb"><b>${esc(z.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span></button>`;
-}
-function renderHouse() {
-  const h = $('#house'), heat = view.page === 'energy', fs = floors().slice().reverse();   // 1, 2, 3 từ dưới lên
-  h.classList.toggle('focus', !!view.floor);
-  h.classList.toggle('heat', heat);
+/* ---------- Ảnh nhà: ảnh render thật + vùng chạm từng phòng (vùng khai báo trong scene.js) ---------- */
+// Ban đêm ảnh nền tối đi; phòng đang bật đèn lấy lại đúng vùng đó từ ảnh gốc (clip-path), trông như đèn thật đang sáng.
+const DEBUG_ZONES = new URLSearchParams(location.search).has('vung');
+const clipOf = r => `inset(${r[1]}% ${(100 - r[0] - r[2]).toFixed(2)}% ${(100 - r[1] - r[3]).toFixed(2)}% ${r[0]}%)`;
+const boxOf = r => `left:${r[0]}%;top:${r[1]}%;width:${r[2]}%;height:${r[3]}%`;
+const isDay = () => document.documentElement.dataset.sky === 'day';
+const hasLights = zid => devsIn(zid).some(d => kindOf(d) === 'light');
+const dimRoom = zid => !isDay() && hasLights(zid) && !lit(zid);
+function pic(p, {focus = 0, sel = '', mini = false, labels = true, floor = 0} = {}) {
+  const heat = view.page === 'energy';
   const maxW = Math.max(1, ...cfg.zones.map(z => areaW(z.id)).filter(w => !isNaN(w)));
-  $('.iso-scene', h).innerHTML = fs.map((f, i) => {
-    const rt = routerOf(f), lift = view.floor && f > view.floor ? 1 : 0;
-    return `<div class="slab${view.floor === f ? ' on' : ''}${view.floor && view.floor !== f ? ' dim' : ''}" style="--i:${i};--lift:${lift}" data-floor="${f}">
-      <i class="edge ef"></i><i class="edge es"></i>
-      <div class="face">${rooms(f).map(z => roomBox(z, f, heat, maxW)).join('')}</div>
-      <button class="flab" data-go="${f}">Tầng ${f}</button>
-      ${rt ? `<span class="wifi3${offline(rt) ? ' bad' : ''}" title="${esc(rt.name)}">${icon('router')}</span>` : ''}
-    </div>`;
-  }).join('');
-  camera();
+  const rs = Object.entries(p.rooms).filter(([id]) => zone(id));
+  const rt = floor && routerOf(floor);
+  return `<div class="pic${mini ? ' mini' : ''}${heat ? ' heat' : ''}" style="aspect-ratio:${p.w}/${p.h}">
+    <img class="base" src="${p.src}" alt="" draggable="false">
+    ${heat ? '' : rs.filter(([id]) => lit(id)).map(([, r]) => `<img class="glow" src="${p.src}" alt="" draggable="false" style="clip-path:${clipOf(r)}">`).join('')}
+    ${focus && p.floors ? Object.entries(p.floors).filter(([f]) => +f !== focus).map(([, [a, b]]) => `<i class="band" style="top:${a}%;height:${b - a}%"></i>`).join('') : ''}
+    ${rs.map(([id, r]) => {
+      const z = zone(id), on = onIn(id).length, aw = areaW(id), bad = devsIn(id).some(offline);
+      const sub = heat ? fw(aw) : bad ? 'mất kết nối' : on ? `${on} đang bật` : '';
+      return `<button class="hs${sel === id ? ' sel' : ''}${!heat && lit(id) ? ' lit' : ''}" style="${boxOf(r)};--heat:${isNaN(aw) ? 0 : (aw / maxW).toFixed(2)}"
+        data-go="${z.floor}/${esc(id)}" aria-label="${esc(z.name)}">${labels ? `<span class="hl"><b>${esc(z.name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>` : ''}</button>`;
+    }).join('')}
+    ${rt && p.wifi ? `<span class="wf${offline(rt) ? ' bad' : ''}" style="left:${p.wifi[0]}%;top:${p.wifi[1]}%" title="${esc(rt.name)}">${icon('router')}</span>` : ''}
+  </div>`;
 }
-// "Camera": đưa tầng đang chọn vào giữa khung và phóng nhẹ. Độ cao z của sàn hiện lên màn hình ~0,85 lần (nghiêng 58°).
-function camera() {
-  const cam = $('#house .iso-cam'), i = floors().slice().reverse().indexOf(view.floor);
-  const fit = Math.min(1, $('#house').clientWidth / 540);   // thu nhỏ trên màn hẹp
-  cam.style.transform = i < 0 ? `scale(${fit.toFixed(3)})` : `translateY(${((i - 1) * 132 * .85).toFixed(0)}px) scale(${(fit * 1.1).toFixed(3)})`;
+// Phòng chưa có ảnh riêng: phóng vùng phòng đó trên ảnh tầng cho vừa khung 16:9.
+function roomPic(f, id) {
+  const src = SCENE.photos[id], fp = SCENE.floors[f], r = fp && fp.rooms[id];
+  if (src) return `<div class="pic photo${dimRoom(id) ? ' off' : ''}"><img src="${src}" alt="" draggable="false"></div>`;
+  if (!r) return '';
+  return `<div class="pic zoom${dimRoom(id) ? ' off' : ''}"><img src="${fp.src}" alt="" draggable="false"
+    style="width:${(10000 / r[2]).toFixed(2)}%;transform:translate(-${r[0]}%,-${(r[1] + r[3] / 2).toFixed(2)}%)"></div>`;
+}
+function floorCards() {
+  return `<div class="fcards">${floors().slice().reverse().map(f => {
+    const rs = rooms(f), litN = rs.filter(z => lit(z.id)).length, rt = routerOf(f);
+    const cams = cfg.devices.filter(d => kindOf(d) === 'camera' && floorOf(d) === f).length;
+    const ws = rs.map(z => areaW(z.id)).filter(w => !isNaN(w)), w = ws.reduce((a, b) => a + b, 0);
+    return `<button class="fcard" data-go="${f}"><b>Tầng ${f}</b><span>${litN ? `${litN} phòng sáng đèn` : 'Không phòng nào sáng đèn'}</span>
+      <span class="fx">${rt ? `<span class="${offline(rt) ? 'bad' : 'ok'}">${icon('router')}</span>` : ''}${cams ? `<span>${icon('camera')} ${cams}</span>` : ''}${ws.length ? `<span>${icon('bolt')} ${fw(w)}</span>` : ''}</span></button>`;
+  }).join('')}</div>`;
+}
+function renderScene() {
+  const s = $('#house'), f = view.floor, fp = SCENE.floors[f];
+  s.classList.toggle('debug', DEBUG_ZONES);
+  s.innerHTML = view.room && fp ? roomPic(f, view.room) + pic(fp, {sel: view.room, floor: f})
+    : f && fp ? pic(fp, {floor: f}) + pic(SCENE.house, {focus: f, mini: true, labels: false})
+    : pic(SCENE.house) + floorCards();
 }
 
 /* ---------- Thẻ thiết bị ---------- */
@@ -491,7 +510,7 @@ function renderStage() {
   const f = view.floor;
   $('#stage').innerHTML = view.page === 'energy' ? energyView() : view.room ? roomView(f, view.room) : f ? floorView(f) : homeView();
 }
-function draw() { if (drag) return; renderTop(); renderHero(); renderHouse(); renderStage(); }
+function draw() { if (drag) return; renderTop(); renderHero(); renderScene(); renderStage(); }
 let raf = 0;
 const soon = () => { raf = raf || requestAnimationFrame(() => { raf = 0; draw(); }); };
 
@@ -526,9 +545,9 @@ function go(f, room = '', from = null, page = '') {
   st.scrollTop = 0;
   animate(st, 'go-' + dir);
   animate($('#heroText'), 'swap');
+  animate($('#house'), 'go-' + dir);
 }
 addEventListener('popstate', () => { const v = parseHash(); go(v.floor, v.room, null, v.page); });
-addEventListener('resize', camera);
 
 /* ---------- Lệnh ---------- */
 let tt = 0;
