@@ -376,7 +376,7 @@ function zonesHtml() {
       <span class="grip" data-grip aria-label="Giữ và kéo để đổi chỗ">${icon('grip')}</span></div>` : '';
     const link = !editing && d.go ? `<button class="more" data-go="${typeof d.go === 'function' ? d.go(f) : d.go}" aria-label="Xem chi tiết">${icon('more')}</button>` : '';
     const cls = zn === 'side' ? (sz === 'S' ? ' half' : '') : sz === 'L' ? ' big2' : '';
-    return `<section class="w${cls}" data-w="${id}"><header class="wh">${icon(d.i, 'wi ' + (d.c || ''))}<h3>${d.t}${meta ? `<small>${meta}</small>` : ''}</h3>${link}</header>${tools}
+    return `<section class="w${cls}" data-w="${id}"><header class="wh">${icon(d.i, 'wi ' + (d.c || ''))}<h3>${d.t}${meta ? `<small>${meta}</small>` : ''}</h3>${d.hx ? d.hx(f) : ''}${link}</header>${tools}
       ${body || `<p class="empty">${f ? 'Tầng này' : 'Nhà'} chưa có thiết bị hoặc cảm biến cho mục này.</p>`}</section>`;
   };
   return [L.side.map(id => one(id, 'side')).join(''), L.bottom.map(id => one(id, 'bottom')).join('')];
@@ -551,11 +551,9 @@ function outList() {
 }
 // Không khí: một widget, hai tab Trong nhà / Ngoài trời (thay cho Khí hậu trong nhà + Không khí + Thời tiết)
 let airTab = 'in';
-function airWidget(f, wid) {
-  const tabs = `<div class="seg atab">${[['in', 'home', 'Trong nhà'], ['out', 'cloud', 'Ngoài trời']].map(([v, ic, l]) =>
-    `<button class="rb${airTab === v ? ' sel' : ''}" data-airtab="${v}" aria-label="${l}">${icon(ic)}<em class="lb">${l}</em></button>`).join('')}</div>`;
-  return tabs + (airTab === 'out' ? tilesHtml(outList().map(x => x.slice(1))) : climTiles(sensorsOn(f), 'f' + (f || 0), wid));
-}
+const airTabs = () => `<div class="seg atab">${[['in', 'home', 'Trong nhà'], ['out', 'cloud', 'Ngoài trời']].map(([v, ic, l]) =>
+  `<button class="rb${airTab === v ? ' sel' : ''}" data-airtab="${v}" aria-label="${l}">${icon(ic)}<em class="lb">${l}</em></button>`).join('')}</div>`;
+const airWidget = (f, wid) => airTab === 'out' ? tilesHtml(outList().map(x => x.slice(1))) : climTiles(sensorsOn(f), 'f' + (f || 0), wid);
 const climTiles = (es, scope, wid = '') => tilesHtml(climList(es, scope).filter(x => !(wid && hid(wid, x[0]))).map(x => x.slice(1)));
 // Ô chỉ số: [icon, tên, giá trị, đơn vị, mức good|mid|bad|'', bảng mở khi chạm]
 const tilesHtml = ts => ts.length ? `<div class="clim">${ts.map(([ic, l, v, u, cls, sh]) => `<button class="cl ${cls}" ${sh.startsWith('data-') ? sh : `data-sheet="${esc(sh)}"`} title="${l}${cls === 'na' ? ': chưa có cảm biến' : ''}" aria-label="${l}: ${cls === 'na' ? 'chưa có cảm biến' : v + u}, xem biểu đồ">
@@ -603,7 +601,7 @@ const W = {
     return `${t ? `<div class="big">${val(t)}°</div>` : ''}${DEMO && rain ? `<button class="sub" data-rain title="Dữ liệu mẫu: bấm để thử trời mưa">${desc}</button>` : `<div class="sub">${desc}</div>`}
       <div class="kv">${h ? `<span>${icon('drop')}Độ ẩm <b>${val(h)}%</b></span>` : ''}${lux ? `<span>${icon('sun')}<b>${val(lux)}</b> lx</span>` : ''}</div>`;
   }},
-  air: {t: 'Không khí', i: 'leaf', c: 'green', half: ['floor'], o: () => CLIM_OPTS, r: f => airWidget(f, 'air')},
+  air: {t: 'Không khí', i: 'leaf', c: 'green', half: ['floor'], o: () => CLIM_OPTS, hx: airTabs, r: f => airWidget(f, 'air')},
   water: {t: 'Nước lọc', i: 'drop', c: 'cyan', half: ['floor'], r: f => {
     // máy lọc tệ nhất trên tầng (TDS sau lọc cao nhất), kèm nước nguồn, độ bền lõi lọc, lượng lọc hôm nay của chính máy đó; tầng chưa có máy lọc: 4 ô "—"
     const es = sensorsOn(f), outs = es.filter(METRICS.tds[2]), o = outs.length ? outs.reduce((a, b) => num(b.id) > num(a.id) ? b : a) : null;
@@ -625,7 +623,7 @@ const W = {
     return lr.length ? `<div class="thumbs" data-keep="lights">${lr.map(z => `<button class="th" data-go="${z.floor}/${esc(z.id)}" style="${thumbBg(z)}"><span>${esc(z.name)}</span></button>`).join('')}</div>`
       : '<p class="empty">Không phòng nào đang bật đèn.</p>';
   }},
-  climate: {t: 'Không khí', i: 'leaf', c: 'green', o: () => CLIM_OPTS, r: f => airWidget(f, 'climate')},
+  climate: {t: 'Không khí', i: 'leaf', c: 'green', o: () => CLIM_OPTS, hx: airTabs, r: f => airWidget(f, 'climate')},
   cameras: {t: 'Camera', i: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
     const cs = devsOf(f, 'camera').filter(d => !hid('cameras', d.id));
     return cs.length ? `<div class="cams" data-keep="cameras">${cs.map(d => `<button class="cam" data-sheet="cam:${esc(d.id)}" style="${thumbBg(zone(d.zone))}" title="Ảnh minh hoạ phòng, chưa có hình trực tiếp">
