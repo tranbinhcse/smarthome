@@ -1,0 +1,6 @@
+/data/
+*.log
+snapshot.json
+devices.json
+tuya_keys*
+secrets*

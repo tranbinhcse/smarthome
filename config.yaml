@@ -1,0 +1,14 @@
+mqtt:
+  broker: tcp://mosquitto:1883
+
+http:
+  listen: ":8080"
+
+# Cảm biến: mỗi dòng là một entity, lấy giá trị từ một topic MQTT.
+# Khi node ESPHome / bridge Tuya gửi lên topic, giá trị hiện trên web.
+entities:
+  - { id: demo.nhietdo, name: "Nhiệt độ (demo)", unit: "°C", topic: demo/nhietdo }
+
+# Thiết bị bật/tắt: gửi lệnh ra command_topic, đọc trạng thái từ state_topic.
+# Để trống tới khi có local key Tuya và bridge Tuya→MQTT.
+devices: []

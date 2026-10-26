@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nhà của tôi</title>
+<style>
+  :root { --bg:#0f1115; --card:#1b1f27; --fg:#e8eaed; --mut:#9aa0a6; --acc:#2d7ef7; --on:#2e7d32; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px; font-size:20px; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; padding:0 16px 32px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; }
+  .card .name { color:var(--mut); font-size:14px; }
+  .card .val { font-size:26px; font-weight:600; margin-top:6px; }
+  .card .unit { font-size:14px; color:var(--mut); font-weight:400; }
+  .dev button { width:100%; min-height:48px; margin-top:10px; border:0; border-radius:10px; font-size:16px; color:#fff; background:var(--acc); }
+  .dev button.off { background:#3a3f4b; }
+  h2 { padding:8px 16px 0; color:var(--mut); font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .empty { color:var(--mut); padding:0 16px; }
+</style>
+</head>
+<body>
+<header>Nhà của tôi</header>
+<h2>Cảm biến</h2>
+<div class="grid" id="entities"></div>
+<h2>Thiết bị</h2>
+<div class="grid" id="devices"></div>
+<p class="empty" id="empty">Chưa có thiết bị nào. Kết nối Tuya xong sẽ hiện ở đây.</p>
+
+<script>
+let state = {};
+async function load() {
+  const cfg = await (await fetch('/api/config')).json();
+  state = await (await fetch('/api/state')).json();
+  renderEntities(cfg.entities || []);
+  renderDevices(cfg.devices || []);
+  document.getElementById('empty').style.display =
+    (cfg.entities?.length || cfg.devices?.length) ? 'none' : 'block';
+}
+function renderEntities(ents) {
+  const g = document.getElementById('entities'); g.innerHTML = '';
+  for (const e of ents) {
+    const v = state[e.id];
+    g.insertAdjacentHTML('beforeend',
+      `<div class="card" data-ent="${e.id}"><div class="name">${e.name}</div>
+       <div class="val"><span class="v">${v ?? '—'}</span> <span class="unit">${e.unit||''}</span></div></div>`);
+  }
+}
+function renderDevices(devs) {
+  const g = document.getElementById('devices'); g.innerHTML = '';
+  for (const d of devs) {
+    const st = state['dev:'+d.id] || '';
+    const on = /on|1|true/i.test(st);
+    g.insertAdjacentHTML('beforeend',
+      `<div class="card dev"><div class="name">${d.name}</div>
+       <button data-dev="${d.id}" class="${on?'':'off'}">${on?'BẬT':'TẮT'}</button></div>`);
+  }
+  g.querySelectorAll('button[data-dev]').forEach(b => b.onclick = () => {
+    const to = b.classList.contains('off') ? 'on' : 'off';
+    fetch('/api/cmd', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({device:b.dataset.dev, to})});
+  });
+}
+function connect() {
+  const es = new EventSource('/events');
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data); state[m.id] = m.value;
+    const card = document.querySelector(`[data-ent="${m.id}"] .v`);
+    if (card) card.textContent = m.value;
+    if (m.id.startsWith('dev:')) load();
+  };
+  es.onerror = () => setTimeout(connect, 2000);
+}
+load(); connect();
+</script>
+</body>
+</html>
