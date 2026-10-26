@@ -96,6 +96,7 @@ def main():
     fd = os.open(OUT, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
+    os.chmod(OUT, 0o600)  # os.open chỉ đặt quyền khi tạo mới; file cũ (vd từ tinytuya wizard) có thể đang 644
     os.chown(OUT, BRIDGE_UID, BRIDGE_UID)
     print(f"Đã ghi {len(out)} thiết bị vào {OUT} (không in key). Bridge tự nạp lại.")
 

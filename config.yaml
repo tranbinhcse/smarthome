@@ -23,6 +23,15 @@ entities:
 # Gắn zone / protected: true bằng cách sửa tay NGOÀI đoạn sinh, hoặc dùng tuya/overrides (xem README).
 devices:
   # BEGIN tuya-devices (gen_config.py — đừng sửa tay)
+  - {"id": "tuya_eba30c56ca208baad0y43a", "name": "Đèn Kho", "command_topic": "tuya/eba30c56ca208baad0y43a/cmd", "state_topic": "tuya/eba30c56ca208baad0y43a/state", "online_topic": "tuya/eba30c56ca208baad0y43a/online"}
+  - {"id": "tuya_eb89a0372bd6a5acf1owhi", "name": "Đèn phòng lạnh", "command_topic": "tuya/eb89a0372bd6a5acf1owhi/cmd", "state_topic": "tuya/eb89a0372bd6a5acf1owhi/state", "online_topic": "tuya/eb89a0372bd6a5acf1owhi/online"}
+  - {"id": "tuya_ebae9da4b1b5eeec58d8ci", "name": "CB Tổng Phòng Lạnh Tầng 1", "command_topic": "tuya/ebae9da4b1b5eeec58d8ci/cmd", "state_topic": "tuya/ebae9da4b1b5eeec58d8ci/state", "online_topic": "tuya/ebae9da4b1b5eeec58d8ci/online", "protected": true}
+  - {"id": "tuya_ebbccca6b3cfc09a3as93f", "name": "Sân sau tầng 1", "command_topic": "tuya/ebbccca6b3cfc09a3as93f/cmd", "state_topic": "tuya/ebbccca6b3cfc09a3as93f/state", "online_topic": "tuya/ebbccca6b3cfc09a3as93f/online"}
+  - {"id": "tuya_eb6564a5a81a53bb8ayyzs", "name": "CB Tổng Bếp", "command_topic": "tuya/eb6564a5a81a53bb8ayyzs/cmd", "state_topic": "tuya/eb6564a5a81a53bb8ayyzs/state", "online_topic": "tuya/eb6564a5a81a53bb8ayyzs/online", "protected": true}
+  - {"id": "tuya_eb0651481bdbe0ca6bvyt0", "name": "CB Tổng Bảng Hiệu", "command_topic": "tuya/eb0651481bdbe0ca6bvyt0/cmd", "state_topic": "tuya/eb0651481bdbe0ca6bvyt0/state", "online_topic": "tuya/eb0651481bdbe0ca6bvyt0/online", "protected": true}
+  - {"id": "tuya_eb700adf4ac4134fea2mrg", "name": "CB Tổng PK T1", "command_topic": "tuya/eb700adf4ac4134fea2mrg/cmd", "state_topic": "tuya/eb700adf4ac4134fea2mrg/state", "online_topic": "tuya/eb700adf4ac4134fea2mrg/online", "protected": true}
+  - {"id": "tuya_ebba01d29a86b4f29dlrgx", "name": "CB Tổng PK Tầng 2 ", "command_topic": "tuya/ebba01d29a86b4f29dlrgx/cmd", "state_topic": "tuya/ebba01d29a86b4f29dlrgx/state", "online_topic": "tuya/ebba01d29a86b4f29dlrgx/online", "protected": true}
+  - {"id": "tuya_ebef59cd6761b0a021jvww", "name": "Ổ cắm Hồ Cá", "command_topic": "tuya/ebef59cd6761b0a021jvww/cmd", "state_topic": "tuya/ebef59cd6761b0a021jvww/state", "online_topic": "tuya/ebef59cd6761b0a021jvww/online", "protected": true}
   # END tuya-devices
 
 # Luật tự động hoá (ví dụ, bỏ # để bật). Thiết bị protected không bao giờ bị luật tắt.
