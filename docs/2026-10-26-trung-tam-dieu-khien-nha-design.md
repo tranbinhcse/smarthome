@@ -343,7 +343,7 @@ Mỗi giai đoạn tính theo buổi tối và cuối tuần. Tổng khoảng 6�
 | Máy Ubuntu hỏng hoặc mất điện: **mất trung tâm** (iPad vẫn mở được nhưng không có dữ liệu) | Backup `hubd-db` + `/root/hubd`. Dựng lại trên máy x86 bất kỳ hoặc Pi 5 (build arm64) bằng `docker compose up -d`, mất ≤ 30 phút. Đầu báo khói vẫn tự kêu trong lúc đó |
 | Cập nhật kernel linux-surface làm hỏng cảm ứng hoặc không boot được | Khoá phiên bản kernel. Giữ kernel cũ trong menu boot. Chỉ cập nhật chủ động |
 | Pin thay (không chính hãng) phồng | Bật Battery Limit 50%. Mỗi tháng nhìn mép màn hình một lần |
-| Máy Ubuntu quá tải khi chạy thêm camera và giọng nói (còn đang chạy VM) | Đo khi làm mục 15. Không đủ thì tách dịch vụ nặng sang máy khác |
+| Máy Ubuntu quá tải khi chạy thêm camera và giọng nói (còn đang chạy VM) | Camera đã đo: 10 luồng phụ ≈ 3,5% một luồng CPU (mục 15.1). Giọng nói đo khi làm mục 15.2. Không đủ thì tách dịch vụ nặng sang máy khác |
 
 ## 14. Quyết định
 
@@ -397,17 +397,24 @@ Chủ nhà bổ sung ngày 2026-10-26. Cả hai phần **làm sau lõi** (Giai �
 
 | Việc | Cách làm |
 |---|---|
-| Xem trực tiếp trên iPad | `go2rtc` (một file binary) chạy trên trung tâm, chuyển RTSP của NVR sang WebRTC/MSE cho trình duyệt. Dùng luồng phụ H.264 để không phải chuyển mã. Giao diện có thêm trang **Camera** |
-| Nhận sự kiện | Cầu nối nhỏ `hikbridge` đọc luồng sự kiện ISAPI `/ISAPI/Event/notification/alertStream` của NVR, gửi MQTT `hik/<kênh>/<sự kiện>` = ON/OFF. `hubd` coi đó là cảm biến thường. Luật viết trong `rules.yaml`, ví dụ: có người ở cổng lúc 23:00–05:00 thì bật đèn sân và báo Telegram |
+| Xem trực tiếp trên iPad | `go2rtc` (một file binary) chạy trên trung tâm, chuyển RTSP của NVR sang WebRTC/MSE cho trình duyệt. Dùng luồng phụ H.264 để không phải chuyển mã. Trình duyệt đi qua `hubd` (PIN), không gọi thẳng go2rtc hay NVR. Giao diện: widget **Camera** (ảnh chụp mỗi phút) và bảng xem trực tiếp từng camera |
+| Nhận sự kiện | Cầu nối nhỏ `hikbridge` đọc luồng sự kiện ISAPI `/ISAPI/Event/notification/alertStream` của NVR, gửi MQTT `hik/<kênh>/<sự kiện>` = ON/OFF. `hubd` coi đó là cảm biến thường (ON/OFF = 1/0). Luật viết trong `config.yaml`, ví dụ: có người ở cổng thì bật đèn sân và báo Telegram (khung giờ, Telegram: chưa có trong `hubd`) |
 | Ảnh kèm cảnh báo | Lấy ảnh chụp từ `/ISAPI/Streaming/channels/<id>/picture`, gửi kèm tin Telegram |
 
 **Bảo mật camera:**
 - Tạo tài khoản NVR riêng, chỉ có quyền xem. Mật khẩu để trong secrets.
 - Không mở port NVR ra internet. Xem từ xa qua Tailscale.
 
-Hai việc **chưa đo**, sẽ đo khi làm:
-- Máy Ubuntu chuyển tiếp vài luồng phụ (không chuyển mã) trong lúc vẫn chạy trung tâm.
-- Chromium giải mã video bằng GPU Intel.
+**Tải khi chuyển tiếp (đo 2026-10-27, đầu ghi giả):** máy Ubuntu Ryzen 7 5700G (16 luồng), go2rtc 1.9.14 và hubd chạy trong Docker như bản thật, đầu ghi giả phát RTSP một clip H.264 704×576, 15 fps, ~510 kbit/s cho mỗi kênh. Người xem kéo MSE qua WebSocket của hubd (đường iPad đi khi không dùng WebRTC); CPU đọc từ bộ đếm cgroup trong 60 giây; mọi người xem nhận đủ 528 kbit/s, không phải nối lại. Đơn vị: % của **một** luồng CPU.
+
+| Kịch bản | go2rtc | hubd (proxy) | RAM go2rtc |
+|---|---|---|---|
+| Không ai xem | 0% | 0% | — |
+| 4 kênh × 1 người xem | 0,86% | 0,63% | ~48 MiB |
+| 10 kênh × 1 người xem | 2,16% | 1,35% | ~53 MiB |
+| 4 kênh × 3 người xem (12 luồng ra) | 1,47% | 1,39% | ~49 MiB |
+
+Kết luận: chuyển tiếp không chuyển mã gần như không tốn CPU (10 kênh ≈ 3,5% một luồng, ≈ 0,2% cả máy), không cần tách sang máy khác. **Chưa đo:** người xem WebRTC (go2rtc mã hoá SRTP thêm) và luồng phụ thật của đầu ghi (độ phân giải, bitrate có thể khác). Giải mã video do iPad làm (màn hình không còn là Chromium trên Surface).
 
 ### 15.2 Trợ lý giọng nói AI
 
