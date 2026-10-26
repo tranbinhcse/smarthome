@@ -1,6 +1,5 @@
-// hubd MVP — trung tâm điều khiển nhà, bản đầu.
-// Chỉ nói MQTT: nhận trạng thái từ các topic, phục vụ web, gửi lệnh bật/tắt.
-// Chưa có: SQLite lịch sử, luật, PIN (sẽ thêm theo plan docs/superpowers/plans/2026-10-26-hubd.md).
+// hubd — trung tâm điều khiển nhà: MQTT -> trạng thái + lịch sử SQLite + luật -> web (iPad/điện thoại).
+// Thiết kế: docs/2026-10-26-trung-tam-dieu-khien-nha-design.md. Vận hành: README.md.
 package main
 
 import (
@@ -10,139 +9,52 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
-	"sync"
+	"strconv"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed web
 var webEmbed embed.FS
-
-type Config struct {
-	MQTT struct {
-		Broker   string `yaml:"broker"`
-		Username string `yaml:"username"`
-		Password string `yaml:"password"`
-	} `yaml:"mqtt"`
-	HTTP struct {
-		Listen string `yaml:"listen"`
-	} `yaml:"http"`
-	Entities []Entity `yaml:"entities"`
-	Devices  []Device `yaml:"devices"`
-}
-
-type Entity struct {
-	ID    string `yaml:"id" json:"id"`
-	Name  string `yaml:"name" json:"name"`
-	Unit  string `yaml:"unit" json:"unit"`
-	Topic string `yaml:"topic" json:"-"`
-}
-
-type Device struct {
-	ID           string `yaml:"id" json:"id"`
-	Name         string `yaml:"name" json:"name"`
-	CommandTopic string `yaml:"command_topic" json:"-"`
-	StateTopic   string `yaml:"state_topic" json:"-"`
-	On           string `yaml:"on" json:"-"`
-	Off          string `yaml:"off" json:"-"`
-}
-
-func (d Device) on() string {
-	if d.On == "" {
-		return "ON"
-	}
-	return d.On
-}
-func (d Device) off() string {
-	if d.Off == "" {
-		return "OFF"
-	}
-	return d.Off
-}
-
-// --- trạng thái trong bộ nhớ, bảo vệ bằng mutex (MVP) ---
-type Store struct {
-	mu   sync.RWMutex
-	val  map[string]string
-	at   map[string]time.Time
-	subs map[chan []byte]struct{}
-}
-
-func NewStore() *Store {
-	return &Store{val: map[string]string{}, at: map[string]time.Time{}, subs: map[chan []byte]struct{}{}}
-}
-func (s *Store) set(id, v string) {
-	s.mu.Lock()
-	s.val[id] = v
-	s.at[id] = time.Now()
-	s.mu.Unlock()
-	b, _ := json.Marshal(map[string]string{"id": id, "value": v})
-	s.pub(b)
-}
-func (s *Store) snapshot() map[string]string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make(map[string]string, len(s.val))
-	for k, v := range s.val {
-		out[k] = v
-	}
-	return out
-}
-func (s *Store) sub() chan []byte {
-	ch := make(chan []byte, 64)
-	s.mu.Lock()
-	s.subs[ch] = struct{}{}
-	s.mu.Unlock()
-	return ch
-}
-func (s *Store) unsub(ch chan []byte) {
-	s.mu.Lock()
-	delete(s.subs, ch)
-	s.mu.Unlock()
-}
-func (s *Store) pub(b []byte) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for ch := range s.subs {
-		select {
-		case ch <- b:
-		default:
-		}
-	}
-}
 
 func main() {
 	path := os.Getenv("HUBD_CONFIG")
 	if path == "" {
 		path = "/data/config.yaml"
 	}
-	raw, err := os.ReadFile(path)
+	cfg, pin, err := LoadConfig(path)
 	if err != nil {
-		log.Fatalf("doc config %s: %v", path, err)
+		log.Fatalf("config %s: %v", path, err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		log.Fatalf("parse config: %v", err)
+	db, err := OpenDB(cfg.DB)
+	if err != nil {
+		log.Fatalf("mở SQLite %s: %v", cfg.DB, err)
 	}
-	if cfg.HTTP.Listen == "" {
-		cfg.HTTP.Listen = ":8080"
+	if pin == "" {
+		log.Println("CẢNH BÁO: HUBD_PIN trống — giao diện và lệnh KHÔNG có mật khẩu")
 	}
 
-	store := NewStore()
+	var client mqtt.Client
+	hub := NewHub(cfg, db, func(topic, payload string) {
+		if client != nil {
+			client.Publish(topic, 1, false, payload)
+		}
+	})
 
-	// map topic -> entity id (và device state topic)
-	topicEntity := map[string]string{}
+	// topic -> khoá trạng thái
+	topics := map[string]string{}
 	for _, e := range cfg.Entities {
 		if e.Topic != "" {
-			topicEntity[e.Topic] = e.ID
+			topics[e.Topic] = e.ID
 		}
 	}
 	for _, d := range cfg.Devices {
 		if d.StateTopic != "" {
-			topicEntity[d.StateTopic] = "dev:" + d.ID
+			topics[d.StateTopic] = "dev:" + d.ID
+		}
+		if d.OnlineTopic != "" {
+			topics[d.OnlineTopic] = "online:" + d.ID
 		}
 	}
 
@@ -150,39 +62,63 @@ func main() {
 	if cfg.MQTT.Username != "" {
 		opts.SetUsername(cfg.MQTT.Username).SetPassword(cfg.MQTT.Password)
 	}
-	opts.SetAutoReconnect(true).SetConnectRetry(true)
+	opts.SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(3 * time.Second)
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		for topic, id := range topicEntity {
-			t, eid := topic, id
-			c.Subscribe(t, 1, func(_ mqtt.Client, m mqtt.Message) {
-				store.set(eid, string(m.Payload()))
+		for topic, id := range topics {
+			eid := id
+			c.Subscribe(topic, 1, func(_ mqtt.Client, m mqtt.Message) {
+				hub.Ingest(eid, string(m.Payload()), time.Now())
 			})
 		}
-		log.Printf("MQTT connected, subscribed %d topics", len(topicEntity))
+		log.Printf("MQTT đã kết nối, đăng ký %d topic", len(topics))
 	})
-	client := mqtt.NewClient(opts)
-	if tok := client.Connect(); tok.Wait() && tok.Error() != nil {
-		log.Fatalf("mqtt connect: %v", tok.Error())
-	}
+	client = mqtt.NewClient(opts)
+	client.Connect() // SetConnectRetry: tự thử lại nền, web vẫn lên được khi broker chưa sẵn sàng
 
-	devByID := map[string]Device{}
-	for _, d := range cfg.Devices {
-		devByID[d.ID] = d
-	}
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		day := time.NewTicker(24 * time.Hour)
+		for {
+			select {
+			case now := <-t.C:
+				hub.Tick(now)
+			case now := <-day.C:
+				db.Prune(180*24*time.Hour, now)
+			}
+		}
+	}()
 
+	auth := NewAuth(pin, db)
+	log.Printf("hubd nghe tại %s", cfg.HTTP.Listen)
+	log.Fatal(http.ListenAndServe(cfg.HTTP.Listen, newMux(hub, auth)))
+}
+
+func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	sub, _ := fs.Sub(webEmbed, "web")
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(sub)))
-
-	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
-		ents := append([]Entity(nil), cfg.Entities...)
-		sort.Slice(ents, func(i, j int) bool { return ents[i].Name < ents[j].Name })
-		writeJSON(w, map[string]any{"entities": ents, "devices": cfg.Devices})
-	})
-	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, store.snapshot())
-	})
-	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	mux.HandleFunc("POST /api/login", auth.Login)
+	mux.HandleFunc("GET /api/config", auth.Require(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"zones": hub.cfg.Zones, "entities": hub.cfg.Entities, "devices": hub.cfg.Devices})
+	}))
+	mux.HandleFunc("GET /api/state", auth.Require(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, hub.Snapshot())
+	}))
+	mux.HandleFunc("GET /api/history", auth.Require(func(w http.ResponseWriter, r *http.Request) {
+		hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+		if hours < 1 || hours > 24*180 {
+			hours = 24
+		}
+		now := time.Now()
+		pts, err := hub.db.Query(r.URL.Query().Get("id"), now.Add(-time.Duration(hours)*time.Hour), now, 300)
+		if err != nil {
+			http.Error(w, "lỗi", 500)
+			return
+		}
+		writeJSON(w, pts)
+	}))
+	mux.HandleFunc("GET /events", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		fl, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "no flush", 500)
@@ -190,10 +126,12 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
-		ch := store.sub()
-		defer store.unsub(ch)
+		ch := hub.Sub()
+		defer hub.Unsub(ch)
 		ping := time.NewTicker(25 * time.Second)
 		defer ping.Stop()
+		w.Write([]byte(": ok\n\n"))
+		fl.Flush()
 		for {
 			select {
 			case <-r.Context().Done():
@@ -208,28 +146,17 @@ func main() {
 				fl.Flush()
 			}
 		}
-	})
-	mux.HandleFunc("POST /api/cmd", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("POST /api/cmd", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Device, To string }
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-			http.Error(w, "bad json", 400)
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil ||
+			(body.To != "on" && body.To != "off") || !hub.Command(body.Device, body.To) {
+			http.Error(w, "lệnh không hợp lệ", 400)
 			return
 		}
-		d, ok := devByID[body.Device]
-		if !ok || d.CommandTopic == "" {
-			http.Error(w, "unknown device", 400)
-			return
-		}
-		payload := d.on()
-		if body.To == "off" {
-			payload = d.off()
-		}
-		client.Publish(d.CommandTopic, 1, false, payload)
 		w.WriteHeader(204)
-	})
-
-	log.Printf("hubd nghe tai %s", cfg.HTTP.Listen)
-	log.Fatal(http.ListenAndServe(cfg.HTTP.Listen, mux))
+	}))
+	return mux
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
