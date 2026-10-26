@@ -133,10 +133,20 @@ func TestCamLiveProxyPinsStream(t *testing.T) {
 	if c := get(mux, "/api/cam/cam3/ws?src=exec:rm", nil).Code; c != 401 || len(hits) != 0 {
 		t.Fatalf("chưa đăng nhập: code=%d hits=%v", c, hits)
 	}
-	r := httptest.NewRequest("GET", "/api/cam/cam3/ws?src=exec:rm", nil)
+	// WebSocket không chịu CORS: trang khác nguồn (kể cả dịch vụ khác trên cùng máy, cùng "site" nên cookie vẫn đi)
+	// không được mở luồng.
+	r := httptest.NewRequest("GET", "/api/cam/cam3/ws", nil)
 	r.AddCookie(ck)
-	r.Header.Set("Origin", "http://192.168.1.254:8080")
+	r.Header.Set("Origin", "http://192.168.1.254:9000")
 	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 403 || len(hits) != 0 {
+		t.Fatalf("Origin lạ: code=%d hits=%v, muốn 403", w.Code, hits)
+	}
+	r = httptest.NewRequest("GET", "/api/cam/cam3/ws?src=exec:rm", nil)
+	r.AddCookie(ck)
+	r.Header.Set("Origin", "http://example.com") // cùng Host của request
+	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
 	if w.Code != 200 || len(hits) != 1 || hits[0] != (hit{"/api/ws", "src=ch3", "", ""}) {
 		t.Fatalf("code=%d hits=%+v, muốn /api/ws?src=ch3, không Cookie, không Origin", w.Code, hits)

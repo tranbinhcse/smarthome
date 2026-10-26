@@ -88,6 +88,14 @@ func (c *cams) live(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "không có camera này", 404)
 		return
 	}
+	// WebSocket không chịu CORS, và với địa chỉ IP mọi cổng cùng máy là cùng "site" nên cookie PIN vẫn được gửi:
+	// chỉ nhận trang của chính hubd.
+	if o := r.Header.Get("Origin"); o != "" {
+		if u, err := url.Parse(o); err != nil || !strings.EqualFold(u.Host, r.Host) {
+			http.Error(w, "nguồn không hợp lệ", 403)
+			return
+		}
+	}
 	c.proxy(w, r, "/api/ws", "src=ch"+strconv.Itoa(d.Channel))
 }
 
