@@ -8,7 +8,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap">
-<link rel="stylesheet" href="/dash.css?v=20261027004452">
+<link rel="stylesheet" href="/dash.css?v=20261027010219">
 <title>Biểu đồ</title>
 <style>
   body { overflow: auto; background: radial-gradient(120% 80% at 70% 0%, #13283a 0%, #0a1119 60%); min-height: 100dvh; }
@@ -27,19 +27,14 @@
   <div class="cards" id="cards"><p class="empty">Đang tải số liệu...</p></div>
 </main>
 <div id="loginbox"></div>
-<script src="/app.js?v=20261027004452"></script>
-<script src="/chart.js?v=20261027004452"></script>
-<script src="/demo.js?v=20261027004452"></script>
+<script src="/app.js?v=20261027010219"></script>
+<script src="/chart.js?v=20261027010219"></script>
+<script src="/demo.js?v=20261027010219"></script>
 <script>
 const DEMO = new URLSearchParams(location.search).has('demo');
 document.getElementById('loginbox').innerHTML = LOGIN_HTML;
 if (DEMO) document.getElementById('back').href = '/?demo';
 const RANGES = [[6, '6 giờ'], [24, '24 giờ'], [168, '7 ngày'], [720, '30 ngày']];
-// Màu theo loại số đo; ngưỡng tham khảo: PM2.5 trung bình 24 giờ theo EPA, CO₂ quá 1.000 ppm nên thông gió.
-const COLOR = {'°C': '#ff9f5a', '%': '#4cc9f0', 'ppm': '#34d17a', 'µg/m³': '#a78bfa', 'W': '#f6b93b', 'lx': '#facc15', 'L': '#4cc9f0', 'V': '#94a3b8'};
-const LIMIT = e => e.unit === 'µg/m³' ? {v: 35, label: 'Ngưỡng 24 giờ (EPA) 35 µg/m³'} : /co₂|co2/i.test(e.name) ? {v: 1000, label: 'Nên thông gió từ 1.000 ppm'} : undefined;
-const nfv = new Intl.NumberFormat('vi-VN', {maximumFractionDigits: 1});
-const fw = v => Math.abs(v) >= 1000 ? `${nfv.format(v / 1000)} kW` : `${nfv.format(v)} W`;
 let hours = 24, cfg, state;
 
 async function series(e) {
@@ -49,8 +44,7 @@ async function series(e) {
 async function draw() {
   document.getElementById('ranges').innerHTML = RANGES.map(([h, l]) => `<button class="rb${h === hours ? ' sel' : ''}" role="tab" aria-selected="${h === hours}" data-h="${h}">${l}</button>`).join('');
   const zone = id => cfg.zones.find(z => z.id === id), groups = [];
-  const metric = async (e, label) => ({label, unit: e.unit, color: COLOR[e.unit] || '#4cc9f0', pts: await series(e), now: Number(state[e.id]),
-    limit: LIMIT(e), zero: ['W', 'lx', 'L'].includes(e.unit), fmt: e.unit === 'W' ? fw : undefined});
+  const metric = async (e, label) => chMetric(e, label, await series(e), Number(state[e.id]));
   const power = [['deye.load', 'Tiêu thụ'], ['deye.pv', 'Mặt trời'], ['deye.grid', 'Lưới điện'], ['jk.soc', 'Pin']]
     .map(([id, l]) => [cfg.entities.find(e => e.id === id), l]).filter(([e]) => e);
   if (power.length) groups.push(['dien', 'Điện năng', power]);

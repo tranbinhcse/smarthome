@@ -226,8 +226,9 @@ b { font-variant-numeric: tabular-nums; }
 /* Thao tác nhanh */
 .qa { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .q { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 16px; background: var(--glass2); min-width: 0; }
-.q > .ic { color: var(--ink2); }
-.q.on > .ic { color: var(--amber); }
+.qo { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; }
+.q .qo > .ic { color: var(--ink2); }
+.q.on .qo > .ic { color: var(--amber); }
 .q span { flex: 1; min-width: 0; font-size: 14px; }
 .q small { display: block; font-size: 12px; color: var(--ink2); }
 
@@ -407,6 +408,19 @@ b { font-variant-numeric: tabular-nums; }
 #login button { min-height: 52px; width: 220px; font-size: 18px; border-radius: 14px; background: var(--amber); color: var(--amber-ink); font-weight: 600; }
 #login p { color: var(--alert); margin: 0; min-height: 1.2em; }
 
+/* Bảng theo loại thiết bị, bảng chi tiết, bảng biểu đồ: rộng hơn bảng thường */
+.modal:has(.widesheet) { max-width: min(860px, calc(100vw - 32px)); }
+.kbody { max-height: 62vh; overflow-y: auto; scrollbar-width: none; margin: 4px 0 14px; }
+.kbody h4 { margin: 12px 0 8px; font-size: 13px; font-weight: 500; color: var(--ink2); }
+.kcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.kcards .dv.cam1 { width: auto; }
+.sheet .chart { margin: 6px 0 14px; }
+.pctl { display: flex; justify-content: center; gap: 16px; margin: 14px 0 18px; } .pctl .pp { width: 64px; height: 64px; background: var(--amber); color: var(--amber-ink); }
+.vst { margin: 4px 0 12px; font-size: 15px; color: var(--ink); }
+button.big { text-align: left; }
+.ics > button { font: inherit; }
+a.m-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; }
+
 /* Biểu đồ: hàng tab chỉ số (hiện tại / cao nhất) + đường, vùng tô, lưới nét đứt, vạch ngưỡng */
 .chart { display: flex; flex-direction: column; gap: 8px; }
 .ch-tabs { display: flex; gap: 26px; overflow-x: auto; scrollbar-width: none; }
@@ -471,6 +485,17 @@ b { font-variant-numeric: tabular-nums; }
   .bottom, .bottom.scroll { display: grid; grid-auto-flow: row; grid-template-columns: 1fr; overflow: visible; }
   .dv.cam1 { width: auto; }
   .player { flex-wrap: wrap; } .pv { display: none; }
+  /* thanh trên: chỉ logo + nút (điện thoại đã có giờ), nút nhỏ lại cho vừa một hàng */
+  .bname, .clock { display: none; }
+  .topr { gap: 6px; } .rbtn { width: 40px; height: 40px; }
+  /* ảnh nhà chỉ là nền (nhãn tầng/phòng ẩn trên màn hẹp): bỏ khoảng trống, vào phòng qua tab tầng và widget Các phòng */
+  .stage:not(.energy) { display: none; }
+  .stage.energy { height: auto; }
+  /* hàng dưới xếp dọc: bỏ giới hạn chiều cao của bản iPad */
+  .bottom:not(.scroll), .bottom:not(.scroll) .w { max-height: none; overflow: visible; }
+  .bottom .w.big2 { grid-column: auto; }
+  .modal { max-width: calc(100vw - 20px); } .m-box { padding: 18px 16px; }
+  .ch-tab b { font-size: 20px; }
 }
 /* Camera: thẻ vuông, ảnh phủ kín, tên ở đáy */
 .dv.cam1 { position: relative; flex: 0 0 150px; width: 150px; aspect-ratio: 1; align-self: flex-start; padding: 0; justify-content: flex-end; overflow: hidden;
@@ -482,7 +507,10 @@ b { font-variant-numeric: tabular-nums; }
 .camview { aspect-ratio: 16 / 9; border-radius: 16px; background: #1a2633 center / cover no-repeat; margin: 14px 0 12px; }
 /* Khí hậu trong nhà: mỗi chỉ số một ô, chấm màu theo mức */
 .clim { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.cl { min-width: 0; padding: 7px 10px; border-radius: 12px; background: var(--glass2); }
+.cl { min-width: 0; padding: 7px 10px; border-radius: 12px; background: var(--glass2); text-align: left; }
+.cl:active { background: var(--glass3); }
+.cl.na b { color: var(--ink3); font-weight: 500; }   /* chưa có cảm biến */
+.atab { align-self: flex-start; } .atab .rb { height: 30px; padding: 0 12px; font-size: 12.5px; gap: 5px; } .atab .rb .ic { width: 15px; height: 15px; }
 .cl > small { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink2); white-space: nowrap; }
 .cl > small .ic { width: 15px; height: 15px; } .lb { font-style: normal; }
 .cl.good > small::after, .cl.mid > small::after, .cl.bad > small::after { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; }

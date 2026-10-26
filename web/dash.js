@@ -66,6 +66,8 @@ const ICON = {
   thermo: '<path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/><path d="M12 9v7"/>', wind: '<path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/>',
   filter: '<path d="M4 5h16l-6 7.5V18l-4 2v-7.5z"/>',
   chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  gauge: '<path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/>',
+  rain: '<path d="M7 15a4 4 0 0 1-.6-7.95A5.5 5.5 0 0 1 17 7.5a3.5 3.5 0 0 1 .5 6.97"/><path d="M9 17l-1 3M13 17l-1 3M17 17l-1 3"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>', plus: '<path d="M12 5v14M5 12h14"/>',
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   mute: '<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4zM16 9.5l5 5M21 9.5l-5 5"/>', input: '<path d="M10 18H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5"/><path d="M14 16h7M18 13l3 3-3 3"/>',
@@ -305,7 +307,7 @@ function greetHtml() {
 
 /* ---------- Widget theo trang (kéo thả đổi chỗ trong cột phải / hàng dưới, lưu trên thiết bị này) ---------- */
 const DEF_LAYOUT = {
-  home: {side: ['scenes', 'ac', 'lights', 'weather', 'energy'], bottom: ['climate', 'cameras', 'security', 'devices']},
+  home: {side: ['scenes', 'ac', 'lights', 'energy'], bottom: ['climate', 'cameras', 'security', 'devices']},
   floor: {side: ['rooms', 'quick', 'air', 'water', 'energy'], bottom: ['lights', 'ac', 'cameras', 'scenes']},
 };
 let layout = null;   // nạp trong init(), sau khi W đã được khai báo
@@ -366,7 +368,7 @@ function zonesHtml() {
   const one = (id, zn) => {
     const d = W[id], hidden = L.hidden.includes(id);
     const body = d.r(f);
-    if (hidden || (!editing && !body)) return '';
+    if (hidden) return '';   // widget trống vẫn hiện (ghi chưa có) để các tầng giữ cùng một bố cục
     const meta = d.m ? d.m(f) : '';
     const sz = sizeOf(id), tools = editing ? `<div class="wtools"><button class="wt" data-wsize="${id}:${sz === 'L' ? 'S' : 'L'}" aria-label="${sz === 'L' ? 'Thu nhỏ' : 'Phóng to'}">${icon(sz === 'L' ? 'shrink' : 'grow')}</button>
       <button class="wt" data-sheet="cfg:${id}" aria-label="Cấu hình ${d.t}">${icon('gear')}</button>
@@ -375,7 +377,7 @@ function zonesHtml() {
     const link = !editing && d.go ? `<button class="more" data-go="${typeof d.go === 'function' ? d.go(f) : d.go}" aria-label="Xem chi tiết">${icon('more')}</button>` : '';
     const cls = zn === 'side' ? (sz === 'S' ? ' half' : '') : sz === 'L' ? ' big2' : '';
     return `<section class="w${cls}" data-w="${id}"><header class="wh">${icon(d.i, 'wi ' + (d.c || ''))}<h3>${d.t}${meta ? `<small>${meta}</small>` : ''}</h3>${link}</header>${tools}
-      ${body || '<p class="empty">Chưa có dữ liệu cho mục này.</p>'}</section>`;
+      ${body || `<p class="empty">${f ? 'Tầng này' : 'Nhà'} chưa có thiết bị hoặc cảm biến cho mục này.</p>`}</section>`;
   };
   return [L.side.map(id => one(id, 'side')).join(''), L.bottom.map(id => one(id, 'bottom')).join('')];
 }
@@ -438,13 +440,56 @@ function tvPanel(id) {
     <p class="note">Hồng ngoại chỉ gửi lệnh một chiều: trạng thái hiện theo lệnh gần nhất.</p>
     <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
 }
+// Bảng theo loại thiết bị (từ Thao tác nhanh / Thiết bị): mọi thiết bị loại đó trong phạm vi, chia theo phòng, đủ nút điều khiển.
+const KIND_NAME = {vacuum: 'Robot lau nhà', camera: 'Camera', breaker: 'CB', router: 'Wi-Fi', infra: 'Hạ tầng'};
+function kindPanel(arg) {
+  const [fs, k] = arg.split(':'), f = Number(fs), ds = devsOf(f, k), zs = [...new Set(ds.map(d => d.zone))];
+  const ctl = ds.filter(d => !d.protected), on = ctl.some(isOn), name = QUICK.find(q => q[0] === k)?.[1] || KIND_NAME[k] || k;
+  return `<div class="m-box sheet widesheet"><header class="wh">${icon(k, 'wi amber')}<h3>${esc(name)}<small>${f ? esc(floorName(f)) : 'Cả nhà'}, ${ds.length} thiết bị</small></h3>
+    ${ctl.length && !PASSIVE.has(k) ? `<button class="sw${on ? ' on' : ''}" data-group="${f}:${k}:${on ? 'off' : 'on'}" aria-label="${on ? 'Tắt' : 'Bật'} tất cả ${esc(name)}"></button>` : ''}</header>
+    <div class="kbody">${zs.map(z => `<h4>${esc(zone(z)?.name || 'Chưa gán phòng')}</h4><div class="kcards">${cardsFor(ds.filter(d => d.zone === z))}</div>`).join('') || '<p class="empty">Không có thiết bị nào.</p>'}</div>
+    <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
+}
+// Bảng chi tiết một thiết bị: đủ chức năng theo loại; thiết bị có số đo (CB, ổ đo điện) kèm biểu đồ 24 giờ.
+function devPanel(id) {
+  const d = cfg.devices.find(x => x.id === id), k = kindOf(d), grp = d.group ? cfg.devices.filter(x => x.group === d.group && x.zone === d.zone) : [d];
+  const b = (...a) => btn(d.id, ...a), row = (l, html) => `<div class="acrow"><span>${l}</span>${html}</div>`;
+  const seg = (key, opts, def) => `<div class="seg">${opts.map(([v, l]) => b(`${key}_${v}`, l, l, 'rb' + ((xs(d, key) || def) === v ? ' sel' : ''))).join('')}</div>`;
+  const tog = (key, l, ic) => b(key, l, `${icon(ic)}${l}`, 'rb' + (xs(d, key) === '1' ? ' sel' : ''));
+  let body = '', right = PASSIVE.has(k) || k === 'vacuum' ? '' : sw(d, k === 'fan' ? 'blue' : k === 'light' ? 'amber' : '');
+  if (k === 'fan') {
+    body = row('Tốc độ', seg('speed', [['1', 'Nhẹ'], ['2', 'Vừa'], ['3', 'Mạnh']], '')) + row('Chế độ gió', seg('mode', [['normal', 'Thường'], ['natural', 'Tự nhiên'], ['sleep', 'Ngủ']], 'normal'))
+      + row('Hẹn giờ tắt', seg('timer', [['0', 'Không'], ['1', '1 giờ'], ['2', '2 giờ'], ['4', '4 giờ']], '0')) + row('Tiện ích', `<div class="remote">${tog('swing', 'Đảo gió', 'swing')}</div>`);
+  } else if (k === 'speaker') {
+    const pl = xs(d, 'play') === '1';
+    body = `<div class="pctl">${b('prev', 'Bài trước', icon('prev'), 'rb big')}${b('play', pl ? 'Dừng' : 'Phát', icon(pl ? 'pause' : 'play'), 'rb big pp')}${b('next', 'Bài sau', icon('next'), 'rb big')}</div>`
+      + row('Âm lượng', `<div class="remote"><span class="wide">${b('vol_down', 'Giảm âm lượng', '−')}<span>${icon('vol')} ${esc(xs(d, 'vol') ?? '')}</span>${b('vol_up', 'Tăng âm lượng', '+')}</span>${b('mute', 'Tắt tiếng', icon('mute'), 'rb sq')}</div>`)
+      + row('Nguồn phát', seg('src', [['bt', 'Bluetooth'], ['aux', 'AUX'], ['usb', 'USB']], 'bt'));
+  } else if (k === 'vacuum') {
+    const vs = xs(d, 'status') || 'docked';
+    right = xs(d, 'battery') ? `<span class="batt">${icon('battery')} ${esc(xs(d, 'battery'))}%</span>` : '';
+    body = `<p class="vst">${esc(VAC[vs] || vs)}</p>` + row('Điều khiển', `<div class="remote">${[['start', 'Bắt đầu lau', 'play', 'cleaning'], ['pause', 'Tạm dừng', 'pause', 'paused'], ['dock', 'Về dock', 'dock', 'returning']]
+      .map(([c, l, i, s]) => b(c, l, `${icon(i)}${l}`, 'rb f' + (vs === s ? ' sel' : ''))).join('')}</div>`)
+      + row('Chế độ', seg('mode', [['vac', 'Hút bụi'], ['mop', 'Lau'], ['both', 'Hút và lau']], 'both')) + row('Lực hút', seg('suction', [['1', 'Êm'], ['2', 'Thường'], ['3', 'Mạnh']], '2'));
+  } else if (grp.length > 1) {
+    const on = grp.some(isOn);
+    right = `<button class="sw${on ? ' on' : ''}" data-strip="${esc(grp[0].id)}" aria-pressed="${on}" aria-label="${on ? 'Tắt' : 'Bật'} cả ổ"></button>`;
+    body = row('Từng lỗ', `<div class="outs">${grp.map(o => `<button class="out${isOn(o) ? ' on' : ''}" data-dev="${esc(o.id)}" ${offline(o) ? 'disabled' : ''} aria-pressed="${isOn(o)}">${esc(o.name)}</button>`).join('')}</div>`);
+  }
+  const rs = grp.flatMap(readingsOf).filter(has);
+  const chart = rs.length ? chartHtml('sheet', rs.map(e => chMetric(e, e.name, hist(e.id), num(e.id))), 24, 180) : '';
+  const info = [zone(d.zone)?.name, IR.has(k) ? 'hồng ngoại, trạng thái theo lệnh gần nhất' : offline(d) ? 'mất kết nối' : PASSIVE.has(k) ? 'đang hoạt động' : 'trực tuyến'].filter(Boolean).join(', ');
+  return `<div class="m-box sheet${chart ? ' widesheet' : ''}"><header class="wh">${icon(k, 'wi amber')}<h3>${esc(d.group || d.name)}<small>${esc(info)}</small></h3>${right}</header>
+    ${body}${chart}<div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
+}
 // Bảng mở rộng đang mở ('ac:<phòng>', 'tv:<thiết bị>', 'cam:<camera>'); draw() vẽ lại khi trạng thái đổi.
 let sheet = '';
-const SHEETS = {ac: acPanel, tv: tvPanel, cam: camPanel, cfg: cfgPanel, add: addPanel};
+const SHEETS = {ac: acPanel, tv: tvPanel, cam: camPanel, cfg: cfgPanel, add: addPanel, kind: kindPanel, dev: devPanel, air: airPanel};
 const sheetHtml = key => SHEETS[key.slice(0, key.indexOf(':'))](key.slice(key.indexOf(':') + 1));
 function openSheet(key) {
   const m = $('#modal');
   sheet = key;
+  delete CHARTS.sheet;   // biểu đồ trong bảng mở lại từ tab được chạm
   m.innerHTML = sheetHtml(key);
   m.onclick = e => { if (e.target === m || e.target.closest('.m-act button, [data-go]')) m.close(); };
   m.onclose = () => { sheet = ''; };
@@ -466,6 +511,72 @@ function heatIndex(tc, rh) {
   const F = (simple + T) / 2 < 80 ? simple : -42.379 + 2.04901523 * T + 10.14333127 * rh - 0.22475541 * T * rh - 6.83783e-3 * T * T
     - 5.481717e-2 * rh * rh + 1.22874e-3 * T * T * rh + 8.5282e-4 * T * rh * rh - 1.99e-6 * T * T * rh * rh;
   return (F - 32) * 5 / 9;
+}
+// Chỉ số không khí / nước dùng chung cho Khí hậu cả nhà, từng tầng, từng phòng. key -> [icon, tên, cách nhận số đo]
+const METRICS = {
+  t: ['thermo', 'Nhiệt độ', e => e.unit === '°C' && !/ngoài trời/i.test(e.name)],
+  h: ['drop', 'Độ ẩm', e => e.unit === '%' && /ẩm/i.test(e.name) && !/ngoài trời/i.test(e.name)],
+  pm: ['wind', 'Bụi PM2.5', e => e.unit === 'µg/m³'],
+  co2: ['leaf', 'CO₂', e => /co/i.test(e.name) && e.unit === 'ppm'],
+  tds: ['filter', 'Nước lọc', e => /sau lọc|tds/i.test(e.name) && !/nguồn/i.test(e.name)],
+};
+const CLIM_OPTS = [['t', 'Nhiệt độ'], ['hi', 'Cảm giác'], ['h', 'Độ ẩm'], ['pm', 'Bụi PM2.5'], ['co2', 'CO₂'], ['tds', 'Nước lọc']];
+const lvl = (v, ok, mid) => v <= ok ? 'good' : v <= mid ? 'mid' : 'bad';
+// Nhiệt độ, độ ẩm lấy trung bình; bụi, CO₂, nước lấy chỗ tệ nhất. Chạm ô mở biểu đồ 24 giờ của chỉ số đó.
+function climList(es, scope) {
+  const vs = k => es.filter(METRICS[k][2]).map(e => num(e.id)).filter(v => !isNaN(v)), avg = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const t = vs('t'), h = vs('h'), pm = vs('pm'), co2 = vs('co2'), tds = vs('tds'), hi = t.length && h.length ? heatIndex(avg(t), avg(h)) : NaN;
+  const ok = (a, f) => a.length ? f(a) : null;   // null: chưa có cảm biến
+  return [
+    ['t', 'thermo', 'Nhiệt độ', ok(t, a => [nf.format(avg(a)), '°', ''])],
+    ['hi', 'sun', 'Cảm giác', isNaN(hi) ? null : [nf.format(hi), '°', hi < 27 ? 'good' : hi < 32 ? 'mid' : 'bad']],
+    ['h', 'drop', 'Độ ẩm', ok(h, a => [Math.round(avg(a)), '%', avg(a) >= 40 && avg(a) <= 70 ? 'good' : 'mid'])],
+    ['pm', 'wind', 'Bụi PM2.5', ok(pm, a => [Math.max(...a), 'µg/m³', aqiLabel(aqi(Math.max(...a)))[1]])],
+    ['co2', 'leaf', 'CO₂', ok(co2, a => [Math.max(...a), 'ppm', lvl(Math.max(...a), 800, 1200)])],
+    ['tds', 'filter', 'Nước lọc', ok(tds, a => [Math.max(...a), 'ppm', lvl(Math.max(...a), 50, 150)])],
+  ].map(([k, ic, l, v]) => [k, ic, l, ...(v || ['—', '', 'na']), `air:${scope}:${k === 'hi' ? 't' : k}`]);
+}
+// Ngoài trời (thời tiết): cảm biến ở khu ngoài trời, chung cho cả nhà. Ô Mưa ở dữ liệu mẫu: chạm để thử hiệu ứng mưa.
+function outList() {
+  const es = cfg.entities.filter(e => zone(e.zone)?.type === 'outdoor' && !e.device && has(e)), u = x => es.find(e => e.unit === x);
+  const t = u('°C'), h = u('%'), lux = u('lx'), pm = u('µg/m³'), rain = rainE(), hi = t && h ? heatIndex(num(t.id), num(h.id)) : NaN, L = lux ? num(lux.id) : NaN;
+  return [
+    ['t', 'thermo', 'Nhiệt độ', t && [val(t), '°', '']],
+    ['hi', 'sun', 'Cảm giác', !isNaN(hi) && [nf.format(hi), '°', hi < 27 ? 'good' : hi < 32 ? 'mid' : 'bad']],
+    ['h', 'drop', 'Độ ẩm', h && [Math.round(num(h.id)), '%', '']],
+    ['rain', 'rain', 'Mưa', rain && [raining() ? 'Có' : 'Tạnh', '', raining() ? 'mid' : 'good']],
+    ['lux', 'sun', 'Trời', lux && [L > 20000 ? 'Nắng' : L > 400 ? 'Sáng' : 'Tối', '', '']],
+    ['pm', 'wind', 'Bụi PM2.5', pm && [val(pm), 'µg/m³', aqiLabel(aqi(num(pm.id)))[1]]],
+  ].map(([k, ic, l, v]) => [k, ic, l, ...(v || ['—', '', 'na']), k === 'rain' && DEMO ? 'data-rain' : `air:o:${k === 'hi' ? 't' : k}`]);
+}
+// Không khí: một widget, hai tab Trong nhà / Ngoài trời (thay cho Khí hậu trong nhà + Không khí + Thời tiết)
+let airTab = 'in';
+function airWidget(f, wid) {
+  const tabs = `<div class="seg atab">${[['in', 'home', 'Trong nhà'], ['out', 'cloud', 'Ngoài trời']].map(([v, ic, l]) =>
+    `<button class="rb${airTab === v ? ' sel' : ''}" data-airtab="${v}" aria-label="${l}">${icon(ic)}<em class="lb">${l}</em></button>`).join('')}</div>`;
+  return tabs + (airTab === 'out' ? tilesHtml(outList().map(x => x.slice(1))) : climTiles(sensorsOn(f), 'f' + (f || 0), wid));
+}
+const climTiles = (es, scope, wid = '') => tilesHtml(climList(es, scope).filter(x => !(wid && hid(wid, x[0]))).map(x => x.slice(1)));
+// Ô chỉ số: [icon, tên, giá trị, đơn vị, mức good|mid|bad|'', bảng mở khi chạm]
+const tilesHtml = ts => ts.length ? `<div class="clim">${ts.map(([ic, l, v, u, cls, sh]) => `<button class="cl ${cls}" ${sh.startsWith('data-') ? sh : `data-sheet="${esc(sh)}"`} title="${l}${cls === 'na' ? ': chưa có cảm biến' : ''}" aria-label="${l}: ${cls === 'na' ? 'chưa có cảm biến' : v + u}, xem biểu đồ">
+    <small>${icon(ic)}<em class="lb">${l}</em></small><b>${v}<small>${u}</small></b></button>`).join('')}</div>` : '';
+// Biểu đồ chỉ số: phạm vi một phòng -> mỗi tab một số đo của phòng; tầng / cả nhà -> mỗi tab một phòng cho chỉ số đã chọn.
+function airPanel(arg) {
+  const [scope, key] = arg.split(':');
+  if (scope === 'o') {
+    const es = cfg.entities.filter(e => zone(e.zone)?.type === 'outdoor' && !e.device && has(e) && !isNaN(num(e.id)));
+    const unit = {t: '°C', h: '%', lux: 'lx', pm: 'µg/m³'}[key];
+    return `<div class="m-box sheet widesheet"><header class="wh">${icon('cloud', 'wi cyan')}<h3>Ngoài trời<small>24 giờ qua</small></h3></header>
+      ${chartHtml('sheet', es.map(e => chMetric(e, e.name, hist(e.id), num(e.id))), 24, 200, Math.max(0, es.findIndex(e => e.unit === unit))) || '<p class="empty">Chưa có số đo.</p>'}
+      <div class="m-act"><a class="m-btn" href="/history.html${DEMO ? '?demo' : ''}">Tất cả biểu đồ</a><button value="1" class="m-btn ok">Xong</button></div></div>`;
+  }
+  const room = scope.startsWith('z.') ? scope.slice(2) : '', f = room ? 0 : Number(scope.slice(1)), M = METRICS[key] || METRICS.t;
+  const es = room ? sensorsIn(room).filter(has) : sensorsOn(f).filter(M[2]);
+  const ms = es.map(e => chMetric(e, room ? e.name : zone(e.zone)?.name || e.name, hist(e.id), num(e.id)));
+  const title = room ? `Khí hậu ${zone(room)?.name || ''}` : `${M[1]}, ${f ? floorName(f) : 'cả nhà'}`;
+  return `<div class="m-box sheet widesheet"><header class="wh">${icon(room ? 'leaf' : M[0], 'wi green')}<h3>${esc(title)}<small>24 giờ qua</small></h3></header>
+    ${chartHtml('sheet', ms, 24, 200, room ? Math.max(0, es.findIndex(M[2])) : 0) || '<p class="empty">Chưa có số đo.</p>'}
+    <div class="m-act"><a class="m-btn" href="/history.html${DEMO ? '?demo' : ''}">Tất cả biểu đồ</a><button value="1" class="m-btn ok">Xong</button></div></div>`;
 }
 const QUICK = [['light', 'Đèn'], ['fan', 'Quạt'], ['ac', 'Điều hoà'], ['socket', 'Ổ cắm'], ['speaker', 'Loa'], ['tv', 'TV'], ['pump', 'Bơm nước'], ['water', 'Tưới cây']];
 const W = {
@@ -492,25 +603,15 @@ const W = {
     return `${t ? `<div class="big">${val(t)}°</div>` : ''}${DEMO && rain ? `<button class="sub" data-rain title="Dữ liệu mẫu: bấm để thử trời mưa">${desc}</button>` : `<div class="sub">${desc}</div>`}
       <div class="kv">${h ? `<span>${icon('drop')}Độ ẩm <b>${val(h)}%</b></span>` : ''}${lux ? `<span>${icon('sun')}<b>${val(lux)}</b> lx</span>` : ''}</div>`;
   }},
-  air: {t: 'Không khí', i: 'leaf', c: 'green', half: ['floor'], r: f => {
-    const es = sensorsOn(f), pm = es.find(e => e.unit === 'µg/m³'), co2 = es.find(e => /co/i.test(e.name) && e.unit === 'ppm');
-    if (!pm && !co2) return '';
-    const a = pm ? aqi(num(pm.id)) : NaN, [lb, cls] = isNaN(a) ? ['', ''] : aqiLabel(a);
-    // thang AQI 0–300 chia màu theo mốc EPA 50/100/150/200; chấm trắng là mức hiện tại
-    return `${isNaN(a) ? '' : `<div class="aq"><b class="${cls}">${a}</b><span>${lb}<small>Chỉ số AQI</small></span></div>
-      <div class="aqbar"><i style="left:${Math.min(100, a / 3).toFixed(1)}%"></i></div>`}
-      <div class="kv">${pm ? `<span>PM2.5 <b>${val(pm)}</b></span>` : ''}${co2 ? `<span>CO₂ <b>${val(co2)}</b></span>` : ''}</div>`;
-  }},
+  air: {t: 'Không khí', i: 'leaf', c: 'green', half: ['floor'], o: () => CLIM_OPTS, r: f => airWidget(f, 'air')},
   water: {t: 'Nước lọc', i: 'drop', c: 'cyan', half: ['floor'], r: f => {
-    // máy lọc tệ nhất trên tầng (TDS sau lọc cao nhất); kèm nước nguồn, lượng lọc hôm nay, độ bền lõi lọc của chính máy đó
-    const es = sensorsOn(f), outs = es.filter(e => /sau lọc|tds/i.test(e.name) && !/nguồn/i.test(e.name));
-    if (!outs.length) return '';
-    const o = outs.reduce((a, b) => num(b.id) > num(a.id) ? b : a), at = re => es.find(e => e.zone === o.zone && re.test(e.name));
-    const v = num(o.id), src = at(/nguồn/i), lit = at(/đã lọc/i), core = at(/lõi/i), [lb, cls] = v <= 50 ? ['Tốt', 'good'] : v <= 150 ? ['Đạt', 'mid'] : ['Thay lõi lọc', 'bad'];
-    const rej = src && num(src.id) > 0 ? Math.round((1 - v / num(src.id)) * 100) : NaN, c = core ? num(core.id) : NaN;
-    return `<div class="aq"><b class="${cls}">${val(o)}</b><span>${lb}<small>TDS sau lọc, ppm</small></span></div>
-      ${isNaN(c) ? '' : `<div class="core"><span>Lõi lọc còn <b>${c}%</b></span><div class="bt"><i class="${c <= 20 ? 'bad' : c <= 40 ? 'mid' : 'good'}" style="width:${Math.min(100, c)}%"></i></div></div>`}
-      <div class="kv">${src ? `<span>Nguồn <b>${val(src)}</b></span>` : ''}${isNaN(rej) ? '' : `<span>Lọc bỏ <b>${rej}%</b></span>`}${lit ? `<span>Hôm nay <b>${val(lit)}</b> L</span>` : ''}</div>`;
+    // máy lọc tệ nhất trên tầng (TDS sau lọc cao nhất), kèm nước nguồn, độ bền lõi lọc, lượng lọc hôm nay của chính máy đó; tầng chưa có máy lọc: 4 ô "—"
+    const es = sensorsOn(f), outs = es.filter(METRICS.tds[2]), o = outs.length ? outs.reduce((a, b) => num(b.id) > num(a.id) ? b : a) : null;
+    const at = re => o && es.find(e => e.zone === o.zone && re.test(e.name)), sh = o ? `air:z.${o.zone}:tds` : `air:f${f || 0}:tds`;
+    const src = at(/nguồn/i), core = at(/lõi/i), lit = at(/đã lọc/i), c = core ? num(core.id) : NaN;
+    const t = (ic, l, e, u, cls) => e ? [ic, l, val(e), u, cls, sh] : [ic, l, '—', '', 'na', sh];
+    return tilesHtml([t('filter', 'Sau lọc', o, 'ppm', o && lvl(num(o.id), 50, 150)), t('drop', 'Nguồn', src, 'ppm', ''),
+      t('gauge', 'Lõi lọc', core, '%', c <= 20 ? 'bad' : c <= 40 ? 'mid' : 'good'), t('chart', 'Hôm nay', lit, 'L', '')]);
   }},
   ac: {t: 'Điều hoà', i: 'snow', c: 'blue', o: f => acRooms(f).map(z => [z, zone(z)?.name || z]), m: f => { const r = acRooms(f); return r.length ? `${r.filter(z => acsIn(z).some(isOn)).length}/${r.length} phòng đang bật` : ''; }, r: f => {
     const rs = acRooms(f).filter(z => !hid('ac', z)).sort((a, b) => acsIn(b).some(isOn) - acsIn(a).some(isOn));
@@ -524,23 +625,7 @@ const W = {
     return lr.length ? `<div class="thumbs" data-keep="lights">${lr.map(z => `<button class="th" data-go="${z.floor}/${esc(z.id)}" style="${thumbBg(z)}"><span>${esc(z.name)}</span></button>`).join('')}</div>`
       : '<p class="empty">Không phòng nào đang bật đèn.</p>';
   }},
-  climate: {t: 'Khí hậu trong nhà', i: 'leaf', c: 'green', o: () => [['t', 'Nhiệt độ'], ['hi', 'Cảm giác'], ['h', 'Độ ẩm'], ['pm', 'Bụi PM2.5'], ['co2', 'CO₂'], ['tds', 'Nước lọc']], r: f => {
-    // nhiệt độ, độ ẩm lấy trung bình các phòng; bụi, CO₂, nước lấy chỗ tệ nhất
-    const es = sensorsOn(f).filter(e => !/ngoài trời/i.test(e.name)), vs = test => es.filter(test).map(e => num(e.id)).filter(v => !isNaN(v));
-    const avg = a => a.reduce((x, y) => x + y, 0) / a.length, t = vs(e => e.unit === '°C'), h = vs(e => e.unit === '%' && /ẩm/i.test(e.name)),
-      pm = vs(e => e.unit === 'µg/m³'), co2 = vs(e => /co/i.test(e.name) && e.unit === 'ppm'), tds = vs(e => /sau lọc|tds/i.test(e.name) && !/nguồn/i.test(e.name));
-    const hi = t.length && h.length ? heatIndex(avg(t), avg(h)) : NaN;
-    const lvl = (v, ok, mid) => v <= ok ? 'good' : v <= mid ? 'mid' : 'bad';
-    const tiles = [
-      t.length && ['t', 'thermo', 'Nhiệt độ', nf.format(avg(t)), '°', ''],
-      !isNaN(hi) && ['hi', 'sun', 'Cảm giác', nf.format(hi), '°', hi < 27 ? 'good' : hi < 32 ? 'mid' : 'bad'],
-      h.length && ['h', 'drop', 'Độ ẩm', Math.round(avg(h)), '%', avg(h) >= 40 && avg(h) <= 70 ? 'good' : 'mid'],
-      pm.length && ['pm', 'wind', 'Bụi PM2.5', Math.max(...pm), 'µg/m³', aqiLabel(aqi(Math.max(...pm)))[1]],
-      co2.length && ['co2', 'leaf', 'CO₂', Math.max(...co2), 'ppm', lvl(Math.max(...co2), 800, 1200)],
-      tds.length && ['tds', 'filter', 'Nước lọc', Math.max(...tds), 'ppm', lvl(Math.max(...tds), 50, 150)],
-    ].filter(x => x && !hid('climate', x[0])).map(x => x.slice(1));
-    return tiles.length ? `<div class="clim">${tiles.map(([ic, l, v, u, cls]) => `<div class="cl ${cls}" title="${l}"><small>${icon(ic)}<em class="lb">${l}</em></small><b>${v}<small>${u}</small></b></div>`).join('')}</div>` : '';
-  }},
+  climate: {t: 'Không khí', i: 'leaf', c: 'green', o: () => CLIM_OPTS, r: f => airWidget(f, 'climate')},
   cameras: {t: 'Camera', i: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
     const cs = devsOf(f, 'camera').filter(d => !hid('cameras', d.id));
     return cs.length ? `<div class="cams" data-keep="cameras">${cs.map(d => `<button class="cam" data-sheet="cam:${esc(d.id)}" style="${thumbBg(zone(d.zone))}" title="Ảnh minh hoạ phòng, chưa có hình trực tiếp">
@@ -556,12 +641,12 @@ const W = {
   devices: {t: 'Thiết bị', i: 'cube', o: () => [['light', 'Đèn'], ['socket', 'Ổ cắm'], ['ac', 'Điều hoà'], ['fan', 'Quạt'], ['other', 'Khác']], m: f => { const ds = devsOf(f); return `${ds.length} thiết bị, ${ds.filter(d => !offline(d)).length} trực tuyến`; }, r: f => {
     const ds = devsOf(f), G = [['light', 'Đèn'], ['socket', 'Ổ cắm'], ['ac', 'Điều hoà'], ['fan', 'Quạt']];
     const other = ds.filter(d => !G.some(([k]) => kindOf(d) === k)).length;
-    return `<div class="ics">${G.map(([k, n]) => { const c = ds.filter(d => kindOf(d) === k).length; return c && !hid('devices', k) ? `<span title="${n}"><span class="ib">${icon(k)}</span><em class="lb">${n}</em><span class="n">${c}</span></span>` : ''; }).join('')}
+    return `<div class="ics">${G.map(([k, n]) => { const c = ds.filter(d => kindOf(d) === k).length; return c && !hid('devices', k) ? `<button title="${n}" data-sheet="kind:${f || 0}:${k}" aria-label="Mở tất cả ${n}"><span class="ib">${icon(k)}</span><em class="lb">${n}</em><span class="n">${c}</span></button>` : ''; }).join('')}
       ${other && !hid('devices', 'other') ? `<span title="Khác"><span class="ib">${icon('cube')}</span><em class="lb">Khác</em><span class="n">${other}</span></span>` : ''}</div>`;
   }},
   quick: {t: 'Thao tác nhanh', i: 'bolt', c: 'amber', o: f => QUICK.filter(([k]) => devsOf(f, k).length), r: f => {
     const rows = QUICK.map(([k, n]) => [k, n, devsOf(f, k).filter(d => !d.protected)]).filter(([k, , ds]) => ds.length && !hid('quick', k));
-    return rows.length ? `<div class="qa">${rows.map(([k, n, ds]) => { const on = ds.some(isOn); return `<div class="q${on ? ' on' : ''}">${icon(k)}<span>${n}<small>${ds.length} thiết bị</small></span>
+    return rows.length ? `<div class="qa">${rows.map(([k, n, ds]) => { const on = ds.some(isOn); return `<div class="q${on ? ' on' : ''}"><button class="qo" data-sheet="kind:${f || 0}:${k}" aria-label="Mở tất cả ${n}">${icon(k)}<span>${n}<small>${ds.length} thiết bị</small></span></button>
       <button class="sw ${k === 'ac' || k === 'fan' ? 'blue' : k === 'light' ? 'amber' : ''}${on ? ' on' : ''}" data-group="${f}:${k}:${on ? 'off' : 'on'}" aria-label="${on ? 'Tắt' : 'Bật'} ${n}"></button></div>`; }).join('')}</div>` : '';
   }},
 };
@@ -570,29 +655,31 @@ const W = {
 function roomZones(z) {
   const ds = devsIn(z.id), ss = sensorsIn(z.id), aw = areaW(z.id), ls = ds.filter(d => kindOf(d) === 'light');
   const card = (i, c, t, meta, body) => `<section class="w"><header class="wh">${icon(i, 'wi ' + c)}<h3>${t}${meta ? `<small>${meta}</small>` : ''}</h3></header>${body}</section>`;
-  const side = [];
-  if (ls.length) {
-    side.push(card('light', 'amber', 'Chiếu sáng', `${ls.filter(isOn).length}/${ls.length} đang bật`,
-      `<div class="lights">${ls.map(d => `<div class="lt${isOn(d) ? ' on' : ''}${offline(d) ? ' lost' : ''}">${icon('light')}<span title="${esc(d.name)}">${esc(d.name)}</span>${sw(d, 'amber')}</div>`).join('')}</div>
-      <div class="kv" style="gap:8px"><button class="pill amber" data-lights="r:${esc(z.id)}:on">Bật tất cả</button><button class="pill" data-lights="r:${esc(z.id)}:off">Tắt tất cả</button></div>`));
-  }
-  if (ss.length) {
-    const pm = ss.find(e => e.unit === 'µg/m³' && has(e)), a = pm ? aqi(num(pm.id)) : NaN, [lb, cls] = isNaN(a) ? ['', ''] : aqiLabel(a);
-    side.push(card('leaf', 'green', 'Khí hậu', isNaN(a) ? '' : `Không khí: ${lb.toLowerCase()}`,
-      `<div class="kv">${ss.map(e => `<span>${esc(e.name)} <b>${val(e)}</b>${e.unit ? ' ' + esc(e.unit) : ''}</span>`).join('')}</div>${isNaN(a) ? '' : `<div><span class="tag ${cls}">Chỉ số ${a}</span></div>`}`));
-  }
-  if (!isNaN(aw)) side.push(card('bolt', 'amber', 'Điện', 'Đo tại MCB của phòng', `<div class="big">${fw(aw)}<small>đang dùng</small></div>
-    ${readingsFor(z.id)}<button class="pill" data-go="dien">${icon('bolt')}Xem điện năng cả nhà</button>`));
-  if (!side.length) side.push(card('home', '', 'Phòng này chưa có thiết bị', '', '<p class="empty">Khi thêm thiết bị vào hub và gán vào phòng này, chúng sẽ hiện ở đây.</p>'));
+  // Cùng một mẫu ở mọi phòng: Chiếu sáng, Khí hậu, Điện; phòng chưa có thì ghi rõ thay vì bỏ widget.
+  const none = what => `<p class="empty">Phòng này chưa có ${what}.</p>`;
+  const pm = ss.find(e => e.unit === 'µg/m³' && has(e)), a = pm ? aqi(num(pm.id)) : NaN, mcb = cfg.entities.find(e => e.zone === z.id && e.device && e.unit === 'W')?.device;
+  const side = [
+    card('light', 'amber', 'Chiếu sáng', ls.length ? `${ls.filter(isOn).length}/${ls.length} đang bật` : '', ls.length
+      ? `<div class="lights">${ls.map(d => `<div class="lt${isOn(d) ? ' on' : ''}${offline(d) ? ' lost' : ''}">${icon('light')}<span title="${esc(d.name)}">${esc(d.name)}</span>${sw(d, 'amber')}</div>`).join('')}</div>
+      <div class="kv" style="gap:8px"><button class="pill amber" data-lights="r:${esc(z.id)}:on">Bật tất cả</button><button class="pill" data-lights="r:${esc(z.id)}:off">Tắt tất cả</button></div>` : none('đèn điều khiển được')),
+    card('leaf', 'green', 'Khí hậu', isNaN(a) ? '' : `Không khí: ${aqiLabel(a)[0].toLowerCase()}`, climTiles(ss.filter(has), 'z.' + z.id)),
+    card('bolt', 'amber', 'Điện', isNaN(aw) ? '' : 'Đo tại MCB của phòng', isNaN(aw) ? none('MCB đo điện') : `<button class="big" data-sheet="dev:${esc(mcb)}" aria-label="Xem biểu đồ công suất">${fw(aw)}<small>đang dùng</small></button>
+      ${readingsFor(z.id)}<button class="pill" data-go="dien">${icon('bolt')}Xem điện năng cả nhà</button>`),
+  ];
   // Hàng dưới: thiết bị có nút điều khiển trước, rồi ổ cắm / bơm, camera, hạ tầng.
-  const rank = d => RICH.has(kindOf(d)) ? 0 : PASSIVE.has(kindOf(d)) ? 2 : 1;
-  const rest = ds.filter(d => !['light', 'ac'].includes(kindOf(d))).sort((a, b) => rank(a) - rank(b));
-  const cards = [], seen = new Set();
-  for (const d of rest) {
-    if (!d.group) cards.push(devCard(d));
-    else if (!seen.has(d.group)) { seen.add(d.group); cards.push(stripCard(rest.filter(x => x.group === d.group))); }
+  const rank = d => kindOf(d) === 'ac' ? -1 : RICH.has(kindOf(d)) ? 0 : PASSIVE.has(kindOf(d)) ? 2 : 1;
+  return [side.join(''), cardsFor(ds.filter(d => kindOf(d) !== 'light').sort((a, b) => rank(a) - rank(b))), true];
+}
+// Một thẻ cho mỗi thiết bị; máy lạnh gom theo phòng, các lỗ của một ổ cắm gom một thẻ.
+function cardsFor(ds) {
+  const out = [], seen = new Set();
+  for (const d of ds) {
+    const g = kindOf(d) === 'ac' ? 'ac:' + d.zone : d.group;
+    if (g && seen.has(g)) continue;
+    if (g) seen.add(g);
+    out.push(kindOf(d) === 'ac' ? acCard(d.zone) : d.group ? stripCard(ds.filter(x => x.group === d.group)) : devCard(d));
   }
-  return [side.join(''), (acsIn(z.id).length ? acCard(z.id) : '') + cards.join(''), true];
+  return out.join('');
 }
 const readingsFor = zid => {
   const r = cfg.entities.filter(e => e.zone === zid && e.device && e.unit !== 'W' && has(e));
@@ -603,7 +690,7 @@ const btn = (id, code, label, inner = label, cls = 'rb') =>
 // Ổ cắm nhiều lỗ: công tắc tổng + nút từng lỗ (mỗi lỗ là một thiết bị cùng group).
 function stripCard(ds) {
   const on = ds.some(isOn), name = ds[0].group, lost = ds.every(offline);
-  return `<div class="dv k-socket${on ? ' on' : ''}${lost ? ' lost' : ''}"><div class="dvh"><span class="dvi">${icon('socket')}</span><div><b>${esc(name)}</b>${lost ? '<small>Mất kết nối</small>' : ''}</div>
+  return `<div class="dv k-socket${on ? ' on' : ''}${lost ? ' lost' : ''}"><div class="dvh"><button class="dvo" data-sheet="dev:${esc(ds[0].id)}" aria-label="Mở ${esc(name)}"><span class="dvi">${icon('socket')}</span><div><b>${esc(name)}</b>${lost ? '<small>Mất kết nối</small>' : ''}</div></button>
     <button class="sw${on ? ' on' : ''}" data-strip="${esc(ds[0].id)}" ${lost ? 'disabled' : ''} aria-pressed="${on}" aria-label="${on ? 'Tắt' : 'Bật'} cả ${esc(name)}"></button></div>
     <div class="outs">${ds.map(d => `<button class="out${isOn(d) ? ' on' : ''}${pending.has(d.id) ? ' pend' : ''}" data-dev="${esc(d.id)}" ${offline(d) ? 'disabled' : ''} aria-pressed="${isOn(d)}" aria-label="Bật/tắt ${esc(d.name)}">${esc(d.name)}</button>`).join('')}</div></div>`;
 }
@@ -628,9 +715,9 @@ function devCard(d) {
   };
   const b = (...a) => btn(d.id, ...a);
   let body = '', st = '', right = '';
-  if (k === 'breaker') return `<div class="dv${on ? ' on' : ''}">${head(lost ? 'Mất kết nối' : '', sw(d))}${reads(d)}</div>`;
+  if (k === 'breaker') return `<div class="dv${on ? ' on' : ''}">${head(lost ? 'Mất kết nối' : '', sw(d), 'dev:' + esc(d.id))}${reads(d)}</div>`;
   if (k === 'camera') return camCard(d);
-  if (PASSIVE.has(k)) return `<div class="dv k-${k}${lost ? ' lost' : ''}">${head(lost ? 'Mất kết nối' : '', '')}</div>`;
+  if (PASSIVE.has(k)) return `<div class="dv k-${k}${lost ? ' lost' : ''}">${head(lost ? 'Mất kết nối' : '', '', 'dev:' + esc(d.id))}</div>`;
   if (k === 'vacuum') {
     const vs = xs(d, 'status') || 'docked';
     st = VAC[vs] || esc(vs);
@@ -648,7 +735,7 @@ function devCard(d) {
     st = lost ? 'Mất kết nối' : !known(d) ? 'Chưa rõ trạng thái' : '';
     right = sw(d);
   }
-  return `<div class="dv k-${k}${on ? ' on' : ''}${lost ? ' lost' : ''}"${IR.has(k) ? ' title="Điều khiển hồng ngoại: không đọc được trạng thái thật"' : ''}>${head(st, right, k === 'tv' ? 'tv:' + esc(d.id) : '')}${body ? `<div class="remote">${body}</div>` : ''}${reads(d)}</div>`;
+  return `<div class="dv k-${k}${on ? ' on' : ''}${lost ? ' lost' : ''}"${IR.has(k) ? ' title="Điều khiển hồng ngoại: không đọc được trạng thái thật"' : ''}>${head(st, right, (k === 'tv' ? 'tv:' : 'dev:') + esc(d.id))}${body ? `<div class="remote">${body}</div>` : ''}${reads(d)}</div>`;
 }
 function reads(d) {
   const r = readingsOf(d).filter(has);
@@ -959,7 +1046,7 @@ async function act(id, code, label, quiet = false) {
   }
   const k = key => `x:${id}:${key}`;
   if (code === 'power') state['dev:' + id] = isOn(d) ? 'OFF' : 'ON';
-  else if (/^(speed|mode|fan|temp)_/.test(code)) {   // đặt giá trị: speed_2, mode_cool, fan_auto, temp_24
+  else if (/^(speed|mode|fan|temp|timer|suction|src)_/.test(code)) {   // đặt giá trị: speed_2, mode_cool, fan_auto, temp_24, timer_2
     const [key, v] = code.split('_');
     state[k(key)] = key === 'temp' ? String(Math.min(30, Math.max(16, Number(v)))) : v;
     if (key === 'speed') state['dev:' + id] = 'ON';
@@ -1055,6 +1142,7 @@ document.addEventListener('click', async e => {
     toast(`Đã xoá ${W[id].t}. Thêm lại bằng nút Thêm widget.`);
     return draw();
   }
+  if ((el = pick('[data-airtab]'))) { airTab = el.dataset.airtab; return draw(); }
   if ((el = pick('[data-wzone]'))) { addZone = el.dataset.wzone; return draw(); }
   if ((el = pick('[data-wadd]'))) {
     const L = layout[pageType()], id = el.dataset.wadd;

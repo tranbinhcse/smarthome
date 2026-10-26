@@ -137,8 +137,8 @@ function demoHist(id, unit, hours, cur) {
   else if (/co2/.test(id)) f = t => 480 + 420 * busy(hr(t)) + 60 * noise(t);
   else if (unit === 'µg/m³') f = t => 9 + 8 * busy(hr(t)) + 4 * noise(t);
   else if (unit === 'L') { f = t => cur * Math.min(1, hr(t) / Math.max(hr(t1), 1)); shift = false; }
-  else f = () => cur;   // TDS, lõi lọc, điện áp...: gần như phẳng
+  else f = t => cur * (1 + 0.02 * Math.sin(t / 5.4e6 + id.length));   // TDS, lõi lọc, điện áp...: trôi nhẹ quanh giá trị hiện tại
   const pts = Array.from({length: n}, (_, i) => { const t = t1 - (n - 1 - i) * dt; return {t, v: f(t)}; });
   const off = shift && !isNaN(cur) ? cur - pts.at(-1).v : 0;
-  return pts.map(p => ({t: p.t, v: Math.round((p.v + off + (f.length ? 0 : (noise(p.t) - 0.5) * cur * 0.04)) * 10) / 10}));
+  return pts.map(p => ({t: p.t, v: Math.round((p.v + off) * 10) / 10}));
 }

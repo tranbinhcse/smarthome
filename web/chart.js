@@ -4,7 +4,11 @@
 // metric: {label, unit, color, pts: [{t (ms), v}], zero?: trục từ 0, limit?: {v, label}, fmt?: v => chuỗi}
 const CHARTS = {};   // id -> {metrics, sel, hours}
 const chNf = new Intl.NumberFormat('vi-VN', {maximumFractionDigits: 1});
-const chFmt = (m, v) => isNaN(v) ? '—' : m.fmt ? m.fmt(v) : `${chNf.format(v)}${m.unit ? ' ' + m.unit : ''}`;
+const chFmt = (m, v) => isNaN(v) ? '—' : m.fmt ? m.fmt(v) : m.unit === 'W' && Math.abs(v) >= 1000 ? `${chNf.format(v / 1000)} kW` : `${chNf.format(v)}${m.unit ? ' ' + m.unit : ''}`;
+// Màu theo loại số đo; ngưỡng tham khảo: PM2.5 trung bình 24 giờ theo EPA, CO₂ quá 1.000 ppm nên thông gió.
+const CH_COLOR = {'°C': '#ff9f5a', '%': '#4cc9f0', 'ppm': '#34d17a', 'µg/m³': '#a78bfa', 'W': '#f6b93b', 'lx': '#facc15', 'L': '#4cc9f0', 'V': '#94a3b8'};
+const chLimit = e => e.unit === 'µg/m³' ? {v: 35, label: 'Ngưỡng 24 giờ (EPA) 35 µg/m³'} : /co₂|co2/i.test(e.name) ? {v: 1000, label: 'Nên thông gió từ 1.000 ppm'} : undefined;
+const chMetric = (e, label, pts, now) => ({label, unit: e.unit, color: CH_COLOR[e.unit] || '#4cc9f0', pts, now, limit: chLimit(e), zero: ['W', 'lx', 'L'].includes(e.unit)});
 const chEsc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const CW = 640, PL = 52, PR = 12, PT = 18, PB = 26;   // chiều cao vùng vẽ (CH) tuỳ từng biểu đồ
 
@@ -25,7 +29,8 @@ function chPlot(id, m, hours, CH) {
   const X = t => PL + (t - t0) / (t1 - t0) * (CW - PL - PR), Y = v => CH - PB - (v - y0) / (y1 - y0) * (CH - PT - PB);
   const grid = [];
   for (let v = y0; v <= y1 + step / 2; v += step) {
-    grid.push(`<line class="ch-grid" x1="${PL}" x2="${CW - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text x="${PL - 8}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${chEsc(m.tick ? m.tick(v) : chNf.format(v))}</text>`);
+    const tk = m.tick ? m.tick(v) : m.unit === 'W' && Math.abs(v) >= 1000 ? `${chNf.format(v / 1000)}k` : chNf.format(v);
+    grid.push(`<line class="ch-grid" x1="${PL}" x2="${CW - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text x="${PL - 8}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${chEsc(tk)}</text>`);
   }
   // nhãn thời gian ở các mốc giờ tròn, tối đa ~6 nhãn
   const hs = [1, 2, 3, 4, 6, 12, 24, 48, 72, 168].find(h => hours / h <= 6) || 168, xs = [];
@@ -48,8 +53,8 @@ function chPlot(id, m, hours, CH) {
       <line class="ch-x ch-hover" y1="${PT}" y2="${CH - PB}"/><circle class="ch-dot ch-hover" r="5"/></svg><div class="ch-tip"><b></b><small></small></div></div>`;
 }
 // Thẻ biểu đồ đầy đủ. Gọi lại với cùng id sẽ giữ tab đang chọn.
-function chartHtml(id, metrics, hours = 24, h = 210) {
-  const sel = Math.min(CHARTS[id]?.sel || 0, metrics.length - 1);
+function chartHtml(id, metrics, hours = 24, h = 210, initSel = 0) {
+  const sel = Math.max(0, Math.min(CHARTS[id]?.sel ?? initSel, metrics.length - 1));
   CHARTS[id] = {metrics, sel, hours, h};
   if (!metrics.length) return '';
   const tabs = metrics.map((m, i) => {
