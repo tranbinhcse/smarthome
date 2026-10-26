@@ -257,7 +257,7 @@ let raf = 0;
 const soon = () => { raf = raf || requestAnimationFrame(() => { raf = 0; draw(); }); };
 
 function greetHtml() {
-  const hr = new Date().getHours(), hi = hr < 11 ? 'Chào buổi sáng!' : hr < 13 ? 'Chào buổi trưa!' : hr < 18 ? 'Chào buổi chiều!' : 'Chào buổi tối!';
+  const hr = new Date().getHours(), hi = hr < 4 ? 'Chào buổi tối!' : hr < 11 ? 'Chào buổi sáng!' : hr < 13 ? 'Chào buổi trưa!' : hr < 18 ? 'Chào buổi chiều!' : 'Chào buổi tối!';
   const lost = cfg.devices.filter(offline).length, t = pageType();
   let h = hi, p = '', extra = '';
   if (t === 'home') {
