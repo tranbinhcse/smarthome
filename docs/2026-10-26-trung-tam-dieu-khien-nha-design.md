@@ -416,13 +416,13 @@ Hai việc **chưa đo**, sẽ đo khi làm:
 **Nguyên tắc:**
 - Lõi (luật, cảnh báo, điều khiển) vẫn chạy cục bộ. Trợ lý là lớp thêm vào.
 - Trợ lý **không được** điều khiển thiết bị hay kịch bản cần PIN, và không tắt được thiết bị `protected`. Nó dùng token riêng, quyền bằng người dùng chưa nhập PIN.
-- `hubd` publish mọi cảnh báo lên MQTT `hubd/alert` (đã có trong kế hoạch `hubd`). Phần giọng nói chỉ cần nghe topic này.
+- `hubd` publish mọi cảnh báo (`notify` của luật) lên MQTT `hubd/alert`, xác nhận lên `hubd/alert/ack`. Phần giọng nói chỉ cần nghe hai topic này.
 - Chương trình giọng nói `voiced` chạy trên máy Ubuntu (mic/loa lấy từ thiết bị nghe/nói ở phòng khách — **chưa chọn**, xem bảng dưới), nói chuyện với `hubd` qua MQTT + API.
 
 **Luồng xử lý:**
 
 ```
-Mic ─► wake word (cục bộ) ─► chuyển giọng nói thành chữ ─► hiểu ý
+Mic ─► nút nói (iPad) / wake word (loa vệ tinh, sau) ─► chuyển giọng nói thành chữ (cục bộ) ─► hiểu ý
                                                           ├─ lệnh cố định ─► khớp cục bộ ─► API hubd
                                                           └─ câu tự do ───► Claude (tool use) ─► API hubd
 Loa ◄─ đọc câu trả lời / cảnh báo bằng TTS tiếng Việt ◄──────────────────────┘
@@ -430,17 +430,42 @@ Loa ◄─ đọc câu trả lời / cảnh báo bằng TTS tiếng Việt ◄�
 
 | Phần | Phương án đề xuất | Ghi chú |
 |---|---|---|
-| Đọc cảnh báo | Câu cảnh báo đã cố định trong `rules.yaml`, nên tạo sẵn file âm thanh lúc deploy bằng VieNeu-TTS (giọng Hải Đăng) | Đọc được cả khi mất internet |
+| Đọc cảnh báo | Câu cảnh báo cố định (`notify` trong `rules:` của `config.yaml`) được `voiced` tạo sẵn âm thanh lúc khởi động bằng VieNeu-TTS (giọng Hải Đăng) | Đọc được cả khi mất internet |
 | Lệnh cố định | Khớp cục bộ theo tên thiết bị/kịch bản trong `config.yaml`: "bật quạt phòng khách", "ra khỏi nhà", "pin còn bao nhiêu" | Chạy được khi mất internet |
 | Câu tự do | Claude API, model `claude-opus-5-5`, effort thấp để trả lời nhanh. Các tool: `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`, đều gọi API của `hubd` | Cần internet. Câu hỏi dạng chữ và trạng thái thiết bị được gửi lên Anthropic |
-| Câu trả lời động | TTS lúc chạy: VieNeu-TTS nếu đủ nhanh trên máy Ubuntu, ngược lại dùng TTS cloud | Tốc độ VieNeu-TTS trên máy Ubuntu: **chưa đo** |
+| Câu trả lời động | TTS lúc chạy bằng VieNeu-TTS cục bộ (bản int8), cache theo câu. Không cần TTS cloud | Đã đo trên máy Ubuntu: 0,4 s cho câu ngắn, 1,2–1,4 s cho câu ~3,7 s (mục 15.2.1) |
 | Thiết bị nghe/nói | Phòng khách: iPad (có mic + loa, nhưng Safari hạn chế nghe nền) hoặc loa vệ tinh ESP32-S3. Các phòng khác: loa vệ tinh ESP32-S3 có mic (tuỳ chọn) | Chờ chủ nhà quyết |
 
 **Còn chờ chủ nhà quyết:**
-1. Nghe/nói ở đâu: chỉ phòng khách (iPad hoặc 1 loa vệ tinh), hay mỗi phòng một loa vệ tinh?
-2. Chuyển giọng nói thành chữ chạy cục bộ hay gửi âm thanh lên cloud?
-   - Cục bộ: riêng tư hơn, nhưng chậm hơn và cần máy đủ mạnh. Chạy trên m3 sẽ tranh CPU với trung tâm.
-   - Cloud: nhanh và chính xác hơn, nhưng âm thanh rời khỏi nhà.
+1. Nghe/nói ở đâu: chỉ phòng khách (iPad hoặc 1 loa vệ tinh), hay mỗi phòng một loa vệ tinh? Trong lúc chờ, bản đầu dùng iPad: nút nói trên dashboard, cảnh báo đọc trên iPad đang mở dashboard.
+2. Chuyển giọng nói thành chữ chạy cục bộ hay gửi âm thanh lên cloud? Đề xuất **cục bộ** và bản đầu đã làm cục bộ: trung tâm giờ là máy Ubuntu Ryzen 7 5700G (không còn m3), đo được ~27 ms mỗi câu (mục 15.2.1), âm thanh không rời khỏi nhà. Cloud chỉ còn là dự phòng nếu dùng thật thấy nhận sai nhiều.
+3. Cách có HTTPS cho iPad (Safari chỉ cho dùng micro trên trang HTTPS): CA tự ký cài lên iPad (đã có `scripts/tls-selfsigned.sh`), hay chứng chỉ thật cho một tên miền trỏ về IP nội bộ.
+
+#### 15.2.1 Bản đầu đã làm và số đo (2026-10-27)
+
+**Đã làm:** API trợ lý trong `hubd` (`/api/assistant/*`, token `HUBD_ASSISTANT_TOKEN`, chặn thiết bị/kịch bản cần PIN ngay trong `hubd`), luật `notify` → `hubd/alert`, container `voiced`, nút nói trên dashboard, HTTPS tuỳ chọn cổng 8443. Vận hành: README mục "Trợ lý giọng nói".
+
+**Đo trên máy Ubuntu** (Ryzen 7 5700G 8 nhân/16 luồng, 14 GiB RAM, đang chạy VM và dịch vụ khác; trong container, 4 luồng; mẫu là 6 câu lệnh do VieNeu-TTS đọc bằng 6 giọng khác nhau + 4 câu ghi âm thật từ bộ thử của sherpa-onnx):
+
+| Chuyển giọng nói thành chữ | Thời gian / câu (1–4 s) | RTF | 6 câu lệnh mẫu: đúng hẳn / chỉ mất dấu / sai |
+|---|---|---|---|
+| **sherpa-onnx Zipformer vi 30M int8** (2026-02-09, đã chọn, 26 MB) | **15–47 ms**, trung bình 27 ms | 0,012 | 4 / 1 / 1. Mất dấu: "RA KHỎI NHA" (khớp lệnh vẫn đúng vì so chữ không dấu). Sai: "Pin" → "TIỀN" |
+| sherpa-onnx Zipformer vi int8 (2025-04-20, 60 MB) | 20–53 ms, trung bình 33 ms | 0,016 | 3 / 1 / 2 (thêm "đèn" → "NỀN") |
+| faster-whisper small int8 | 1,3–4,5 s | 0,81 | 2 / 0 / 4 |
+| faster-whisper large-v3-turbo int8 | 5,9–6,3 s | 2,86 | 2 / 1 / 3 |
+
+| Đọc thành tiếng (VieNeu-TTS v3 Turbo, giọng Hải Đăng) | Câu 0,9 s | Câu 1,1 s | Câu 3,6–3,8 s | Nạp mô hình |
+|---|---|---|---|---|
+| **ONNX int8 (đã chọn)** | 0,40 s | 0,37 s | 1,19–1,39 s | 1,5 s |
+| ONNX fp32 | 0,67 s | 0,57 s | 1,58–1,64 s | 2,0 s |
+
+Hotword của sherpa-onnx (thử với "PIN") không sửa được lỗi "Pin" → "TIỀN" trên mẫu này. Chạy thử end-to-end qua `hubd` (stack thử riêng): "Tắt CB tổng bếp." nghe thành "hcb tổng bếp" (chữ cái Latin như "CB" dễ sai), "Đèn kho đang bật không?" nghe thành "đen khổ đang bật không" nhưng vẫn khớp đúng nhờ so chữ không dấu. Mẫu là giọng tổng hợp; độ chính xác với giọng thật qua micro iPad **chưa đo**.
+
+Cả vòng qua `hubd` (nhận WAV → STT → khớp lệnh → gửi lệnh → trả âm thanh): ~20 ms khi câu trả lời đã có trong cache (STT 14–28 ms), ~0,5 s khi phải đọc câu mới. `voiced`: image 2,05 GB, RAM ~615 MiB sau khi nạp mô hình, ~860 MiB sau vài lượt.
+
+**Dự phòng:** STT cục bộ nhận sai nhiều với giọng thật thì (1) thêm tên gọi khác cho thiết bị trong `config.yaml`, (2) thử bản Zipformer 2025-04-20 hoặc mô hình lớn hơn của sherpa-onnx, (3) cuối cùng mới gửi âm thanh lên STT cloud (âm thanh rời khỏi nhà, cần chủ nhà đồng ý). TTS cục bộ đủ nhanh, không cần dự phòng cloud; lỗi TTS thì vẫn trả câu trả lời dạng chữ.
+
+**Chưa làm:** loa vệ tinh ESP32-S3 + wake word (chờ quyết định 1); `voiced` đã nhận WAV qua `POST /voice/ask` nên loa vệ tinh chỉ cần gửi WAV sau wake word và phát file trả về. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận. Gọi Claude thật chưa chạy (chờ khoá API).
 
 ## 16. Chất lượng nước uống (máy lọc RO)
 
