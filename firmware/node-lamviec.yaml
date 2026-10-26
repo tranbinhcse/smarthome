@@ -1,0 +1,12 @@
+# Node phòng làm việc (tầng 1): không khí + hồng ngoại (máy lạnh, TV, quạt).
+# Vị trí đặt theo demo dashboard; CHƯA CHỐT, chủ nhà xác nhận.
+substitutions:
+  node: node-lamviec
+  friendly: Phòng làm việc
+  mqtt_password: !secret mqtt_pass_node_lamviec
+  ac_platform: coolix # CHƯA CHỐT hãng máy lạnh
+
+packages:
+  common: !include common.yaml
+  khongkhi: !include khongkhi.yaml
+  ir: !include ir.yaml

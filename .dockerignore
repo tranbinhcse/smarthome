@@ -6,3 +6,4 @@ scripts
 mosquitto
 *.md
 web/images/*.png
+firmware

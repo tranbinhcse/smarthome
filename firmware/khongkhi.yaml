@@ -1,0 +1,78 @@
+# Cụm cảm biến không khí trong vỏ đầu báo CBX cũ, gắn trần (danh-sach-mua.md mục A).
+# Đặt các module cách xa chip ESP32: chip toả nhiệt làm sai nhiệt độ/độ ẩm.
+#
+# Đấu dây (ESP32 DevKit 30 chân):
+#   I2C 3V3: SDA GPIO21, SCL GPIO22 — SCD40 (0x62), SGP41 (0x59), BH1750 (0x23)
+#   PMS7003 (nguồn 5V, logic 3V3): TX cảm biến -> GPIO16, RX cảm biến <- GPIO17
+#
+# Núm hiệu chỉnh (substitutions trong file node, mặc định ở dưới):
+#   scd_t_offset: nhiệt chip tự toả trong vỏ, SCD4x tự trừ và bù luôn độ ẩm. Hiệu chỉnh: đặt các node cạnh nhau
+#                 cùng một nhiệt kế chuẩn 24 giờ, offset mới = offset cũ + (số node - số chuẩn).
+#   rh_offset:    cộng thêm vào độ ẩm sau khi đã bù nhiệt (%).
+#   lux_factor:   vỏ đầu báo che bớt sáng: lux thật / lux đọc được, đo cạnh một máy đo lux.
+substitutions:
+  scd_t_offset: "4°C"
+  rh_offset: "0"
+  lux_factor: "1.0"
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  frequency: 100kHz
+
+uart:
+  - id: pms_uart
+    rx_pin: GPIO16
+    tx_pin: GPIO17 # cần TX để cho PMS7003 ngủ giữa các lần đo (đỡ mòn quạt và laser)
+    baud_rate: 9600
+
+sensor:
+  - platform: scd4x
+    update_interval: 5s # SCD40 đo mỗi 5 s; delta bên dưới chỉ gửi khi đổi rõ, hà hơi thấy ngay
+    temperature_offset: ${scd_t_offset}
+    altitude_compensation: 10m
+    automatic_self_calibration: true # cần không khí ngoài trời (~420 ppm) vài lần mỗi tuần
+    co2:
+      name: co2
+      id: co2
+      filters:
+        - or: [throttle: 60s, delta: 30]
+    temperature:
+      name: nhiet_do
+      id: t
+      filters:
+        - or: [throttle: 60s, delta: 0.2]
+    humidity:
+      name: do_am
+      id: rh
+      filters:
+        - offset: ${rh_offset}
+        - or: [throttle: 60s, delta: 1.0]
+
+  - platform: sgp4x
+    update_interval: 30s
+    compensation: # SGP41 lấy nhiệt độ/độ ẩm từ SCD40 để bù
+      temperature_source: t
+      humidity_source: rh
+    voc:
+      name: voc
+    nox:
+      name: nox
+
+  - platform: pmsx003
+    type: PMSX003 # PMS7003 dùng chung giao thức
+    uart_id: pms_uart
+    update_interval: 60s # ≥ 30 s: cảm biến ngủ giữa các lần đo
+    pm_1_0:
+      name: pm1
+    pm_2_5:
+      name: pm25
+    pm_10_0:
+      name: pm10
+
+  - platform: bh1750
+    name: lux
+    update_interval: 30s
+    filters:
+      - multiply: ${lux_factor}
+      - or: [throttle: 300s, delta: 15%]

@@ -1,0 +1,42 @@
+# Node khu cafe (tầng trệt): không khí + hồng ngoại + LD2410C (đang có 1 cái, đặt ở đây cạnh iPad).
+# Vị trí đặt theo demo dashboard; CHƯA CHỐT, chủ nhà xác nhận.
+substitutions:
+  node: node-cafe
+  friendly: Khu cafe
+  mqtt_password: !secret mqtt_pass_node_cafe
+  ac_platform: coolix # CHƯA CHỐT hãng. Hai máy lạnh cùng hãng trong phòng nhận chung một tín hiệu.
+
+packages:
+  common: !include common.yaml
+  khongkhi: !include khongkhi.yaml
+  ir: !include ir.yaml
+
+# LD2410C: TX cảm biến -> GPIO26, RX cảm biến <- GPIO25, nguồn 5V.
+uart:
+  - id: ld_uart
+    rx_pin: GPIO26
+    tx_pin: GPIO25
+    baud_rate: 256000
+    parity: NONE
+    stop_bits: 1
+
+ld2410:
+  uart_id: ld_uart
+
+binary_sensor:
+  - platform: ld2410
+    has_target:
+      id: co_nguoi_bs
+      internal: true
+      filters:
+        - delayed_off: 30s
+
+sensor:
+  - platform: template # 0/1 để hubd ghi lịch sử và viết luật (above: 0.5)
+    name: co_nguoi
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      return id(co_nguoi_bs).state ? 1 : 0;
+    filters:
+      - or: [throttle: 300s, delta: 1]

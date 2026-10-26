@@ -1,0 +1,104 @@
+# Hồng ngoại: thu để học mã + phát (TV, loa, quạt, máy lạnh). Linh kiện: danh-sach-mua.md mục G.
+#
+# Đấu dây:
+#   Mắt thu VS1838B/TSOP38238 (3V3): OUT -> GPIO27
+#   Phát: GPIO4 -> 1 kΩ -> chân B transistor S8050 (E xuống GND); 5V -> 2 LED 940 nm nối tiếp -> 10 Ω -> chân C.
+#         Hướng LED xuống giữa phòng; gắn trần thì tia dội tường vẫn tới máy.
+#
+# Hai đường lệnh từ hubd (ir.go):
+#   <node>/ir/send  payload chuỗi Pronto đã học (TV, loa, quạt): node chỉ phát.
+#   <node>/ir/ac    payload mã nút dashboard (on, off, temp_24, mode_cool, fan_2, swing, sleep, turbo):
+#                   node dịch sang climate_ir của hãng máy lạnh (ac_platform).
+# Học mã: bấm remote gốc hướng vào mắt thu, node gửi Pronto lên <node>/ir/learned (xem firmware/README.md).
+#
+# ac_platform (CHƯA CHỐT, chủ nhà xác nhận hãng máy lạnh từng phòng): coolix (Midea, Kaysun, nhiều hãng
+# Trung Quốc), daikin, daikin_arc, daikin_brc, mitsubishi, toshiba, gree, fujitsu_general, hitachi_ac344,
+# climate_ir_lg, midea_ir, whirlpool, tcl112. Panasonic/Samsung/Sharp dùng heatpumpir (cần thêm protocol,
+# khai báo bằng !extend ac trong file node). Hãng không có: bỏ gói này khỏi máy lạnh, học mã như TV.
+substitutions:
+  ac_platform: coolix
+
+remote_receiver:
+  pin:
+    number: GPIO27
+    inverted: true
+    mode:
+      input: true
+      pullup: true
+  tolerance: 25%
+  dump: []
+  on_pronto:
+    - mqtt.publish:
+        topic: ${node}/ir/learned
+        payload: !lambda return x.data;
+
+remote_transmitter:
+  id: ir_tx
+  pin: GPIO4
+  carrier_duty_percent: 50%
+
+climate:
+  - platform: ${ac_platform}
+    id: ac
+    name: ac
+    transmitter_id: ir_tx
+
+globals:
+  - id: ac_last_mode # chế độ để bật lại; chọn chế độ lúc máy tắt chỉ nhớ, không bật máy (giống remote gốc)
+    type: climate::ClimateMode
+    initial_value: climate::CLIMATE_MODE_COOL
+
+mqtt:
+  on_message:
+    - topic: ${node}/ir/send
+      then:
+        - remote_transmitter.transmit_pronto:
+            transmitter_id: ir_tx
+            data: !lambda return x;
+    - topic: ${node}/ir/ac
+      then:
+        - lambda: |-
+            auto call = id(ac).make_call();
+            const std::string &c = x;
+            const bool off = id(ac).mode == climate::CLIMATE_MODE_OFF;
+            if (c == "on" || c == "ON") {
+              call.set_mode(id(ac_last_mode));
+            } else if (c == "off" || c == "OFF") {
+              call.set_mode(climate::CLIMATE_MODE_OFF);
+            } else if (c.rfind("temp_", 0) == 0) {
+              call.set_target_temperature(atof(c.c_str() + 5));
+            } else if (c.rfind("mode_", 0) == 0) {
+              const std::string m = c.substr(5);
+              id(ac_last_mode) = m == "cool" ? climate::CLIMATE_MODE_COOL
+                               : m == "dry"  ? climate::CLIMATE_MODE_DRY
+                               : m == "fan"  ? climate::CLIMATE_MODE_FAN_ONLY
+                                             : climate::CLIMATE_MODE_HEAT_COOL;
+              if (off) return;
+              call.set_mode(id(ac_last_mode));
+            } else if (c.rfind("fan_", 0) == 0) {
+              const std::string f = c.substr(4);
+              call.set_fan_mode(f == "1" ? climate::CLIMATE_FAN_LOW
+                              : f == "2" ? climate::CLIMATE_FAN_MEDIUM
+                              : f == "3" ? climate::CLIMATE_FAN_HIGH
+                                         : climate::CLIMATE_FAN_AUTO);
+            } else if (c == "swing") {
+              call.set_swing_mode(id(ac).swing_mode == climate::CLIMATE_SWING_OFF ? climate::CLIMATE_SWING_VERTICAL
+                                                                                  : climate::CLIMATE_SWING_OFF);
+            } else if (c == "sleep" || c == "turbo") { // chỉ hãng hỗ trợ preset mới có tác dụng
+              const auto p = c == "sleep" ? climate::CLIMATE_PRESET_SLEEP : climate::CLIMATE_PRESET_BOOST;
+              call.set_preset(id(ac).preset == p ? climate::CLIMATE_PRESET_NONE : p);
+            } else {
+              ESP_LOGW("ir", "Mã máy lạnh không hỗ trợ: %s", c.c_str());
+              return;
+            }
+            if (off && c != "on" && c != "ON") {
+              // máy đang tắt: chỉ nhớ cài đặt, không phát (máy kêu bíp giữa đêm); lần bật sau phát kèm cài đặt này
+              auto *a = id(ac);
+              if (call.get_target_temperature().has_value()) a->target_temperature = *call.get_target_temperature();
+              if (call.get_fan_mode().has_value()) a->fan_mode = *call.get_fan_mode();
+              if (call.get_swing_mode().has_value()) a->swing_mode = *call.get_swing_mode();
+              if (call.get_preset().has_value()) a->preset = *call.get_preset();
+              a->publish_state();
+              return;
+            }
+            call.perform();
