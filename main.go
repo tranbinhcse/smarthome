@@ -73,8 +73,16 @@ func main() {
 	}()
 
 	auth := NewAuth(pin, db)
+	auth.assistant = os.Getenv("HUBD_ASSISTANT_TOKEN")
+	mux := newMux(hub, auth)
+	if cert := os.Getenv("HUBD_TLS_CERT"); cert != "" {
+		// Safari chỉ cho dùng micro (nút nói của trợ lý) trên trang HTTPS.
+		go func() {
+			log.Printf("HTTPS :8443 dừng: %v", http.ListenAndServeTLS(":8443", cert, os.Getenv("HUBD_TLS_KEY"), mux))
+		}()
+	}
 	log.Printf("hubd nghe tại %s", cfg.HTTP.Listen)
-	log.Fatal(http.ListenAndServe(cfg.HTTP.Listen, newMux(hub, auth)))
+	log.Fatal(http.ListenAndServe(cfg.HTTP.Listen, mux))
 }
 
 func newMux(hub *Hub, auth *Auth) *http.ServeMux {
@@ -88,7 +96,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /api/login", auth.Login)
 	mux.HandleFunc("GET /api/config", auth.Require(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"zones": hub.cfg.Zones, "entities": hub.cfg.Entities, "devices": hub.cfg.Devices})
+		writeJSON(w, map[string]any{"zones": hub.cfg.Zones, "entities": hub.cfg.Entities, "devices": hub.cfg.Devices, "scenes": hub.cfg.Scenes})
 	}))
 	mux.HandleFunc("GET /api/state", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hub.Snapshot())
@@ -144,6 +152,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 		}
 		w.WriteHeader(204)
 	}))
+	mountAssistant(mux, hub, auth)
 	return mux
 }
 

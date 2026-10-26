@@ -19,6 +19,7 @@ type Config struct {
 	Zones    []Zone   `yaml:"zones"`
 	Entities []Entity `yaml:"entities"`
 	Devices  []Device `yaml:"devices"`
+	Scenes   []Scene  `yaml:"scenes"`
 	Rules    []Rule   `yaml:"rules"`
 }
 
@@ -50,6 +51,7 @@ type Device struct {
 	Zone         string `yaml:"zone" json:"zone"`
 	Kind         string `yaml:"kind" json:"kind"`
 	Protected    bool   `yaml:"protected" json:"protected"`
+	Pin          bool   `yaml:"pin" json:"pin,omitempty"`     // lệnh của người dùng cần PIN (trợ lý không bao giờ có)
 	Group        string `yaml:"group" json:"group,omitempty"` // gom nhiều lỗ của một ổ cắm thành một thẻ
 	CommandTopic string `yaml:"command_topic" json:"-"`
 	StateTopic   string `yaml:"state_topic" json:"-"`
@@ -57,6 +59,22 @@ type Device struct {
 	OnlineTopic  string `yaml:"online_topic" json:"-"`
 	On           string `yaml:"on" json:"-"`
 	Off          string `yaml:"off" json:"-"`
+}
+
+// Scene: kịch bản một chạm, cùng dạng dashboard đọc (steps: [{d, to}]). Pin: cần PIN để chạy.
+// Kịch bản có bước đụng thiết bị pin/protected cũng tính là cần PIN.
+type Scene struct {
+	ID    string `yaml:"id" json:"id"`
+	Name  string `yaml:"name" json:"name"`
+	Icon  string `yaml:"icon" json:"icon,omitempty"`
+	Note  string `yaml:"note" json:"note,omitempty"`
+	Pin   bool   `yaml:"pin" json:"pin,omitempty"`
+	Steps []Step `yaml:"steps" json:"steps,omitempty"`
+}
+
+type Step struct {
+	D  string `yaml:"d" json:"d"`
+	To string `yaml:"to" json:"to"` // on | off
 }
 
 func (d Device) payload(to string) string {
@@ -91,6 +109,9 @@ func LoadConfig(path string) (Config, string, error) {
 	}
 	if cfg.Devices == nil {
 		cfg.Devices = []Device{}
+	}
+	if cfg.Scenes == nil {
+		cfg.Scenes = []Scene{}
 	}
 	if cfg.HTTP.Listen == "" {
 		cfg.HTTP.Listen = ":8080"
