@@ -39,9 +39,12 @@ services:
       MQTT_USER: ${TUYA_MQTT_USER}
       MQTT_PASS: ${TUYA_MQTT_PASS}
       TUYA_DIR: /tuya
+      TUYA_STATE: /state/energy.json
     volumes:
       - ./tuya:/tuya:ro   # devices.json (+ overrides.json) — chứa local key, KHÔNG commit
+      - tuya-state:/state # tổng kWh cộng dồn từ add_ele, giữ qua khởi động lại
 
 volumes:
   mosquitto-data:
   hubd-db:
+  tuya-state:

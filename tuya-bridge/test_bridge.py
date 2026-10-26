@@ -9,14 +9,20 @@ class FakeDev:
         self.calls = 0
         self.fail_after = fail_after
         self.closed = False
+        self.raw_recv = []
+        self.hb_ack = False
+        self.refreshed = []
     def status(self): return {"dps": dict(self.dps)}
     def set_value(self, k, v): self.dps[k] = v; return {}
-    def heartbeat(self, nowait=False): pass
+    def heartbeat(self, nowait=False): self.hb_ack = True
+    def updatedps(self, index=None, nowait=False): self.refreshed.append((index, nowait))
     def receive(self):
         self.calls += 1
         if self.fail_after and self.calls > self.fail_after:
             return {"Error": "Network Error"}
         time.sleep(0.01)
+        self.raw_recv = [9] if self.hb_ack else []  # tinytuya: trả lời heartbeat là tin rỗng, receive() trả None
+        self.hb_ack = False
         return None
     def close(self): self.closed = True
     def set_socketTimeout(self, s): self.timeout = s
@@ -40,6 +46,25 @@ class SlowHbDev(SlowRecvDev):
         self.hb += 1
         if not nowait:
             time.sleep(self.timeout)
+
+
+class MeterDev(FakeDev):
+    """CB đo điện: status() trả ảnh chụp cũ; chỉ khi updatedps thì thiết bị mới báo số đo mới."""
+    def __init__(self, pushes=()):
+        super().__init__()
+        self.dps = {"1": True, "17": 81, "18": 933, "19": 1499, "20": 2394}
+        self.pushes = list(pushes)
+    def updatedps(self, index=None, nowait=False):
+        super().updatedps(index, nowait)
+        self.pushes.append({"19": 1600 + len(self.refreshed)})
+    def receive(self):
+        r = super().receive()
+        return {"dps": self.pushes.pop(0)} if self.pushes else r
+
+
+class SilentDev(FakeDev):
+    """Thiết bị mất điện / rớt Wi-Fi: socket còn mở nhưng không trả lời gì, kể cả heartbeat."""
+    def heartbeat(self, nowait=False): pass
 
 
 class Pub:
@@ -98,10 +123,10 @@ class T(unittest.TestCase):
         self.assertEqual(bridge.state_of({"1": False}), "OFF")
         self.assertIsNone(bridge.state_of({"9": 1}))
 
-    def run_worker(self, fake):
+    def run_worker(self, fake, mapping=None, energy=None):
         pub = Pub()
-        dev = {"id": "a1", "name": "Đèn", "key": "k", "ip": "1.2.3.4", "version": 3.3, "dp": "1"}
-        w = bridge.DeviceWorker(dev, pub, lambda _d: fake)
+        dev = {"id": "a1", "name": "Đèn", "key": "k", "ip": "1.2.3.4", "version": 3.3, "dp": "1", "mapping": mapping or {}}
+        w = bridge.DeviceWorker(dev, pub, lambda _d: fake, energy)
         w.start()
         self.addCleanup(w.stop)
         return w, pub
@@ -173,6 +198,69 @@ class T(unittest.TestCase):
         self.assertTrue(wait(lambda: fake.hb >= 1, 3))
         w.send(b"ON")
         self.assertTrue(wait(lambda: fake.dps["1"] is True, 1.5), "lệnh không được chờ heartbeat")
+
+
+class Live(unittest.TestCase):
+    """Số đo không đứng, online/offline đúng, kWh cộng dồn."""
+    def setUp(self):
+        for k, v in {"HEARTBEAT": 0.1, "STALE": 0.6, "REFRESH": 0.1, "RETRY_MAX": 60}.items():
+            self.addCleanup(setattr, bridge, k, getattr(bridge, k))
+            setattr(bridge, k, v)
+    run_worker = T.run_worker
+
+    def test_meter_dps(self):
+        self.assertEqual(bridge.meter_dps({}, {"1": True, "18": 1, "19": 2, "20": 3}), [18, 19, 20])
+        self.assertEqual(bridge.meter_dps({}, {"1": True, "9": 0}), [])
+        m = {"1": {"code": "switch_1"}, "4": {"code": "cur_current"}, "5": {"code": "cur_power"}, "6": {"code": "cur_voltage"},
+             "18": {"code": "countdown"}}
+        self.assertEqual(bridge.meter_dps(m, {"1": True, "4": 0, "5": 0, "6": 0, "18": 0}), [4, 5, 6])
+
+    def test_meter_values_refreshed_not_stale(self):
+        fake = MeterDev()
+        w, pub = self.run_worker(fake)
+        self.assertTrue(wait(lambda: len(fake.refreshed) >= 2))
+        self.assertEqual(fake.refreshed[0], ([18, 19, 20], True))
+        self.assertTrue(wait(lambda: json.loads(pub.last("tuya/a1/dps"))["19"] >= 1601), pub.last("tuya/a1/dps"))
+
+    def test_plain_switch_not_refreshed(self):
+        fake = FakeDev()
+        w, pub = self.run_worker(fake)
+        time.sleep(0.5)
+        self.assertEqual(fake.refreshed, [])
+
+    def test_offline_when_device_stops_answering(self):
+        fake = SilentDev()
+        w, pub = self.run_worker(fake)
+        self.assertTrue(wait(lambda: pub.has("tuya/a1/online", "online")))
+        self.assertTrue(wait(lambda: pub.has("tuya/a1/online", "offline"), 3), "phải báo offline khi không còn trả lời")
+        self.assertTrue(wait(lambda: fake.closed, 3))
+
+    def test_stays_online_while_heartbeat_answered(self):
+        fake = FakeDev()
+        w, pub = self.run_worker(fake)
+        time.sleep(1.5)
+        self.assertEqual([p for t, p in pub.msgs if t == "tuya/a1/online"], ["online"])
+
+    def test_energy_counts_pushed_increments_only(self):
+        path = os.path.join(tempfile.mkdtemp(), "energy.json")
+        fake = MeterDev(pushes=[{"17": 5}, {"17": 3}])
+        fake.updatedps = lambda *a, **k: None
+        w, pub = self.run_worker(fake, mapping={"17": {"code": "add_ele"}}, energy=bridge.Energy(path))
+        self.assertTrue(wait(lambda: pub.has("tuya/a1/energy", '{"17": 8}')), pub.msgs)  # 81 trong status() là số cũ: không cộng
+        w.stop()
+        self.assertEqual(json.load(open(path)), {"a1": {"17": 8}})
+        fake2 = MeterDev(pushes=[{"17": 2}])
+        fake2.updatedps = lambda *a, **k: None
+        w2, pub2 = self.run_worker(fake2, mapping={"17": {"code": "add_ele"}}, energy=bridge.Energy(path))
+        self.assertTrue(wait(lambda: pub2.has("tuya/a1/energy", '{"17": 10}')), pub2.msgs)  # nối tiếp sau khởi động lại
+
+    def test_load_devices_keeps_mapping(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "devices.json")
+        m = {"19": {"code": "cur_power", "type": "Integer", "values": {"scale": 1}}}
+        open(p, "w").write(json.dumps([{"id": "a1", "key": "k", "ip": "1.2.3.4", "mapping": m}, {"id": "a2", "key": "k", "ip": "1.2.3.5"}]))
+        devs, _ = bridge.load_devices(p)
+        self.assertEqual([x["mapping"] for x in devs], [m, {}])
 
 
 if __name__ == "__main__":

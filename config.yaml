@@ -27,10 +27,23 @@ zones:
 # Số đo: giá trị lấy từ một topic MQTT. field/scale: đọc một khoá trong payload JSON rồi nhân hệ số.
 # device: hiện số đo trên thẻ của thiết bị đó.
 entities:
-  # CB Tổng Phòng Lạnh có đo điện (dps Tuya: 19 = W×10, 20 = V×10, 18 = mA)
-  - { id: cb_phonglanh.w, name: "Công suất", unit: "W", topic: tuya/ebae9da4b1b5eeec58d8ci/dps, field: "19", scale: 0.1, zone: cafe, device: tuya_ebae9da4b1b5eeec58d8ci }
-  - { id: cb_phonglanh.v, name: "Điện áp", unit: "V", topic: tuya/ebae9da4b1b5eeec58d8ci/dps, field: "20", scale: 0.1, zone: cafe, device: tuya_ebae9da4b1b5eeec58d8ci }
-  - { id: cb_phonglanh.a, name: "Dòng điện", unit: "A", topic: tuya/ebae9da4b1b5eeec58d8ci/dps, field: "18", scale: 0.001, zone: cafe, device: tuya_ebae9da4b1b5eeec58d8ci }
+  # BEGIN tuya-entities (gen_config.py — đừng sửa tay)
+  - {"id": "tuya_ebae9da4b1b5eeec58d8ci.a", "name": "Dòng điện", "unit": "A", "topic": "tuya/ebae9da4b1b5eeec58d8ci/dps", "field": "18", "scale": 0.001, "zone": "cafe", "device": "tuya_ebae9da4b1b5eeec58d8ci"}
+  - {"id": "tuya_ebae9da4b1b5eeec58d8ci.w", "name": "Công suất", "unit": "W", "topic": "tuya/ebae9da4b1b5eeec58d8ci/dps", "field": "19", "scale": 0.1, "zone": "cafe", "device": "tuya_ebae9da4b1b5eeec58d8ci"}
+  - {"id": "tuya_ebae9da4b1b5eeec58d8ci.v", "name": "Điện áp", "unit": "V", "topic": "tuya/ebae9da4b1b5eeec58d8ci/dps", "field": "20", "scale": 0.1, "zone": "cafe", "device": "tuya_ebae9da4b1b5eeec58d8ci"}
+  - {"id": "tuya_eb6564a5a81a53bb8ayyzs.a", "name": "Dòng điện", "unit": "A", "topic": "tuya/eb6564a5a81a53bb8ayyzs/dps", "field": "18", "scale": 0.001, "zone": "tudien1", "device": "tuya_eb6564a5a81a53bb8ayyzs"}
+  - {"id": "tuya_eb6564a5a81a53bb8ayyzs.w", "name": "Công suất", "unit": "W", "topic": "tuya/eb6564a5a81a53bb8ayyzs/dps", "field": "19", "scale": 0.1, "zone": "tudien1", "device": "tuya_eb6564a5a81a53bb8ayyzs"}
+  - {"id": "tuya_eb6564a5a81a53bb8ayyzs.v", "name": "Điện áp", "unit": "V", "topic": "tuya/eb6564a5a81a53bb8ayyzs/dps", "field": "20", "scale": 0.1, "zone": "tudien1", "device": "tuya_eb6564a5a81a53bb8ayyzs"}
+  - {"id": "tuya_eb0651481bdbe0ca6bvyt0.a", "name": "Dòng điện", "unit": "A", "topic": "tuya/eb0651481bdbe0ca6bvyt0/dps", "field": "18", "scale": 0.001, "zone": "tudien1", "device": "tuya_eb0651481bdbe0ca6bvyt0"}
+  - {"id": "tuya_eb0651481bdbe0ca6bvyt0.w", "name": "Công suất", "unit": "W", "topic": "tuya/eb0651481bdbe0ca6bvyt0/dps", "field": "19", "scale": 0.1, "zone": "tudien1", "device": "tuya_eb0651481bdbe0ca6bvyt0"}
+  - {"id": "tuya_eb0651481bdbe0ca6bvyt0.v", "name": "Điện áp", "unit": "V", "topic": "tuya/eb0651481bdbe0ca6bvyt0/dps", "field": "20", "scale": 0.1, "zone": "tudien1", "device": "tuya_eb0651481bdbe0ca6bvyt0"}
+  - {"id": "tuya_eb700adf4ac4134fea2mrg.a", "name": "Dòng điện", "unit": "A", "topic": "tuya/eb700adf4ac4134fea2mrg/dps", "field": "18", "scale": 0.001, "zone": "tudien1", "device": "tuya_eb700adf4ac4134fea2mrg"}
+  - {"id": "tuya_eb700adf4ac4134fea2mrg.w", "name": "Công suất", "unit": "W", "topic": "tuya/eb700adf4ac4134fea2mrg/dps", "field": "19", "scale": 0.1, "zone": "tudien1", "device": "tuya_eb700adf4ac4134fea2mrg"}
+  - {"id": "tuya_eb700adf4ac4134fea2mrg.v", "name": "Điện áp", "unit": "V", "topic": "tuya/eb700adf4ac4134fea2mrg/dps", "field": "20", "scale": 0.1, "zone": "tudien1", "device": "tuya_eb700adf4ac4134fea2mrg"}
+  - {"id": "tuya_ebba01d29a86b4f29dlrgx.a", "name": "Dòng điện", "unit": "A", "topic": "tuya/ebba01d29a86b4f29dlrgx/dps", "field": "18", "scale": 0.001, "zone": "tudien2", "device": "tuya_ebba01d29a86b4f29dlrgx"}
+  - {"id": "tuya_ebba01d29a86b4f29dlrgx.w", "name": "Công suất", "unit": "W", "topic": "tuya/ebba01d29a86b4f29dlrgx/dps", "field": "19", "scale": 0.1, "zone": "tudien2", "device": "tuya_ebba01d29a86b4f29dlrgx"}
+  - {"id": "tuya_ebba01d29a86b4f29dlrgx.v", "name": "Điện áp", "unit": "V", "topic": "tuya/ebba01d29a86b4f29dlrgx/dps", "field": "20", "scale": 0.1, "zone": "tudien2", "device": "tuya_ebba01d29a86b4f29dlrgx"}
+  # END tuya-entities
   # Năng lượng: Deye + 3 pack JK qua node RS485 (chưa lắp — hiện "—" tới khi có dữ liệu)
   - { id: deye.pv,   name: "Điện mặt trời", unit: "W", topic: nangluong/deye/pv_power,   zone: kythuat }
   - { id: deye.load, name: "Tải tiêu thụ",  unit: "W", topic: nangluong/deye/load_power, zone: kythuat }
@@ -41,15 +54,15 @@ entities:
 # Gắn zone / protected: true bằng cách sửa tay NGOÀI đoạn sinh, hoặc dùng tuya/overrides (xem README).
 devices:
   # BEGIN tuya-devices (gen_config.py — đừng sửa tay)
-  - {"id": "tuya_eba30c56ca208baad0y43a", "name": "Đèn Kho", "command_topic": "tuya/eba30c56ca208baad0y43a/cmd", "state_topic": "tuya/eba30c56ca208baad0y43a/state", "online_topic": "tuya/eba30c56ca208baad0y43a/online", "kind": "kg", "zone": "kho"}
-  - {"id": "tuya_eb89a0372bd6a5acf1owhi", "name": "Đèn phòng lạnh", "command_topic": "tuya/eb89a0372bd6a5acf1owhi/cmd", "state_topic": "tuya/eb89a0372bd6a5acf1owhi/state", "online_topic": "tuya/eb89a0372bd6a5acf1owhi/online", "kind": "kg", "zone": "cafe"}
-  - {"id": "tuya_ebae9da4b1b5eeec58d8ci", "name": "CB Tổng Phòng Lạnh Tầng 1", "command_topic": "tuya/ebae9da4b1b5eeec58d8ci/cmd", "state_topic": "tuya/ebae9da4b1b5eeec58d8ci/state", "online_topic": "tuya/ebae9da4b1b5eeec58d8ci/online", "kind": "dlq", "zone": "tudien1", "protected": true}
-  - {"id": "tuya_ebbccca6b3cfc09a3as93f", "name": "Sân sau tầng 1", "command_topic": "tuya/ebbccca6b3cfc09a3as93f/cmd", "state_topic": "tuya/ebbccca6b3cfc09a3as93f/state", "online_topic": "tuya/ebbccca6b3cfc09a3as93f/online", "kind": "kg", "zone": "sansau"}
-  - {"id": "tuya_eb6564a5a81a53bb8ayyzs", "name": "CB Tổng Bếp", "command_topic": "tuya/eb6564a5a81a53bb8ayyzs/cmd", "state_topic": "tuya/eb6564a5a81a53bb8ayyzs/state", "online_topic": "tuya/eb6564a5a81a53bb8ayyzs/online", "kind": "dlq", "zone": "tudien1", "protected": true}
-  - {"id": "tuya_eb0651481bdbe0ca6bvyt0", "name": "CB Tổng Bảng Hiệu", "command_topic": "tuya/eb0651481bdbe0ca6bvyt0/cmd", "state_topic": "tuya/eb0651481bdbe0ca6bvyt0/state", "online_topic": "tuya/eb0651481bdbe0ca6bvyt0/online", "kind": "dlq", "zone": "tudien1", "protected": true}
-  - {"id": "tuya_eb700adf4ac4134fea2mrg", "name": "CB Tổng PK T1", "command_topic": "tuya/eb700adf4ac4134fea2mrg/cmd", "state_topic": "tuya/eb700adf4ac4134fea2mrg/state", "online_topic": "tuya/eb700adf4ac4134fea2mrg/online", "kind": "dlq", "zone": "tudien1", "protected": true}
-  - {"id": "tuya_ebba01d29a86b4f29dlrgx", "name": "CB Tổng PK Tầng 2 ", "command_topic": "tuya/ebba01d29a86b4f29dlrgx/cmd", "state_topic": "tuya/ebba01d29a86b4f29dlrgx/state", "online_topic": "tuya/ebba01d29a86b4f29dlrgx/online", "kind": "dlq", "zone": "tudien2", "protected": true}
-  - {"id": "tuya_ebef59cd6761b0a021jvww", "name": "Ổ cắm Hồ Cá", "command_topic": "tuya/ebef59cd6761b0a021jvww/cmd", "state_topic": "tuya/ebef59cd6761b0a021jvww/state", "online_topic": "tuya/ebef59cd6761b0a021jvww/online", "kind": "pc", "zone": "cafe", "protected": true}
+  - {"id": "tuya_eba30c56ca208baad0y43a", "name": "Đèn Kho", "command_topic": "tuya/eba30c56ca208baad0y43a/cmd", "state_topic": "tuya/eba30c56ca208baad0y43a/state", "online_topic": "tuya/eba30c56ca208baad0y43a/online", "kind": "light", "zone": "kho"}
+  - {"id": "tuya_eb89a0372bd6a5acf1owhi", "name": "Đèn phòng lạnh", "command_topic": "tuya/eb89a0372bd6a5acf1owhi/cmd", "state_topic": "tuya/eb89a0372bd6a5acf1owhi/state", "online_topic": "tuya/eb89a0372bd6a5acf1owhi/online", "kind": "light", "zone": "cafe"}
+  - {"id": "tuya_ebae9da4b1b5eeec58d8ci", "name": "CB Tổng Phòng Lạnh Tầng 1", "command_topic": "tuya/ebae9da4b1b5eeec58d8ci/cmd", "state_topic": "tuya/ebae9da4b1b5eeec58d8ci/state", "online_topic": "tuya/ebae9da4b1b5eeec58d8ci/online", "kind": "breaker", "zone": "tudien1", "protected": true}
+  - {"id": "tuya_ebbccca6b3cfc09a3as93f", "name": "Sân sau tầng 1", "command_topic": "tuya/ebbccca6b3cfc09a3as93f/cmd", "state_topic": "tuya/ebbccca6b3cfc09a3as93f/state", "online_topic": "tuya/ebbccca6b3cfc09a3as93f/online", "kind": "light", "zone": "sansau"}
+  - {"id": "tuya_eb6564a5a81a53bb8ayyzs", "name": "CB Tổng Bếp", "command_topic": "tuya/eb6564a5a81a53bb8ayyzs/cmd", "state_topic": "tuya/eb6564a5a81a53bb8ayyzs/state", "online_topic": "tuya/eb6564a5a81a53bb8ayyzs/online", "kind": "breaker", "zone": "tudien1", "protected": true}
+  - {"id": "tuya_eb0651481bdbe0ca6bvyt0", "name": "CB Tổng Bảng Hiệu", "command_topic": "tuya/eb0651481bdbe0ca6bvyt0/cmd", "state_topic": "tuya/eb0651481bdbe0ca6bvyt0/state", "online_topic": "tuya/eb0651481bdbe0ca6bvyt0/online", "kind": "breaker", "zone": "tudien1", "protected": true}
+  - {"id": "tuya_eb700adf4ac4134fea2mrg", "name": "CB Tổng PK T1", "command_topic": "tuya/eb700adf4ac4134fea2mrg/cmd", "state_topic": "tuya/eb700adf4ac4134fea2mrg/state", "online_topic": "tuya/eb700adf4ac4134fea2mrg/online", "kind": "breaker", "zone": "tudien1", "protected": true}
+  - {"id": "tuya_ebba01d29a86b4f29dlrgx", "name": "CB Tổng PK Tầng 2 ", "command_topic": "tuya/ebba01d29a86b4f29dlrgx/cmd", "state_topic": "tuya/ebba01d29a86b4f29dlrgx/state", "online_topic": "tuya/ebba01d29a86b4f29dlrgx/online", "kind": "breaker", "zone": "tudien2", "protected": true}
+  - {"id": "tuya_ebef59cd6761b0a021jvww", "name": "Ổ cắm Hồ Cá", "command_topic": "tuya/ebef59cd6761b0a021jvww/cmd", "state_topic": "tuya/ebef59cd6761b0a021jvww/state", "online_topic": "tuya/ebef59cd6761b0a021jvww/online", "kind": "socket", "zone": "cafe", "protected": true}
   # END tuya-devices
 
 # Luật tự động hoá (ví dụ, bỏ # để bật). Thiết bị protected không bao giờ bị luật tắt.

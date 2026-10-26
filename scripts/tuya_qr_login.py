@@ -3,7 +3,9 @@
 
 Chạy trên máy Ubuntu bằng root (cần đọc gói broadcast trong LAN):
     ~/tuya-venv/bin/python ~/hubd/scripts/tuya_qr_login.py
-Ghi tuya/devices.json (chứa local key, quyền 600, chỉ bridge đọc được, đã gitignore).
+Ghi tuya/devices.json (chứa local key, quyền 600, chỉ bridge đọc được, đã gitignore), kèm `mapping`
+(dp -> code, kiểu, scale theo định dạng `tinytuya wizard`) để gen_config.py tách kênh và sinh số đo.
+Thêm thiết bị mới trong app: chạy lại script này rồi gen_config.py.
 Không in key ra màn hình. Không lưu token đăng nhập.
 """
 import json
@@ -13,10 +15,6 @@ import struct
 import sys
 import time
 
-import qrcode
-import tinytuya
-from tuya_sharing import LoginControl, Manager
-
 # Client ID + schema công khai của tích hợp Tuya trong Home Assistant; app sẽ hiện "Home Assistant" khi quét.
 CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
 SCHEMA = "haauthorize"
@@ -24,7 +22,22 @@ OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 BRIDGE_UID = 65534  # user nobody trong container tuya-bridge
 
 
+def mapping_of(dev):
+    """local_strategy của tuya_sharing -> {"<dp>": {"code", "type", "values"}}; rỗng nếu thiết bị không hỗ trợ local."""
+    out = {}
+    for dp, s in (getattr(dev, "local_strategy", None) or {}).items():
+        c = s.get("config_item") or {}
+        try:
+            values = json.loads(c.get("valueDesc") or "{}")
+        except ValueError:
+            values = {}
+        out[str(dp)] = {"code": s.get("status_code"), "type": c.get("valueType"), "values": values}
+    return out
+
+
 def login(user_code):
+    import qrcode
+    from tuya_sharing import LoginControl
     lc = LoginControl()
     r = lc.qr_code(CLIENT_ID, SCHEMA, user_code)
     if not r.get("success"):
@@ -47,6 +60,7 @@ def lan_broadcasts(seconds=20):
 
     Đọc qua raw socket nên vẫn thấy gói khi ufw chặn các cổng này.
     """
+    import tinytuya
     s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800))
     s.settimeout(1)
     found, end = {}, time.time() + seconds
@@ -81,6 +95,7 @@ def main():
     user_code = (sys.argv[1] if len(sys.argv) > 1 else
                  input("User Code (Smart Life → Tôi → ⚙️ → Tài khoản và bảo mật): ")).strip()
     info = login(user_code)
+    from tuya_sharing import Manager
     m = Manager(CLIENT_ID, user_code, info["terminal_id"], info["endpoint"], info)
     m.update_device_cache()
     print("Nghe broadcast trong LAN 20 giây để lấy IP...")
@@ -90,8 +105,9 @@ def main():
         l = lan.get(d.id, {})
         out.append({"id": d.id, "name": d.name, "key": d.local_key, "ip": l.get("ip", ""),
                     "version": l.get("version", ""), "category": d.category,
-                    "product_name": d.product_name, "sub": d.sub})
-        print(f"  {d.name:<30} {l.get('ip') or 'CHƯA CÓ IP':<16} v{l.get('version') or '?'}")
+                    "product_name": d.product_name, "sub": d.sub, "mapping": mapping_of(d)})
+        print(f"  {d.name:<30} {l.get('ip') or 'CHƯA CÓ IP':<16} v{l.get('version') or '?':<5} {d.category}"
+              f"{'' if out[-1]['mapping'] else ' (không có mapping: thiết bị không hỗ trợ local)'}")
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     fd = os.open(OUT, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
