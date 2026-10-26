@@ -98,7 +98,7 @@ func fieldValue(v any, scale float64) (string, bool) {
 	return "", false
 }
 
-var onRe = regexp.MustCompile(`(?i)^\s*(on|1|true)\s*$`)
+var onRe, offRe = regexp.MustCompile(`(?i)^\s*(on|1|true)\s*$`), regexp.MustCompile(`(?i)^\s*(off|0|false)\s*$`)
 
 // Ingest nhận payload từ một topic đã ánh xạ sang khoá id (entity id, "dev:<id>", "online:<id>").
 func (h *Hub) Ingest(id, payload string, now time.Time) {
@@ -123,10 +123,15 @@ func (h *Hub) Ingest(id, payload string, now time.Time) {
 		}
 	default:
 		f, err := strconv.ParseFloat(strings.TrimSpace(payload), 64)
-		if err != nil {
+		switch {
+		case err == nil:
+			v, gap = f, 30*time.Second
+		case onRe.MatchString(payload): // cảm biến nhị phân (sự kiện camera, binary_sensor ESPHome): ON = 1, OFF = 0
+			v = 1
+		case offRe.MatchString(payload):
+		default:
 			return
 		}
-		v, gap = f, 30*time.Second
 	}
 	if err := h.db.Record(id, v, now, gap); err != nil {
 		log.Printf("ghi lịch sử %s: %v", id, err)
