@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 [ -f .env ] && { echo ".env đã có, giữ nguyên (xoá đi nếu muốn sinh lại)"; exit 0; }
 rnd() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20; }
 PIN=$(head -c 4 /dev/urandom | od -An -tu4 | tr -dc 0-9 | head -c 6)
-HUBD_PASS=$(rnd); TUYA_PASS=$(rnd); NODE_PASS=$(rnd)
+HUBD_PASS=$(rnd); TUYA_PASS=$(rnd); NODE_PASS=$(rnd); HIK_PASS=$(rnd)
 umask 077
 cat > .env <<ENV
 HUBD_PIN=$PIN
@@ -17,9 +17,16 @@ TUYA_MQTT_PASS=$TUYA_PASS
 # Tài khoản cho node ESPHome (dùng sau):
 NODE_MQTT_USER=node
 NODE_MQTT_PASS=$NODE_PASS
+# Camera Hikvision: điền tài khoản chỉ-xem của đầu ghi rồi bỏ # ở COMPOSE_PROFILES (README mục Camera)
+#COMPOSE_PROFILES=camera
+NVR_HOST=
+NVR_USER=
+NVR_PASS=
+HIK_MQTT_USER=hik
+HIK_MQTT_PASS=$HIK_PASS
 ENV
 : > mosquitto/passwd
-for u in hubd:$HUBD_PASS tuya:$TUYA_PASS node:$NODE_PASS; do
+for u in hubd:$HUBD_PASS tuya:$TUYA_PASS node:$NODE_PASS hik:$HIK_PASS; do
   docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2 mosquitto_passwd -b /m/passwd "${u%%:*}" "${u#*:}"
 done
 chmod 644 mosquitto/passwd   # container mosquitto đọc bằng user khác

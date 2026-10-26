@@ -21,6 +21,9 @@ services:
       HUBD_PIN: ${HUBD_PIN}
       HUBD_MQTT_USER: ${HUBD_MQTT_USER}
       HUBD_MQTT_PASS: ${HUBD_MQTT_PASS}
+      NVR_HOST: ${NVR_HOST:-}   # camera: ảnh chụp ISAPI đi qua hubd (camera.go)
+      NVR_USER: ${NVR_USER:-}
+      NVR_PASS: ${NVR_PASS:-}
     volumes:
       - ./config.yaml:/data/config.yaml:ro
       - hubd-db:/db
@@ -41,6 +44,37 @@ services:
       TUYA_DIR: /tuya
     volumes:
       - ./tuya:/tuya:ro   # devices.json (+ overrides.json) — chứa local key, KHÔNG commit
+
+  # Camera Hikvision (mục 15.1). Chỉ chạy khi .env có COMPOSE_PROFILES=camera và NVR_HOST/NVR_USER/NVR_PASS
+  # (tài khoản đầu ghi chỉ có quyền xem). Lõi không phụ thuộc hai dịch vụ này.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    container_name: hub-go2rtc
+    restart: unless-stopped
+    profiles: [camera]
+    environment:
+      NVR_HOST: ${NVR_HOST:-}
+      NVR_USER: ${NVR_USER:-}
+      NVR_PASS: ${NVR_PASS:-}
+    volumes:
+      - ./go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+    ports:   # chỉ cổng media WebRTC; API 1984 không mở, hubd gọi qua mạng Docker
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+
+  hikbridge:
+    build: { context: ., dockerfile: hikbridge/Dockerfile }
+    container_name: hikbridge
+    restart: unless-stopped
+    profiles: [camera]
+    depends_on: [mosquitto]
+    environment:
+      NVR_HOST: ${NVR_HOST:-}
+      NVR_USER: ${NVR_USER:-}
+      NVR_PASS: ${NVR_PASS:-}
+      MQTT_HOST: mosquitto
+      MQTT_USER: ${HIK_MQTT_USER:-hik}
+      MQTT_PASS: ${HIK_MQTT_PASS:-}
 
 volumes:
   mosquitto-data:
