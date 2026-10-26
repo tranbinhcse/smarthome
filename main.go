@@ -138,7 +138,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mux.HandleFunc("POST /api/cmd", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Device, To string }
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil ||
-			(body.To != "on" && body.To != "off") || !hub.Command(body.Device, body.To) {
+			!hub.Command(body.Device, body.To) { // to: on|off, hoặc mã nút hồng ngoại (ir.go)
 			http.Error(w, "lệnh không hợp lệ", 400)
 			return
 		}

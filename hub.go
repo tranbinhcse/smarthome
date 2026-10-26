@@ -112,7 +112,7 @@ func (h *Hub) Ingest(id, payload string, now time.Time) {
 	var v float64
 	var gap time.Duration
 	switch {
-	case strings.HasPrefix(id, "online:"):
+	case strings.HasPrefix(id, "online:"), strings.HasPrefix(id, "x:"): // x: trạng thái giả định của hồng ngoại, không vào lịch sử
 		return
 	case strings.HasPrefix(id, "dev:"):
 		if onRe.MatchString(payload) {
@@ -146,19 +146,16 @@ func (h *Hub) run(acts []Action) {
 			log.Printf("luật: chặn tắt thiết bị bảo vệ %s", d.ID)
 		default:
 			log.Printf("luật: %s -> %s", d.ID, a.To)
-			h.publish(d.CommandTopic, d.payload(a.To))
+			h.send(d, a.To)
 		}
 	}
 }
 
-// Command dùng cho người bấm nút (đã qua đăng nhập). Trả false nếu thiết bị không tồn tại.
+// Command dùng cho người bấm nút (đã qua đăng nhập): on/off, hoặc mã nút với thiết bị hồng ngoại.
+// Trả false nếu thiết bị không tồn tại hoặc lệnh không hợp lệ.
 func (h *Hub) Command(dev, to string) bool {
 	d, ok := h.devByID[dev]
-	if !ok || d.CommandTopic == "" {
-		return false
-	}
-	h.publish(d.CommandTopic, d.payload(to))
-	return true
+	return ok && d.CommandTopic != "" && h.send(d, to)
 }
 
 func (h *Hub) Snapshot() map[string]string {
