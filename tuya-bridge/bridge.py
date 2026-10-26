@@ -22,6 +22,8 @@ log = logging.getLogger("tuya-bridge")
 
 HEARTBEAT = 9      # giây giữa các heartbeat giữ kết nối
 RETRY_MAX = 60     # trần thời gian chờ giữa các lần kết nối lại
+RECV_TIMEOUT = 0.5  # giây chờ tin từ thiết bị mỗi vòng: lệnh mới không phải đợi lâu hơn mức này
+CONN_TIMEOUT = 5    # timeout mặc định của tinytuya, giữ cho gửi lệnh / heartbeat / kết nối lại
 RELOAD = 15        # giây giữa các lần kiểm tra file cấu hình đổi
 
 
@@ -148,9 +150,13 @@ class DeviceWorker(threading.Thread):
             except queue.Empty:
                 pass
             if time.time() - last_hb >= HEARTBEAT:
-                d.heartbeat(nowait=False)
+                d.heartbeat(nowait=True)  # không chờ phản hồi: vòng receive() đọc nó, lệnh mới không bị kẹt
                 last_hb = time.time()
-            r = d.receive()
+            d.set_socketTimeout(RECV_TIMEOUT)
+            try:
+                r = d.receive()
+            finally:
+                d.set_socketTimeout(CONN_TIMEOUT)
             if isinstance(r, dict):
                 if r.get("Error"):
                     raise ConnectionError(r["Error"])

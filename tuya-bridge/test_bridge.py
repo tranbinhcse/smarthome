@@ -19,6 +19,27 @@ class FakeDev:
         time.sleep(0.01)
         return None
     def close(self): self.closed = True
+    def set_socketTimeout(self, s): self.timeout = s
+
+
+class SlowRecvDev(FakeDev):
+    """Giống tinytuya: receive() khi thiết bị im lặng chặn đủ timeout socket (mặc định 5s) rồi trả None."""
+    timeout = 5
+    def receive(self):
+        time.sleep(self.timeout)
+        return None
+    def set_value(self, k, v):
+        self.set_timeout = self.timeout
+        return super().set_value(k, v)
+
+
+class SlowHbDev(SlowRecvDev):
+    """heartbeat(nowait=False) chờ phản hồi tới hết timeout, như khi thiết bị trả lời chậm."""
+    hb = 0
+    def heartbeat(self, nowait=False):
+        self.hb += 1
+        if not nowait:
+            time.sleep(self.timeout)
 
 
 class Pub:
@@ -127,6 +148,31 @@ class T(unittest.TestCase):
         b.on_message(None, None, M())
         self.assertTrue(wait(lambda: fake.dps["1"] is True))
         for w in b.workers.values(): w.stop()
+
+
+    def test_cmd_applied_fast_while_device_idle(self):
+        # Lệnh từ dashboard không được nằm chờ hết timeout của receive() (trước đây trễ tới ~5s).
+        fake = SlowRecvDev()
+        w, pub = self.run_worker(fake)
+        self.assertTrue(wait(lambda: pub.has("tuya/a1/state", "OFF")))
+        time.sleep(0.2)  # để luồng đang nằm trong receive()
+        t0 = time.time()
+        w.send(b"ON")
+        self.assertTrue(wait(lambda: fake.dps["1"] is True, 1.5), "lệnh phải chạy trong 1,5s")
+        self.assertLess(time.time() - t0, 1.5)
+        self.assertEqual(fake.set_timeout, 5, "gửi lệnh/heartbeat/kết nối lại vẫn dùng timeout 5s")
+
+
+    def test_cmd_not_blocked_by_heartbeat(self):
+        # Lệnh đến đúng lúc heartbeat đang chờ phản hồi từng bị trễ tới ~5s.
+        old = bridge.HEARTBEAT
+        bridge.HEARTBEAT = 0.3
+        self.addCleanup(setattr, bridge, "HEARTBEAT", old)
+        fake = SlowHbDev()
+        w, pub = self.run_worker(fake)
+        self.assertTrue(wait(lambda: fake.hb >= 1, 3))
+        w.send(b"ON")
+        self.assertTrue(wait(lambda: fake.dps["1"] is True, 1.5), "lệnh không được chờ heartbeat")
 
 
 if __name__ == "__main__":
