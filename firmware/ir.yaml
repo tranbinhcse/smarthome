@@ -61,6 +61,7 @@ mqtt:
             auto call = id(ac).make_call();
             const std::string &c = x;
             const bool off = id(ac).mode == climate::CLIMATE_MODE_OFF;
+            const bool power = c == "on" || c == "ON" || c == "off" || c == "OFF";
             if (c == "on" || c == "ON") {
               call.set_mode(id(ac_last_mode));
             } else if (c == "off" || c == "OFF") {
@@ -91,8 +92,9 @@ mqtt:
               ESP_LOGW("ir", "Mã máy lạnh không hỗ trợ: %s", c.c_str());
               return;
             }
-            if (off && c != "on" && c != "ON") {
-              // máy đang tắt: chỉ nhớ cài đặt, không phát (máy kêu bíp giữa đêm); lần bật sau phát kèm cài đặt này
+            if (off && !power) {
+              // máy đang tắt: chỉ nhớ cài đặt, không phát (máy kêu bíp giữa đêm); lần bật sau phát kèm cài đặt này.
+              // on/off luôn phát: node vừa khởi động lại có thể tưởng máy đang tắt, luật cắt tải vẫn phải tắt được.
               auto *a = id(ac);
               if (call.get_target_temperature().has_value()) a->target_temperature = *call.get_target_temperature();
               if (call.get_fan_mode().has_value()) a->fan_mode = *call.get_fan_mode();
