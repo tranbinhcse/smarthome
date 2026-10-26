@@ -50,8 +50,10 @@ type Device struct {
 	Zone         string `yaml:"zone" json:"zone"`
 	Kind         string `yaml:"kind" json:"kind"`
 	Protected    bool   `yaml:"protected" json:"protected"`
+	Group        string `yaml:"group" json:"group,omitempty"` // gom nhiều lỗ của một ổ cắm thành một thẻ
 	CommandTopic string `yaml:"command_topic" json:"-"`
 	StateTopic   string `yaml:"state_topic" json:"-"`
+	Field        string `yaml:"field" json:"-"` // khoá trong JSON của state_topic (ổ nhiều lỗ đọc chung dps)
 	OnlineTopic  string `yaml:"online_topic" json:"-"`
 	On           string `yaml:"on" json:"-"`
 	Off          string `yaml:"off" json:"-"`

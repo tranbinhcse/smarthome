@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,5 +64,27 @@ func TestStaticNoCache(t *testing.T) {
 		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" {
 			t.Errorf("%s: code=%d Cache-Control=%q, muốn 200 + no-cache", u, w.Code, w.Header().Get("Cache-Control"))
 		}
+	}
+}
+
+// Ổ cắm nhiều lỗ: mỗi lỗ là một thiết bị đọc chung topic dps, mỗi lỗ một khoá; group gom lại trên giao diện.
+func TestDeviceStateFieldFromSharedDps(t *testing.T) {
+	cfg := Config{Devices: []Device{
+		{ID: "oc1", Group: "Ổ cắm quầy", StateTopic: "tuya/oc/dps", Field: "1"},
+		{ID: "oc2", Group: "Ổ cắm quầy", StateTopic: "tuya/oc/dps", Field: "2"},
+		{ID: "den", StateTopic: "tuya/den/state"},
+	}}
+	h := NewHub(cfg, newDB(t), func(string, string) {})
+	now := time.Now()
+	h.Handle("tuya/oc/dps", `{"1": true, "2": false}`, now)
+	h.Handle("tuya/den/state", "ON", now)
+	s := h.Snapshot()
+	for k, v := range map[string]string{"dev:oc1": "1", "dev:oc2": "0", "dev:den": "ON"} {
+		if s[k] != v {
+			t.Errorf("%s = %q, muốn %q", k, s[k], v)
+		}
+	}
+	if b, _ := json.Marshal(cfg.Devices[0]); !strings.Contains(string(b), `"group":"Ổ cắm quầy"`) {
+		t.Errorf("thiếu group trong JSON gửi giao diện: %s", b)
 	}
 }

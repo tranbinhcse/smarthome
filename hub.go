@@ -39,7 +39,7 @@ func NewHub(cfg Config, db *DB, publish func(topic, payload string)) *Hub {
 	}
 	for _, d := range cfg.Devices {
 		h.devByID[d.ID] = d
-		add(d.StateTopic, route{id: "dev:" + d.ID})
+		add(d.StateTopic, route{id: "dev:" + d.ID, field: d.Field})
 		add(d.OnlineTopic, route{id: "online:" + d.ID})
 	}
 	return h
