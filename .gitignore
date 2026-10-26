@@ -14,3 +14,7 @@ __pycache__/
 *.db
 *.db-*
 /hubd
+
+# ảnh nền gốc (PNG nặng), chỉ giữ bản .webp trong repo
+web/images/*.png
+.DS_Store
