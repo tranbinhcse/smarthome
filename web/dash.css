@@ -504,7 +504,8 @@ a.m-btn { display: inline-flex; align-items: center; justify-content: center; te
 .dv.cam1 b { position: relative; padding: 10px 12px; font-size: 13.5px; font-weight: 500; }
 .dv.cam1 .dot { position: absolute; top: 12px; left: 12px; }
 .modal:has(.camsheet) { max-width: min(860px, calc(100vw - 32px)); }
-.camview { aspect-ratio: 16 / 9; border-radius: 16px; background: #1a2633 center / cover no-repeat; margin: 14px 0 12px; }
+.camview { aspect-ratio: 16 / 9; border-radius: 16px; background: #1a2633 center / cover no-repeat; margin: 14px 0 12px; overflow: hidden; }
+.camview video-rtc, .camview video { display: block; width: 100%; height: 100%; object-fit: cover; }
 /* Khí hậu trong nhà: mỗi chỉ số một ô, chấm màu theo mức */
 .clim { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .cl { min-width: 0; padding: 7px 10px; border-radius: 12px; background: var(--glass2); text-align: left; }
