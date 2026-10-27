@@ -53,6 +53,7 @@ func musicMux(t *testing.T, dirs string) (*http.ServeMux, *Hub, []*http.Cookie, 
 
 type musicState struct {
 	Playing bool
+	Source  string // spotify | file | rỗng
 	File    *struct{ ID, Title, Folder string }
 	Index   int
 	Queue   int

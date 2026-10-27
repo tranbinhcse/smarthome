@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -40,18 +41,23 @@ type musicZone struct {
 }
 
 type hubMusic struct {
-	roots []string
-	db    *DB
-	snap  *snapServer
+	dirs []string // thư mục nhạc trên hub (HUBD_MUSIC_DIRS); thêm thư mục NAS nếu đã chọn ở Cài đặt (nas.go)
+	db   *DB
+	snap *snapServer
 
-	mu      sync.Mutex
-	files   []musicFile
-	byID    map[string]musicFile
-	scanned time.Time
-	queue   []musicFile
-	index   int
-	playing bool
-	src     *musicSource
+	mu       sync.Mutex
+	files    []musicFile
+	byID     map[string]musicFile
+	rootStat []map[string]any // tình trạng từng nguồn ở lần quét gần nhất
+	scanned  time.Time
+	scanning bool
+	queue    []musicFile
+	index    int
+	playing  bool
+	src      *musicSource
+
+	spot     *hubSpotify // Spotify phát qua hub (spotifyhub.go)
+	spotHold bool        // người dùng chọn MP3 khi Spotify còn tiếng: bỏ tiếng Spotify tới khi nó ngừng hẳn
 }
 
 var macRe = regexp.MustCompile(`^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$`)
@@ -63,8 +69,9 @@ func mountMusic(mux *http.ServeMux, h *Hub, a *Auth) *hubMusic {
 	if dirs == "" {
 		dirs = "/music:/media" // thư mục nhạc của hub, USB tự gắn dưới /media
 	}
-	m := &hubMusic{roots: filepath.SplitList(dirs), db: h.db}
+	m := &hubMusic{dirs: filepath.SplitList(dirs), db: h.db}
 	m.snap = newSnapServer(func(id string) (int, bool) { z := m.zone(id); return z.Volume, z.Muted })
+	m.spot = newHubSpotify()
 	go m.run()
 	if addr := os.Getenv("HUBD_SNAP_LISTEN"); addr != "" {
 		if ln, err := net.Listen("tcp", addr); err != nil {
@@ -76,58 +83,99 @@ func mountMusic(mux *http.ServeMux, h *Hub, a *Auth) *hubMusic {
 	mux.HandleFunc("GET /api/music/library", a.Require(m.library))
 	mux.HandleFunc("GET /api/music/state", a.Require(m.state))
 	mux.HandleFunc("POST /api/music/cmd", a.Require(m.cmd))
+	mux.HandleFunc("POST /api/music/nas", a.Require(m.nasBrowse))
+	mux.HandleFunc("GET /api/spotify/hub", a.Require(m.spot.status))
+	mux.HandleFunc("POST /api/spotify/hub", a.Require(m.spot.action))
 	return m
 }
 
-// scan: mọi file .mp3 thường (không symlink) trong các thư mục nhạc, bỏ file/thư mục ẩn (._ của máy Mac, .Trashes...).
-// Gọi khi giữ m.mu; quét lại sau 30 giây để thấy USB vừa cắm.
-func (m *hubMusic) scan() {
-	if time.Since(m.scanned) < 30*time.Second {
+// musicRoot: một nguồn nhạc (thư mục trên hub, thư mục trên NAS). open trả hệ thống file của nguồn và hàm đóng.
+type musicRoot struct {
+	name string
+	open func() (fs.FS, func(), error)
+}
+
+// roots: thư mục trên hub (qua os.Root: không thoát ra ngoài, kể cả qua symlink) rồi thư mục NAS. Số thứ tự là phần đầu id file.
+func (m *hubMusic) roots() []musicRoot {
+	var rs []musicRoot
+	for _, d := range m.dirs {
+		rs = append(rs, musicRoot{d, func() (fs.FS, func(), error) {
+			r, err := os.OpenRoot(d)
+			if err != nil {
+				return nil, nil, err
+			}
+			return r.FS(), func() { r.Close() }, nil
+		}})
+	}
+	if c, ok := m.nasCfg(); ok {
+		rs = append(rs, musicRoot{"NAS //" + c.Host + "/" + c.Share + strings.TrimSuffix("/"+c.Path, "/"), func() (fs.FS, func(), error) {
+			conn, err := nasDial(c)
+			if err != nil {
+				return nil, nil, err
+			}
+			f, err := conn.fsys(c.Share, c.Path)
+			if err != nil {
+				conn.close()
+				return nil, nil, err
+			}
+			return f, conn.close, nil
+		}})
+	}
+	return rs
+}
+
+// refresh: quét lại các nguồn khi quá 30 giây (thấy USB vừa cắm) hoặc khi bị yêu cầu. Quét ngoài khoá m.mu: quét NAS đi
+// qua mạng, giữ khoá thì nhạc đang phát bị ngắt. Mọi file .mp3 thường (không symlink), bỏ file/thư mục ẩn (._, .Trashes...).
+func (m *hubMusic) refresh(force bool) {
+	m.mu.Lock()
+	if m.scanning || !force && time.Since(m.scanned) < 30*time.Second {
+		m.mu.Unlock()
 		return
 	}
-	m.files, m.byID, m.scanned = nil, map[string]musicFile{}, time.Now()
-	for i, root := range m.roots {
-		filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err != nil || len(m.files) >= musicMaxFiles {
-				return nil // thư mục không đọc được (USB vừa rút): bỏ qua
+	m.scanning = true
+	m.mu.Unlock()
+	files, byID, stat := []musicFile{}, map[string]musicFile{}, []map[string]any{}
+	for i, r := range m.roots() {
+		fsys, done, err := r.open()
+		st := map[string]any{"path": r.name, "ok": err == nil}
+		if stat = append(stat, st); err != nil {
+			st["error"] = err.Error()
+			continue
+		}
+		fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil || len(files) >= musicMaxFiles {
+				return nil // thư mục không đọc được (USB vừa rút, NAS chập chờn): bỏ qua
 			}
-			if p != root && strings.HasPrefix(d.Name(), ".") {
+			if p != "." && strings.HasPrefix(d.Name(), ".") {
 				if d.IsDir() {
-					return filepath.SkipDir
+					return fs.SkipDir
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() || !strings.EqualFold(filepath.Ext(p), ".mp3") {
+			if !d.Type().IsRegular() || !strings.EqualFold(path.Ext(p), ".mp3") {
 				return nil
 			}
-			rel, _ := filepath.Rel(root, p)
-			rel = filepath.ToSlash(rel)
-			dir := path.Dir(rel)
+			dir := path.Dir(p)
 			if dir == "." {
 				dir = ""
 			}
-			f := musicFile{ID: strconv.Itoa(i) + "/" + rel, Title: strings.TrimSuffix(path.Base(rel), path.Ext(rel)), Folder: dir}
-			m.files = append(m.files, f)
-			m.byID[f.ID] = f
+			f := musicFile{ID: strconv.Itoa(i) + "/" + p, Title: strings.TrimSuffix(path.Base(p), path.Ext(p)), Folder: dir}
+			files, byID[f.ID] = append(files, f), f
 			return nil
 		})
+		done()
 	}
+	m.mu.Lock()
+	m.files, m.byID, m.rootStat, m.scanned, m.scanning = files, byID, stat, time.Now(), false
+	m.mu.Unlock()
 }
 
 func (m *hubMusic) library(w http.ResponseWriter, r *http.Request) {
+	m.refresh(r.URL.Query().Get("rescan") == "1")
 	m.mu.Lock()
-	m.scan()
-	files := m.files
+	files, stat := m.files, m.rootStat
 	m.mu.Unlock()
-	roots := []map[string]any{}
-	for _, d := range m.roots {
-		st, err := os.Stat(d)
-		roots = append(roots, map[string]any{"path": d, "ok": err == nil && st.IsDir()})
-	}
-	if files == nil {
-		files = []musicFile{}
-	}
-	writeJSON(w, map[string]any{"files": files, "roots": roots})
+	writeJSON(w, map[string]any{"files": files, "roots": stat})
 }
 
 // zone: tên, âm lượng, tắt tiếng đã lưu của một đầu nhận (chưa lưu: 100%, bật tiếng).
@@ -166,7 +214,13 @@ func (m *hubMusic) zones() []musicZone {
 
 func (m *hubMusic) state(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
-	out := map[string]any{"playing": m.playing, "index": m.index, "queue": len(m.queue), "file": nil, "pos_ms": 0, "dur_ms": 0}
+	out := map[string]any{"playing": m.playing, "index": m.index, "queue": len(m.queue), "file": nil, "pos_ms": 0, "dur_ms": 0, "source": ""}
+	switch { // nguồn đang ra loa
+	case m.spot.active() && !m.spotHold:
+		out["source"] = "spotify"
+	case m.playing:
+		out["source"] = "file"
+	}
 	if m.index < len(m.queue) {
 		out["file"] = m.queue[m.index]
 	}
@@ -196,8 +250,14 @@ func (m *hubMusic) cmd(w http.ResponseWriter, r *http.Request) {
 		m.setZone(w, b.ID, b.Volume, b.Muted, b.Name)
 		return
 	}
+	if b.Do == "play" && len(b.Files) > 0 {
+		m.refresh(false) // thư viện để kiểm file người dùng chọn
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if b.Do == "play" && m.spot.active() {
+		m.spotHold = true // chọn MP3 khi Spotify còn phát qua hub: MP3 thắng tới khi Spotify ngừng
+	}
 	switch b.Do {
 	case "play":
 		if len(b.Files) == 0 {
@@ -211,7 +271,6 @@ func (m *hubMusic) cmd(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
-		m.scan()
 		if len(b.Files) > 2000 || b.Index < 0 || b.Index >= len(b.Files) {
 			http.Error(w, "hàng đợi tối đa 2000 bài, index trong hàng đợi", 400)
 			return
@@ -291,39 +350,42 @@ func (m *hubMusic) openCur() bool {
 }
 
 func (m *hubMusic) closeSrc() {
-	if m.src != nil {
-		m.src.f.Close()
-		m.src = nil
-	}
+	m.src = nil
 }
 
+// open: đọc cả bài vào bộ nhớ (MP3 vài MB) rồi giải mã: file trên NAS đọc qua mạng, đọc dần thì mạng chập chờn làm ngắt tiếng.
+// ponytail: mở bài kế tiếp khi giữ m.mu nên đổi bài trên NAS có thể lặng một nhịp; cần thì đọc trước bài kế ở goroutine riêng.
 func (m *hubMusic) open(f musicFile) (*musicSource, error) {
 	i, rel, _ := strings.Cut(f.ID, "/")
 	n, err := strconv.Atoi(i)
-	if err != nil || n < 0 || n >= len(m.roots) {
-		return nil, errors.New("thư mục nhạc không có")
+	rs := m.roots()
+	if err != nil || n < 0 || n >= len(rs) {
+		return nil, errors.New("nguồn nhạc không có")
 	}
-	root, err := os.OpenRoot(m.roots[n]) // không đi ra ngoài thư mục nhạc, kể cả qua symlink
+	fsys, done, err := rs[n].open()
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
-	file, err := root.Open(rel)
+	defer done()
+	file, err := fsys.Open(rel)
 	if err != nil {
 		return nil, err
 	}
-	dec, err := mp3.NewDecoder(file)
+	b, err := io.ReadAll(io.LimitReader(file, 200<<20))
+	file.Close()
 	if err != nil {
-		file.Close()
 		return nil, err
 	}
-	return &musicSource{f: file, dec: dec, step: float64(dec.SampleRate()) / snapRate,
+	dec, err := mp3.NewDecoder(bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	return &musicSource{dec: dec, step: float64(dec.SampleRate()) / snapRate,
 		total: dec.Length() / 4 * snapRate / int64(dec.SampleRate())}, nil
 }
 
 // musicSource: một bài đang phát. go-mp3 trả PCM 16 bit stereo ở tần số của file; đổi về snapRate bằng nội suy tuyến tính.
 type musicSource struct {
-	f             *os.File
 	dec           *mp3.Decoder
 	buf           []byte  // PCM gốc chưa dùng hết
 	pos, step     float64 // vị trí đọc (khung gốc, tính từ buf[0]); số khung gốc mỗi khung ra
@@ -361,8 +423,16 @@ func (s *musicSource) read(out []byte) int {
 
 // chunk: 20 ms nhạc kế tiếp; hết bài thì sang bài sau trong hàng đợi, hết hàng đợi thì dừng (phần thiếu là im lặng).
 func (m *hubMusic) chunk() ([]byte, bool) {
+	sp := m.spot.take()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	switch {
+	case sp != nil && !m.spotHold: // Spotify phát trên "Hub Center": ra mọi khu, nhạc MP3 dừng
+		m.playing = false
+		return sp, true
+	case sp == nil && m.spotHold && !m.spot.active():
+		m.spotHold = false
+	}
 	if !m.playing || m.src == nil && !m.openCur() {
 		return nil, false
 	}
