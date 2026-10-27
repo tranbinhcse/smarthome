@@ -161,13 +161,23 @@ Bật lần đầu:
 3. Dashboard → Cài đặt → Spotify: dán Client ID → **Kết nối Spotify** → đồng ý trên trang Spotify. Trang trả về báo "Đã kết nối Spotify"; quay lại Hub Center.
 4. Đặt tên đầu thu Spotify Connect chứa tên hoặc id khu trong `config.yaml` (vd. "Khu cafe", "cafe", "Phòng ngủ 1") để trình phát trên trang phòng tự nhận đầu thu của phòng đó.
 
+**Trình phát đầy đủ:** mở thanh nhạc trên dashboard rồi chạm đĩa hoặc tên bài. Bảng có bìa lớn, tiến độ (kéo để tua), trộn bài, trước/dừng/sau, âm lượng, nơi phát; ô tìm (bài hát, playlist, album, nghệ sĩ), playlist của tài khoản, bài đã thích, hàng đợi (nút + ở mỗi bài để thêm). Chạm một bài để phát; chạm playlist/album để xem bài rồi phát từ bài được chọn; chạm nghệ sĩ để phát nhạc của nghệ sĩ đó. Spotify chỉ cho xem bài của playlist do mình tạo hoặc cùng sửa; playlist khác (vd. của Spotify) vẫn phát được cả danh sách.
+
+**Kết nối từ trước bản này thì phải bấm "Kết nối lại"** (Cài đặt → Spotify) để cấp thêm quyền `playlist-read-private`, `playlist-read-collaborative`, `user-library-read`. Hub so scope Spotify đã cấp với scope cần; thiếu thì Cài đặt và bảng trình phát hiện gợi ý. Phát, dừng, chọn thiết bị vẫn chạy khi chưa kết nối lại.
+
 | API (sau PIN) | |
 |---|---|
 | `POST /api/spotify/login` | `{url}` trang đồng ý của Spotify (PKCE S256, `state` dùng một lần, hết hạn 10 phút) |
 | `GET /api/spotify/callback` | Spotify trả về đây (không cần cookie: `state` xác thực), hub đổi mã lấy token |
 | `GET /api/spotify/player` | `{connected, playing, track, artist, art, device}` |
 | `GET /api/spotify/devices` | `{devices: [{id, name, type, is_active, volume_percent, supports_volume}]}` |
-| `POST /api/spotify/cmd` `{do, device?, volume?}` | `do`: `play`, `pause`, `next`, `prev`, `volume` (0–100), `transfer` (cần `device`). 403 khi cần Premium, 409 khi chưa kết nối hoặc chưa có thiết bị đang mở |
+| `POST /api/spotify/cmd` `{do, device?, ...}` | `do`: `play` (tuỳ chọn `context` = uri playlist/album/nghệ sĩ, `offset` = uri bài bắt đầu (chỉ playlist/album), hoặc `uris` = tối đa 50 bài), `pause`, `next`, `prev`, `volume` (`volume` 0–100), `transfer` (cần `device`), `queue` (`uri` bài), `seek` (`position_ms`), `shuffle` (`state`). 403 khi cần Premium hoặc thiếu quyền, 409 khi chưa kết nối hoặc chưa có thiết bị đang mở |
+| `GET /api/spotify/search?q=` | `{tracks, playlists, albums, artists}`, tối đa 10 mỗi loại |
+| `GET /api/spotify/playlists` | `{playlists}`: 50 playlist đầu của tài khoản |
+| `GET /api/spotify/tracks?of=` | `{tracks}`: 50 bài đầu của `spotify:playlist:<id>`, `spotify:album:<id>` hoặc `liked` (bài đã thích) |
+| `GET /api/spotify/queue` | `{queue}`: 20 bài kế tiếp |
+
+Mỗi mục trong danh sách chỉ gồm `{uri, name, sub, art, ms, total}` (sub = nghệ sĩ hoặc chủ playlist); `/api/spotify/player` có thêm `uri`, `context`, `progress_ms`, `duration_ms`, `shuffle`, `reconnect`.
 
 Ngắt kết nối: nút **Ngắt kết nối** trong Cài đặt (xoá refresh token ở hub). Muốn chắc chắn thu hồi quyền: spotify.com → Tài khoản → Ứng dụng → gỡ app.
 
