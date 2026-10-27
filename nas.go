@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -78,20 +80,46 @@ func (c *smbConn) close() {
 	c.tcp.Close()
 }
 
-// nasCfg: thư mục NAS đã chọn ở Cài đặt (đủ địa chỉ và chia sẻ thì mới là một nguồn nhạc).
-func (m *hubMusic) nasCfg() (nasCfg, bool) {
+// nasBind: dấu ràng buộc mật khẩu đã lưu với đúng máy và tài khoản lúc lưu (lệnh save). Đổi địa chỉ hay tài khoản mà không
+// nhập lại mật khẩu (vd. qua API cấu hình chung) thì dấu không khớp và hub không gửi mật khẩu cũ tới máy mới: NTLM gửi phản
+// hồi bẻ được ngoại tuyến. Không biết mật khẩu thì không tạo được dấu cho máy khác. Khoá *_secret: trình duyệt không thấy.
+func nasBind(host, user, pass string) string {
+	s := sha256.Sum256([]byte(strings.ToLower(host) + "\x00" + user + "\x00" + pass))
+	return hex.EncodeToString(s[:])
+}
+
+// nasCfg: thư mục NAS đã chọn ở Cài đặt. configured = đủ địa chỉ và chia sẻ (là một nguồn nhạc); trusted = mật khẩu đã lưu
+// đúng cho địa chỉ và tài khoản này (dấu nasBind khớp).
+func (m *hubMusic) nasCfg() (c nasCfg, configured, trusted bool) {
 	s := m.db.Setting("music")
 	str := func(k string) string { v, _ := s[k].(string); return strings.TrimSpace(v) }
-	c := nasCfg{Host: str("nas_host"), User: str("nas_user"), Pass: str("nas_pass"), Share: str("nas_share"), Path: strings.Trim(str("nas_path"), "/")}
-	return c, nasHostRe.MatchString(c.Host) && nasShareRe.MatchString(c.Share) && (c.Path == "" || fs.ValidPath(c.Path))
+	c = nasCfg{Host: str("nas_host"), User: str("nas_user"), Pass: str("nas_pass"), Share: str("nas_share"), Path: strings.Trim(str("nas_path"), "/")}
+	configured = nasHostRe.MatchString(c.Host) && nasShareRe.MatchString(c.Share) && (c.Path == "" || fs.ValidPath(c.Path))
+	return c, configured, str("nas_bind_secret") != "" && str("nas_bind_secret") == nasBind(c.Host, c.User, c.Pass)
+}
+
+// savedPass: mật khẩu đã lưu, chỉ khi hỏi đúng máy và tài khoản đã lưu cùng nó.
+func (m *hubMusic) savedPass(host, user string) (string, bool) {
+	c, _, trusted := m.nasCfg()
+	return c.Pass, trusted && strings.EqualFold(c.Host, host) && c.User == user
 }
 
 // nasBrowse: chọn thư mục nhạc. {host, user, pass} → {shares}; thêm share (+ path) → {dirs, mp3} trong thư mục đó.
-// pass để trống = mật khẩu đã lưu (ô mật khẩu trên Cài đặt chỉ hiện "đã lưu", không có giá trị).
+// {do: save, host, user, pass, share, path} lưu thư mục đã chọn; {do: unset} bỏ. pass để trống = mật khẩu đã lưu, chỉ khi
+// đúng máy và tài khoản đã lưu (ô mật khẩu trên Cài đặt chỉ hiện "đã lưu", không có giá trị).
 func (m *hubMusic) nasBrowse(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Host, User, Pass, Share, Path string }
+	var b struct{ Do, Host, User, Pass, Share, Path string }
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b) != nil {
 		http.Error(w, "cần JSON {host, user, pass, share, path}", 400)
+		return
+	}
+	if b.Do == "unset" {
+		if err := m.db.PutSetting("music", map[string]any{"nas_share": nil, "nas_path": nil}); err != nil {
+			http.Error(w, "không lưu được", 500)
+			return
+		}
+		m.refresh(true)
+		w.WriteHeader(204)
 		return
 	}
 	if !nasHostRe.MatchString(b.Host) || b.Share != "" && !nasShareRe.MatchString(b.Share) || b.Path != "" && (!fs.ValidPath(b.Path) || b.Share == "") ||
@@ -100,7 +128,27 @@ func (m *hubMusic) nasBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if b.Pass == "" {
-		b.Pass, _ = m.db.Setting("music")["nas_pass"].(string)
+		p, ok := m.savedPass(b.Host, b.User)
+		if !ok {
+			http.Error(w, "Nhập mật khẩu NAS (mật khẩu đã lưu chỉ dùng cho đúng địa chỉ và tài khoản lúc lưu)", 400)
+			return
+		}
+		b.Pass = p
+	}
+	if b.Do == "save" {
+		if b.Share == "" {
+			http.Error(w, "chọn chia sẻ trên NAS", 400)
+			return
+		}
+		err := m.db.PutSetting("music", map[string]any{"nas_host": b.Host, "nas_user": b.User, "nas_pass": b.Pass, "nas_share": b.Share,
+			"nas_path": b.Path, "nas_bind_secret": nasBind(b.Host, b.User, b.Pass)})
+		if err != nil {
+			http.Error(w, "không lưu được", 500)
+			return
+		}
+		m.refresh(true)
+		w.WriteHeader(204)
+		return
 	}
 	conn, err := nasDial(nasCfg{Host: b.Host, User: b.User, Pass: b.Pass})
 	if err != nil {

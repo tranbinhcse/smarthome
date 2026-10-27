@@ -64,8 +64,12 @@ func TestNASBrowse(t *testing.T) {
 	if w := call(mux, "POST", "/api/music/nas", `{"host":"nas.local"}`, ""); w.Code != 401 {
 		t.Fatalf("không có PIN: code=%d", w.Code)
 	}
-	if w := call(mux, "PUT", "/api/settings/music", `{"nas_host":"nas.local","nas_user":"bình","nas_pass":"mk-bi-mat"}`, "", ck...); w.Code != 204 {
-		t.Fatalf("lưu cấu hình NAS: %d", w.Code)
+	// mật khẩu trống mà chưa lưu gì: không nối (không có gì để dùng)
+	if w := call(mux, "POST", "/api/music/nas", `{"host":"nas.local","user":"bình","pass":""}`, "", ck...); w.Code != 400 || len(*seen) != 0 {
+		t.Fatalf("chưa lưu mật khẩu: code=%d nối %d lần", w.Code, len(*seen))
+	}
+	if w := call(mux, "POST", "/api/music/nas", `{"do":"save","host":"nas.local","user":"bình","pass":"mk-bi-mat","share":"Music","path":""}`, "", ck...); w.Code != 204 {
+		t.Fatalf("lưu thư mục NAS: %d %s", w.Code, w.Body)
 	}
 	w := call(mux, "POST", "/api/music/nas", `{"host":"nas.local","user":"bình","pass":""}`, "", ck...)
 	var r struct {
@@ -94,6 +98,12 @@ func TestNASBrowse(t *testing.T) {
 		t.Fatalf("thư mục nhạc: code=%d %s", w.Code, w.Body)
 	}
 	n := len(*seen)
+	// mật khẩu đã lưu chỉ dùng cho đúng máy và tài khoản lúc lưu: địa chỉ khác (máy lạ do người có PIN trỏ tới) phải nhập lại
+	for _, b := range []string{`{"host":"evil.local","user":"bình"}`, `{"host":"nas.local","user":"khac"}`, `{"do":"save","host":"evil.local","user":"bình","share":"Music"}`} {
+		if w := call(mux, "POST", "/api/music/nas", b, "", ck...); w.Code != 400 {
+			t.Errorf("%s phải đòi nhập mật khẩu: code=%d", b, w.Code)
+		}
+	}
 	for _, b := range []string{`{"host":""}`, `{"host":"nas.local:139"}`, `{"host":"a;rm -rf /"}`, `{"host":"nas.local","share":"../x"}`,
 		`{"host":"nas.local","share":"Music","path":"../.."}`, `{"host":"nas.local","share":"Music","path":"/etc"}`} {
 		if w := call(mux, "POST", "/api/music/nas", b, "", ck...); w.Code != 400 {
@@ -103,13 +113,27 @@ func TestNASBrowse(t *testing.T) {
 	if len(*seen) != n {
 		t.Fatalf("yêu cầu sai vẫn nối tới NAS: %v", (*seen)[n:])
 	}
+	// đổi địa chỉ qua API cấu hình chung (không qua lệnh lưu, không nhập lại mật khẩu): thư viện báo lỗi, không gửi mật khẩu cũ đi
+	call(mux, "PUT", "/api/settings/music", `{"nas_host":"evil.local"}`, "", ck...)
+	w = call(mux, "GET", "/api/music/library?rescan=1", "", "", ck...)
+	for _, c := range (*seen)[n:] {
+		if c.Pass == "mk-bi-mat" {
+			t.Fatalf("mật khẩu NAS đã lưu bị gửi tới %s", c.Host)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "mật khẩu NAS") {
+		t.Fatalf("thư viện phải báo cần lưu lại mật khẩu NAS: %s", w.Body)
+	}
 }
 
 // Thư mục đã chọn trên NAS là một nguồn trong thư viện, phát được như file trên hub.
 func TestNASLibraryAndPlay(t *testing.T) {
 	withFakeNAS(t, false)
 	mux, _, ck, addr := musicMux(t, musicLib(t))
-	call(mux, "PUT", "/api/settings/music", `{"nas_host":"nas.local","nas_user":"bình","nas_pass":"mk","nas_share":"Music","nas_path":"Nhạc Trịnh"}`, "", ck...)
+	cmd2 := `{"do":"save","host":"nas.local","user":"bình","pass":"mk","share":"Music","path":"Nhạc Trịnh"}`
+	if w := call(mux, "POST", "/api/music/nas", cmd2, "", ck...); w.Code != 204 {
+		t.Fatalf("lưu thư mục NAS: %d %s", w.Code, w.Body)
+	}
 	w := call(mux, "GET", "/api/music/library?rescan=1", "", "", ck...)
 	var out struct {
 		Files []struct{ ID, Title, Folder string }
@@ -139,12 +163,12 @@ func TestNASLibraryAndPlay(t *testing.T) {
 func TestNASDown(t *testing.T) {
 	withFakeNAS(t, true)
 	mux, _, ck, _ := musicMux(t, musicLib(t))
-	call(mux, "PUT", "/api/settings/music", `{"nas_host":"192.168.1.50","nas_user":"u","nas_pass":"mk","nas_share":"Music","nas_path":""}`, "", ck...)
+	call(mux, "POST", "/api/music/nas", `{"do":"save","host":"192.168.1.50","user":"u","pass":"mk","share":"Music","path":""}`, "", ck...)
 	w := call(mux, "GET", "/api/music/library?rescan=1", "", "", ck...)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"0/tone48000.mp3"`) || !strings.Contains(w.Body.String(), "connection refused") || strings.Contains(w.Body.String(), `"mk"`) {
 		t.Fatalf("NAS tắt: %s", w.Body)
 	}
-	if w := call(mux, "POST", "/api/music/nas", `{"host":"192.168.1.50","user":"u"}`, "", ck...); w.Code != 502 {
+	if w := call(mux, "POST", "/api/music/nas", `{"host":"192.168.1.50","user":"u","pass":"mk"}`, "", ck...); w.Code != 502 {
 		t.Fatalf("duyệt NAS tắt: code=%d", w.Code)
 	}
 }

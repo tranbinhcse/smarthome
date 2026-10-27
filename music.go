@@ -107,8 +107,11 @@ func (m *hubMusic) roots() []musicRoot {
 			return r.FS(), func() { r.Close() }, nil
 		}})
 	}
-	if c, ok := m.nasCfg(); ok {
+	if c, ok, trusted := m.nasCfg(); ok {
 		rs = append(rs, musicRoot{"NAS //" + c.Host + "/" + c.Share + strings.TrimSuffix("/"+c.Path, "/"), func() (fs.FS, func(), error) {
+			if !trusted { // địa chỉ/tài khoản đổi mà chưa nhập lại mật khẩu: không gửi mật khẩu cũ tới máy mới
+				return nil, nil, errors.New("cần nhập lại mật khẩu NAS ở Cài đặt cho địa chỉ này")
+			}
 			conn, err := nasDial(c)
 			if err != nil {
 				return nil, nil, err
