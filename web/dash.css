@@ -584,8 +584,8 @@ a.m-btn { display: inline-flex; align-items: center; justify-content: center; te
   .bname, .clock { display: none; }
   .topr { gap: 6px; } .rbtn { width: 40px; height: 40px; }
   /* ảnh nhà chỉ là nền (nhãn tầng/phòng ẩn trên màn hẹp): bỏ khoảng trống, vào phòng qua tab tầng và widget Các phòng */
-  .stage:not(.energy):not(.camera) { display: none; }
-  .stage.energy, .stage.camera { height: auto; }
+  .stage:not(.energy):not(.camera):not(.settings) { display: none; }
+  .stage.energy, .stage.camera, .stage.settings { height: auto; }
   /* camera: tối đa 2 cột, cuộn cả trang; ô phóng to giữ tỉ lệ 16:9 */
   .v-camera .stage { grid-row: auto; }
   .camwall { grid-template-columns: repeat(min(var(--cols), 2), minmax(0, 1fr)); overflow: visible; }
@@ -641,3 +641,109 @@ button.sub { text-align: left; text-decoration: underline dotted; text-underline
 #mic.ear { box-shadow: inset 0 0 0 2px var(--green); }   /* đang nghe gọi tên */
 .setrow input[type=checkbox] { flex: none; width: 22px; height: 22px; accent-color: var(--amber); }
 [data-setup] ol.note { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+
+/* ---------- Trang Cài đặt (settings.js) theo ảnh mẫu 27/10: menu mục | danh sách | chi tiết ---------- */
+.v-settings .greet, .v-settings .side, .v-settings .bottom { display: none; }
+.v-settings .stage { grid-column: 1 / -1; grid-row: 1 / -1; place-items: stretch; grid-template-rows: minmax(0, 1fr); }
+.setpage { --acc: #2f7cf6; display: grid; grid-template-columns: 270px minmax(0, 1fr) minmax(360px, 34%); gap: 14px; height: 100%; min-height: 0; }
+.setnav, .setmain, .setdetail { min-height: 0; overflow-y: auto; scrollbar-width: none; border-radius: 22px; background: rgba(12, 20, 30, .74);
+  border: 1px solid var(--line); -webkit-backdrop-filter: blur(22px); backdrop-filter: blur(22px); }
+.setnav::-webkit-scrollbar, .setmain::-webkit-scrollbar, .setdetail::-webkit-scrollbar, .setlist::-webkit-scrollbar { display: none; }
+.setnav { padding: 22px 12px; }
+.setnav h1 { margin: 0 12px; font-size: 34px; font-weight: 700; letter-spacing: -.01em; }
+.setnav > p { margin: 4px 12px 18px; color: var(--ink2); font-size: 14px; }
+.snavs { display: flex; flex-direction: column; gap: 4px; }
+.snav { display: flex; align-items: center; gap: 14px; height: 46px; padding: 0 14px; border-radius: 12px; font-size: 15px; text-align: left; transition: background .2s; }
+.snav .ic { width: 22px; height: 22px; color: var(--ink2); flex: none; }
+.snav:hover { background: rgba(255, 255, 255, .05); }
+.snav.sel { background: rgba(47, 124, 246, .3); box-shadow: inset 3px 0 0 var(--acc); }
+.snav.sel .ic { color: #fff; }
+.sgap { display: block; height: 16px; }
+.setmain { display: flex; flex-direction: column; padding: 18px; }
+.seth { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+.seth > div { flex: 1; min-width: 150px; }
+.seth h2 { margin: 0; font-size: 22px; font-weight: 600; }
+.seth small { color: var(--ink2); font-size: 14px; }
+.sic .ic { width: 26px; height: 26px; }
+.ssearch { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 14px; border-radius: 12px; background: var(--glass2); border: 1px solid var(--line); flex: 0 1 300px; min-width: 200px; }
+.ssearch input { flex: 1; min-width: 0; background: none; border: 0; color: var(--ink); font: inherit; font-size: 14px; outline: none; }
+.ssearch .ic { width: 18px; height: 18px; color: var(--ink2); }
+.ssearch:focus-within { outline: 2px solid var(--acc); outline-offset: 1px; }
+.pill.acc { background: var(--acc); color: #fff; }
+.pill.sm { height: 34px; padding: 0 12px; font-size: 13px; }
+.pill .ic { width: 18px; height: 18px; }
+.setlist { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; gap: 10px; }
+.setlist h4, .setcard h4 { margin: 10px 4px 0; font-size: 13px; font-weight: 500; color: var(--ink2); }
+/* thẻ phòng: ảnh, biểu tượng, tên + tầng, số thiết bị, từng loại */
+.rcard { display: grid; grid-template-columns: 150px auto minmax(0, 1fr) auto auto 18px; align-items: center; gap: 14px; padding: 6px 14px 6px 6px;
+  border-radius: 16px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); text-align: left; }
+.rcard.sel { border-color: var(--acc); background: rgba(47, 124, 246, .1); box-shadow: 0 0 0 1px var(--acc) inset; }
+.rthumb { height: 86px; border-radius: 12px; background: #1a2633 center / cover no-repeat; }
+.ric .ic { width: 26px; height: 26px; }
+.rname { min-width: 0; } .rname b { display: block; font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rname small, .rcount small { color: var(--ink2); font-size: 13px; }
+.rcount { display: flex; flex-direction: column; align-items: center; gap: 4px; } .rcount .ic { width: 18px; height: 18px; color: var(--ink2); }
+.rkinds { display: flex; gap: 6px; }
+.rkinds i { display: inline-flex; align-items: center; gap: 5px; height: 38px; padding: 0 10px; border-radius: 10px; background: rgba(255, 255, 255, .06); font-style: normal; }
+.rkinds .ic { width: 18px; height: 18px; } .rkinds b { font-size: 13px; font-weight: 500; }
+.chev { width: 18px; height: 18px; color: var(--ink2); flex: none; }
+/* dòng danh sách và dòng thiết bị */
+.lrow, .drow { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .04); text-align: left; }
+.lrow.sel { background: rgba(47, 124, 246, .16); box-shadow: inset 0 0 0 1px var(--acc); }
+.lrow.warn .dic { color: var(--alert); }
+.dic { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 12px; background: rgba(255, 255, 255, .06); }
+.dic .ic { width: 22px; height: 22px; }
+.dic.big { width: 56px; height: 56px; border-radius: 16px; } .dic.big .ic { width: 30px; height: 30px; }
+.dic.k-light { color: var(--amber); } .dic.k-camera { color: #7cc4ff; } .dic.k-breaker { color: #ff9f5a; } .dic.k-ac, .dic.k-fan { color: #4cc9f0; }
+.dname { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.dname b { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dname small { font-size: 13px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drow .go { width: 30px; height: 30px; display: grid; place-items: center; color: var(--ink2); flex: none; }
+.drow .go .ic { width: 18px; height: 18px; }
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2); white-space: nowrap; }
+.st.good { color: var(--green); } .st.bad { color: var(--alert); }
+.step { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .08); font-size: 13px; }
+/* chi tiết bên phải */
+.setdetail { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+.rhero { height: 170px; flex: none; border-radius: 16px; background: #1a2633 center / cover no-repeat; }
+.rtitle { margin: 0; font-size: 28px; font-weight: 700; }
+.rmeta, .rdesc { margin: -8px 0 0; color: var(--ink2); }
+.dhero { display: flex; align-items: center; gap: 14px; } .dhero > div { flex: 1; min-width: 0; }
+.dhero h2 { margin: 0; font-size: 22px; } .dhero p { margin: 2px 0 0; color: var(--ink2); }
+.setcard { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 16px; background: rgba(255, 255, 255, .035); border: 1px solid var(--line); }
+.setcard h3 { margin: 0; display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; }
+.setcard h3 .ic { width: 20px; height: 20px; } .setcard h3 small { margin-left: auto; font-size: 13px; font-weight: 400; color: var(--ink2); }
+.setcard p { margin: 0; } .setcard p.big { font-size: 17px; }
+.sch { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.setform { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.setform .kv, .setform .sf:has(textarea) { grid-column: 1 / -1; }
+.sf textarea { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass2); color: var(--ink); font: inherit; font-size: 15px; resize: vertical; }
+.sf textarea:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+.kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.kvs span { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, .04); font-size: 13px; color: var(--ink2); }
+.kvs b { font-size: 15px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.back { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; font-size: 14px; color: var(--ink2); }
+.back .ic { width: 18px; height: 18px; }
+.back.mob { display: none; }
+.setdetail .camview { position: relative; flex: none; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; background: #0b1118 center / cover no-repeat; }
+.setdetail input[type="file"] { color: var(--ink2); font-size: 14px; }
+/* màn vừa (iPad dọc): menu thành một hàng chip ở trên */
+@media (max-width: 1280px) {
+  .setpage { grid-template-columns: minmax(0, 1fr) minmax(340px, 42%); grid-template-rows: auto minmax(0, 1fr); }
+  .setnav { grid-column: 1 / -1; padding: 8px; overflow: visible; }
+  .setnav h1, .setnav > p { display: none; }
+  .snavs { flex-direction: row; overflow-x: auto; scrollbar-width: none; }
+  .snavs::-webkit-scrollbar { display: none; }
+  .snav { flex: none; height: 40px; } .sgap { display: none; }
+}
+/* màn hẹp: một cột; chọn một dòng thì chi tiết thay danh sách, có nút quay lại */
+@media (max-width: 900px) {
+  .v-settings .stage { grid-row: auto; }
+  .setpage { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; height: auto; }
+  .setmain, .setdetail { overflow: visible; }
+  .setpage.has-item .setmain, .setpage:not(.has-item) .setdetail { display: none; }
+  .back.mob { display: inline-flex; }
+  .rcard { grid-template-columns: 92px minmax(0, 1fr) 18px; } .rcard .ric, .rcard .rcount, .rcard .rkinds { display: none; }
+  .rthumb { height: 62px; }
+  .ssearch { flex-basis: 100%; }
+}
