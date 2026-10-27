@@ -1,5 +1,5 @@
 // Trợ lý giọng nói (voiced, thiết kế mục 15.2). Cần dash.js (DEMO, toast) và app.js (api).
-// Nút nói: chạm để nghe, chạm lần nữa (hoặc sau 8 giây) để gửi WAV lên /voice/ask; đọc câu trả lời.
+// Nút nói: chạm để bắt đầu hội thoại; nói xong tự gửi WAV lên /voice/ask, đọc câu trả lời rồi nghe tiếp câu kế (xem "Hội thoại").
 // Nút loa: đọc tóm tắt tình hình (/voice/brief). Cảnh báo từ /voice/events được đọc thành tiếng.
 // Nghe gọi tên (bật riêng từng màn hình ở Cài đặt → Giọng và xưng hô): micro mở liên tục, gửi từng đoạn có tiếng lên
 // /voice/ask?listen=1; voiced chỉ làm theo câu mở đầu bằng tên trợ lý ("Mây ơi, bật đèn kho"), câu khác bỏ qua.
@@ -81,54 +81,47 @@
     say.disabled = false;
   };
 
-  let rec = null;
-  btn.onclick = async () => {
-    if (rec) return rec.stop();
-    if (!navigator.mediaDevices) return toast(`Micro cần trang HTTPS: bật trong Cài đặt → HTTPS rồi mở https://${location.hostname}:8443`);
-    const ctx = new AudioContext();   // tạo ngay trong cú chạm, iOS mới cho chạy
-    let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
-    catch { ctx.close(); return toast('Chưa được phép dùng micro'); }
-    const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
-    node.onaudioprocess = e => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    src.connect(node); node.connect(ctx.destination);
-    btn.classList.add('rec'); toast('Đang nghe… chạm lần nữa để gửi');
-    const timer = setTimeout(() => rec && rec.stop(), 8000);
-    rec = {stop: async () => {
-      rec = null; clearTimeout(timer); btn.classList.remove('rec');
-      node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop());
-      const body = wav(chunks, ctx.sampleRate);
-      ctx.close();
-      btn.disabled = true; toast('Đang xử lý…');
-      try {
-        const r = await api('/voice/ask', {method: 'POST', headers: {'Content-Type': 'audio/wav', ...VH}, body});
-        if (!r.ok) throw r.status;
-        answered(await r.json());
-      } catch { toast('Trợ lý chưa sẵn sàng'); }
-      btn.disabled = false;
-    }};
+  // Micro: một bộ nghe cho cả nút nói lẫn nghe gọi tên. Đoạn có tiếng = năng lượng vượt 3 lần nền ồn (tự đo khi im), giữ
+  // ~0,25 s trước đó, hết khi im 0,7 s hoặc dài 6 s; đoạn dưới 0,4 s bỏ. Đang chờ trả lời hay đang đọc thì không nghe
+  // (khỏi nghe chính loa mình).
+  // Hội thoại: chạm nút nói, hay trợ lý vừa trả lời, thì tới FOLLOW ms sau khi trợ lý đọc xong câu kế không cần gọi tên,
+  // không cần chạm lại ("có" khi được hỏi xác nhận, "tắt nó đi"; voiced nhớ vài lượt). Im quá FOLLOW thì hết lượt: còn bật
+  // nghe gọi tên thì chờ gọi tên, không thì tắt micro. Chạm nút nói lần nữa để thôi.
+  // ponytail: ngưỡng năng lượng cố định, quán ồn/TV to mà gửi nhiều đoạn thừa thì nâng 0.01 hoặc thay bằng VAD có mô hình.
+  const EAR = 'hubd.listen', FOLLOW = 8000;
+  const wantEar = () => { try { return localStorage.getItem(EAR) === '1'; } catch (_) { return false; } };
+  let mic = null, wake = false, until = 0;
+  const talking = () => Date.now() < until;
+  const mark = () => { btn.classList.toggle('rec', !!mic && talking()); btn.classList.toggle('ear', !!mic && wake && !talking()); };
+
+  btn.onclick = () => {
+    if (mic && talking()) { until = 0; if (wake) mark(); else mic.stop(); return; }
+    until = Date.now() + FOLLOW;
+    open();
   };
 
-  // Nghe gọi tên. Đoạn có tiếng = năng lượng vượt 3 lần nền ồn (tự đo khi im), giữ ~0,25 s trước đó, hết khi im 0,7 s
-  // hoặc dài 6 s; đoạn dưới 0,4 s bỏ. Đang gửi, đang đọc, đang bấm nói thì không nghe (khỏi nghe chính loa mình).
-  // ponytail: ngưỡng năng lượng cố định, quán ồn/TV to mà gửi nhiều đoạn thừa thì nâng 0.01 hoặc thay bằng VAD có mô hình.
-  const EAR = 'hubd.listen';
-  const wantEar = () => { try { return localStorage.getItem(EAR) === '1'; } catch (_) { return false; } };
-  let earOn = null;
-  async function ear(on) {
+  function ear(on) {
     try { on ? localStorage.setItem(EAR, '1') : localStorage.removeItem(EAR); } catch (_) { /* bỏ qua */ }
-    if (!on) { earOn?.stop(); earOn = null; btn.classList.remove('ear'); return; }
-    if (earOn) return;
-    if (!navigator.mediaDevices) return toast(`Nghe gọi tên cần trang HTTPS: bật trong Cài đặt → HTTPS rồi mở https://${location.hostname}:8443`);
-    const ctx = new AudioContext();
+    wake = on;
+    if (on) open();
+    else if (!talking()) mic?.stop();
+  }
+
+  async function open() {
+    if (mic) { mark(); return toast(talking() ? 'Đang nghe…' : 'Đang nghe gọi tên'); }
+    if (!navigator.mediaDevices) { until = 0; return toast(`Micro cần trang HTTPS: bật trong Cài đặt → HTTPS rồi mở https://${location.hostname}:8443`); }
+    const ctx = new AudioContext();   // tạo ngay trong cú chạm, iOS mới cho chạy
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}}); }
-    catch { ctx.close(); return toast('Chưa được phép dùng micro'); }
+    catch { ctx.close(); until = 0; return toast('Chưa được phép dùng micro'); }
     const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(4096, 1, 1), step = 4096 / ctx.sampleRate;
-    let floor = 0.01, pre = [], seg = [], quiet = 0, busy = false, until = 0;
+    let floor = 0.01, pre = [], seg = [], quiet = 0, busy = false;
     node.onaudioprocess = e => {
       const x = new Float32Array(e.inputBuffer.getChannelData(0)), rms = Math.sqrt(x.reduce((a, v) => a + v * v, 0) / x.length);
-      if (busy || rec || !player.paused) { seg = []; return; }
+      if (busy || !player.paused) { seg = []; if (until) until = Date.now() + FOLLOW; return; }   // lượt tính từ lúc đọc xong
+      if (until && !talking()) until = 0;   // hết lượt
+      if (!seg.length && !wake && !until) return m.stop();   // không nghe gọi tên: tắt micro
+      mark();
       if (!seg.length) {
         floor = floor * 0.95 + rms * 0.05;
         pre = [...pre.slice(-2), x];
@@ -136,6 +129,7 @@
         return;
       }
       seg.push(x);
+      if (talking()) until = Date.now() + FOLLOW;   // đang nói dở thì chưa hết lượt
       quiet = rms < Math.max(floor * 2, 0.006) ? quiet + step : 0;
       const len = seg.length * step;
       if (quiet < 0.7 && len < 6) return;
@@ -144,26 +138,32 @@
     };
     async function send(chunks) {
       busy = true;
+      const talk = talking();
       const k = Math.max(1, Math.round(ctx.sampleRate / 16000)), out = [];   // hạ về ~16 kHz cho nhẹ (voiced tự đổi tần số)
       for (const c of chunks) for (let i = 0; i + k <= c.length; i += k) { let a = 0; for (let j = 0; j < k; j++) a += c[i + j]; out.push(a / k); }
-      try {   // ngay sau khi trợ lý hỏi lại ("Dạ, em đây...") thì câu kế không cần gọi tên
-        const r = await fetch(`/voice/ask${Date.now() < until ? '' : '?listen=1'}`, {method: 'POST', headers: {'Content-Type': 'audio/wav', ...VH},
+      try {   // trong lượt hội thoại không cần gọi tên; đang hội thoại mà hết phiên thì hỏi PIN (api), nghe nền thì không
+        const r = await (talk ? api : fetch)(`/voice/ask${talk ? '' : '?listen=1'}`, {method: 'POST', headers: {'Content-Type': 'audio/wav', ...VH},
           body: wav([Float32Array.from(out)], Math.round(ctx.sampleRate / k))});
         if (r.status === 401) { ear(false); toast('Nghe gọi tên đã tắt: cần nhập lại PIN'); }
         const j = r.ok ? await r.json() : {ignored: true};
-        // trợ lý vừa hỏi lại hay hỏi xác nhận: câu kế ("có", "thôi") không cần gọi tên
-        if (!j.ignored) { answered(j); until = j.awaiting || j.confirm ? Date.now() + 10000 : 0; }
+        if (j.ignored) { /* không gọi tên: bỏ qua */ }
+        else if (!j.heard?.trim()) toast(j.reply);   // tiếng ồn: không đọc, không kéo dài lượt
+        else { answered(j); if (mic === m) { until = Date.now() + FOLLOW; mark(); } }
       } catch (_) { /* voiced tạm vắng: nghe tiếp */ }
       busy = false;
     }
     src.connect(node); node.connect(ctx.destination);
     const wakeUp = () => { if (!document.hidden) ctx.resume(); };   // iPad tắt màn hình rồi mở lại
     document.addEventListener('visibilitychange', wakeUp);
-    earOn = {stop: () => { document.removeEventListener('visibilitychange', wakeUp); node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close(); }};
-    btn.classList.add('ear');
-    toast('Đang nghe gọi tên');
+    const m = mic = {stop: () => {
+      if (mic !== m) return;
+      mic = null; until = 0; mark();
+      document.removeEventListener('visibilitychange', wakeUp); node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close();
+    }};
+    mark();
+    toast(talking() ? 'Đang nghe…' : 'Đang nghe gọi tên');
   }
-  window.voiceEar = {on: () => !!earOn, set: ear};   // cho nút trong Cài đặt (setup-ai.js)
+  window.voiceEar = {on: () => wake, set: ear};   // cho nút trong Cài đặt (setup-ai.js)
 
   // WAV PCM 16-bit mono, giữ tần số gốc (voiced tự đổi về 16 kHz).
   function wav(chunks, rate) {
