@@ -181,7 +181,8 @@ devices:
   #     vol_up:   "0000 006D ..."
   #     vol_down: "0000 006D ..."
   # Camera Hikvision qua đầu ghi ở tum kỹ thuật (README mục Camera). channel = số kênh trên đầu ghi.
-  # Ánh xạ dưới đây là ĐỀ XUẤT theo dashboard mẫu, CHỜ CHỦ NHÀ XÁC NHẬN kênh nào là camera nào rồi mới bỏ #.
+  # Gán kênh trên dashboard (Cài đặt → Camera) thì hubd tự sinh thiết bị cam_ch<kênh>, không cần bỏ # ở đây.
+  # Ánh xạ dưới đây là ĐỀ XUẤT theo dashboard mẫu (cách cũ), CHỜ CHỦ NHÀ XÁC NHẬN kênh nào là camera nào.
   # - { id: cam_santruoc, name: "Camera sân trước",      zone: santruoc,   kind: camera, channel: 1,  online_topic: hik/1/online }
   # - { id: cam_cafe1,    name: "Camera cafe 1",         zone: cafe,       kind: camera, channel: 2,  online_topic: hik/2/online }
   # - { id: cam_cafe2,    name: "Camera cafe 2",         zone: cafe,       kind: camera, channel: 3,  online_topic: hik/3/online }

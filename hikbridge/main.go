@@ -5,12 +5,14 @@
 //	hik/<kênh>/online           online|offline (retained), hỏi đầu ghi mỗi 30 giây
 //	hik/bridge/status           online|offline (LWT)
 //
-// Biến môi trường: NVR_HOST, NVR_USER, NVR_PASS (tài khoản chỉ xem), MQTT_HOST, MQTT_USER, MQTT_PASS,
-// HIK_HOLD (mặc định 10s: không có tin "active" mới trong khoảng này thì về OFF).
+// Đầu ghi: hỏi hubd (HUBD_URL, HUBD_CAMERA_TOKEN) theo trang Cài đặt → Camera; đổi ở đó (MQTT hubd/settings/nvr)
+// thì thoát để Docker chạy lại và nạp. Không có token thì dùng NVR_HOST, NVR_USER, NVR_PASS (cách cũ).
+// Biến khác: MQTT_HOST, MQTT_USER, MQTT_PASS, HIK_HOLD (mặc định 10s: không có tin "active" mới thì về OFF).
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -24,10 +26,6 @@ import (
 )
 
 func main() {
-	host, user, pass := os.Getenv("NVR_HOST"), os.Getenv("NVR_USER"), os.Getenv("NVR_PASS")
-	if host == "" || user == "" {
-		log.Fatal("thiếu NVR_HOST hoặc NVR_USER trong .env")
-	}
 	hold := 10 * time.Second
 	if v, err := time.ParseDuration(os.Getenv("HIK_HOLD")); err == nil && v > 0 {
 		hold = v
@@ -40,13 +38,24 @@ func main() {
 		SetUsername(os.Getenv("MQTT_USER")).SetPassword(os.Getenv("MQTT_PASS")).
 		SetWill("hik/bridge/status", "offline", 1, true).
 		SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(3 * time.Second).
-		SetOnConnectHandler(func(c mqtt.Client) { c.Publish("hik/bridge/status", 1, true, "online") })
+		SetOnConnectHandler(func(c mqtt.Client) {
+			c.Publish("hik/bridge/status", 1, true, "online")
+			c.Subscribe("hubd/settings/nvr", 1, func(mqtt.Client, mqtt.Message) {
+				log.Print("cấu hình đầu ghi đổi: thoát để nạp lại")
+				os.Exit(0)
+			})
+		})
 	mc := mqtt.NewClient(opts)
 	mc.Connect() // SetConnectRetry: tự thử lại nền
+	conf := loadConf()
+	if !conf.On {
+		log.Print("camera đang tắt hoặc chưa có IP, tài khoản đầu ghi (trang Cài đặt → Camera); chờ hubd/settings/nvr")
+		select {}
+	}
 	tr := newTracker(hold, func(topic, payload string) { mc.Publish(topic, 1, true, payload) })
 
-	base := "http://" + host
-	tp := &isapi.Transport{User: user, Pass: pass} // dùng chung để cùng tạm ngừng khi sai mật khẩu
+	base := "http://" + conf.Host
+	tp := &isapi.Transport{User: conf.User, Pass: conf.Pass} // dùng chung để cùng tạm ngừng khi sai mật khẩu
 	go func() {
 		for now := range time.Tick(time.Second) {
 			tr.expire(now)
@@ -75,6 +84,53 @@ func main() {
 		time.Sleep(wait)
 		wait = min(wait*2, time.Minute)
 	}
+}
+
+// nvrConf: đầu ghi đang dùng, hubd trả qua /api/service/nvr (camera.go).
+type nvrConf struct {
+	On   bool   `json:"enabled"`
+	Host string `json:"host"`
+	User string `json:"user"`
+	Pass string `json:"pass"`
+}
+
+// loadConf: có HUBD_CAMERA_TOKEN thì hỏi hubd (chờ tới khi hubd trả lời), không thì NVR_* trong .env.
+func loadConf() nvrConf {
+	tok := os.Getenv("HUBD_CAMERA_TOKEN")
+	if tok == "" {
+		log.Print("HUBD_CAMERA_TOKEN trống: dùng NVR_HOST/NVR_USER/NVR_PASS trong .env, cấu hình trên dashboard không áp dụng")
+		c := nvrConf{Host: os.Getenv("NVR_HOST"), User: os.Getenv("NVR_USER"), Pass: os.Getenv("NVR_PASS")}
+		c.On = c.Host != "" && c.User != ""
+		return c
+	}
+	hub := os.Getenv("HUBD_URL")
+	if hub == "" {
+		hub = "http://hubd:8080"
+	}
+	for {
+		c, err := fetchConf(hub, tok)
+		if err == nil {
+			c.On = c.On && c.User != ""
+			return c
+		}
+		log.Printf("đọc cấu hình đầu ghi từ hubd: %v; thử lại sau 30 giây", err)
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func fetchConf(hub, tok string) (nvrConf, error) {
+	var c nvrConf
+	req, _ := http.NewRequest(http.MethodGet, hub+"/api/service/nvr", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return c, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return c, fmt.Errorf("hubd trả HTTP %d (HUBD_CAMERA_TOKEN có khớp với hubd?)", res.StatusCode)
+	}
+	return c, json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&c)
 }
 
 func channels(c *http.Client, base string) (map[string]bool, error) {

@@ -17,14 +17,15 @@ services:
     depends_on: [mosquitto]
     environment:
       HUBD_CONFIG: /data/config.yaml
-      HUBD_GEN_DIR: /gen   # thiết bị Tuya sinh sau khi quét QR, gộp vào config.yaml; file đổi thì hubd tự nạp lại
+      HUBD_GEN_DIR: /gen   # thiết bị sinh (Tuya sau khi quét QR, camera.yaml từ Cài đặt → Camera), gộp vào config.yaml; file đổi thì hubd tự nạp lại
       HUBD_DB: /db/hubd.db
       HUBD_PIN: ${HUBD_PIN}
       HUBD_MQTT_USER: ${HUBD_MQTT_USER}
       HUBD_MQTT_PASS: ${HUBD_MQTT_PASS}
-      NVR_HOST: ${NVR_HOST:-}   # camera: ảnh chụp ISAPI đi qua hubd (camera.go)
+      NVR_HOST: ${NVR_HOST:-}   # camera: cách cũ, trang Cài đặt → Camera có IP đầu ghi thì thắng (camera.go)
       NVR_USER: ${NVR_USER:-}
       NVR_PASS: ${NVR_PASS:-}
+      HUBD_CAMERA_TOKEN: ${HUBD_CAMERA_TOKEN:-}   # hikbridge đọc cấu hình đầu ghi qua hubd; trống = tắt API này
       # Trợ lý giọng nói (mục 15.2): token riêng, quyền bằng người chưa nhập PIN; trống = tắt.
       HUBD_ASSISTANT_TOKEN: ${HUBD_ASSISTANT_TOKEN:-}
       HUBD_VOICED_URL: http://voiced:8090
@@ -33,7 +34,7 @@ services:
       HUBD_TLS_KEY: ${HUBD_TLS_KEY:-}
     volumes:
       - ./config.yaml:/data/config.yaml:ro
-      - tuya-state:/gen:ro   # chỉ đọc tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh)
+      - tuya-state:/gen   # tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh); hubd chỉ ghi camera.yaml
       - hubd-db:/db
       - ./tls:/tls:ro
     ports:
@@ -58,18 +59,14 @@ services:
       - ./tuya:/tuya      # devices.json (+ overrides.json) — chứa local key, KHÔNG commit; quét QR trên dashboard ghi lại
       - tuya-state:/state # tổng kWh cộng dồn từ add_ele; tuya.yaml = cấu hình Tuya sinh cho hubd sau khi quét QR
 
-  # Camera Hikvision (mục 15.1). Chỉ chạy khi .env có COMPOSE_PROFILES=camera và NVR_HOST/NVR_USER/NVR_PASS
-  # (tài khoản đầu ghi chỉ có quyền xem). Lõi không phụ thuộc hai dịch vụ này.
+  # Camera Hikvision (mục 15.1). Chỉ chạy khi .env có COMPOSE_PROFILES=camera; đầu ghi (tài khoản chỉ có quyền xem)
+  # nhập trên dashboard: Cài đặt → Camera. Lõi không phụ thuộc hai dịch vụ này.
   go2rtc:
     image: alexxit/go2rtc:1.9.14
     container_name: hub-go2rtc
     restart: unless-stopped
     profiles: [camera]
-    environment:
-      NVR_HOST: ${NVR_HOST:-}
-      NVR_USER: ${NVR_USER:-}
-      NVR_PASS: ${NVR_PASS:-}
-    volumes:
+    volumes:   # không giữ tài khoản đầu ghi: hubd gửi nguồn RTSP mỗi lần mở luồng
       - ./go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
     ports:   # chỉ cổng media WebRTC; API 1984 không mở, hubd gọi qua mạng Docker
       - "8555:8555/tcp"
@@ -80,8 +77,10 @@ services:
     container_name: hikbridge
     restart: unless-stopped
     profiles: [camera]
-    depends_on: [mosquitto]
+    depends_on: [mosquitto, hubd]
     environment:
+      HUBD_URL: http://hubd:8080
+      HUBD_CAMERA_TOKEN: ${HUBD_CAMERA_TOKEN:-}   # trống thì dùng NVR_* bên dưới (cách cũ)
       NVR_HOST: ${NVR_HOST:-}
       NVR_USER: ${NVR_USER:-}
       NVR_PASS: ${NVR_PASS:-}

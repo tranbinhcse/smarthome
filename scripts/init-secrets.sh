@@ -5,6 +5,13 @@ set -eu
 cd "$(dirname "$0")/.."
 rnd() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20; }
 mqtt_user() { docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2 mosquitto_passwd -b /m/passwd "$1" "$2"; }
+if [ -f .env ] && ! grep -q '^HUBD_CAMERA_TOKEN=.' .env; then
+  # .env có từ trước khi nhập đầu ghi trên dashboard: thêm token camera (hikbridge đọc cấu hình qua hubd)
+  umask 077
+  { grep -v '^HUBD_CAMERA_TOKEN=' .env || true; } > .env.tmp && mv .env.tmp .env
+  printf 'HUBD_CAMERA_TOKEN=%s\n' "$(rnd)$(rnd)" >> .env
+  echo "Đã thêm HUBD_CAMERA_TOKEN vào .env"
+fi
 if [ -f .env ]; then
   # .env có từ trước khi có trợ lý giọng nói: chỉ thêm khoá còn thiếu, không đổi khoá cũ.
   grep -q '^VOICED_MQTT_PASS=.' .env && { echo ".env đã có, giữ nguyên (xoá đi nếu muốn sinh lại)"; exit 0; }
@@ -31,8 +38,9 @@ TUYA_MQTT_PASS=$TUYA_PASS
 # Tài khoản cho node ESPHome (dùng sau):
 NODE_MQTT_USER=node
 NODE_MQTT_PASS=$NODE_PASS
-# Camera Hikvision: điền tài khoản chỉ-xem của đầu ghi rồi bỏ # ở COMPOSE_PROFILES (README mục Camera)
+# Camera Hikvision: bỏ # ở COMPOSE_PROFILES rồi nhập đầu ghi trên dashboard, Cài đặt → Camera (README mục Camera)
 #COMPOSE_PROFILES=camera
+HUBD_CAMERA_TOKEN=$(rnd)$(rnd)
 NVR_HOST=
 NVR_USER=
 NVR_PASS=

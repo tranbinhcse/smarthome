@@ -80,9 +80,15 @@ func mountSettings(mux *http.ServeMux, h *Hub, a *Auth) {
 			http.Error(w, "cần một object JSON", 400)
 			return
 		}
+		if n == "nvr" {
+			nvrPatch(h.db, patch) // đổi IP đầu ghi: không giữ mật khẩu cũ (camera.go)
+		}
 		if err := h.db.PutSetting(n, patch); err != nil {
 			http.Error(w, "không lưu được", 500)
 			return
+		}
+		if n == "nvr" {
+			syncCamGen(h.db) // kênh camera đổi: ghi file sinh, hubd tự khởi động lại để nạp (camera.go)
 		}
 		h.publish("hubd/settings/"+n, "changed") // dịch vụ đọc lại qua API; tin này không kèm giá trị
 		if n == "devices" {                      // sắp xếp thiết bị vào phòng: áp lúc khởi động (main.go), nên nạp lại
