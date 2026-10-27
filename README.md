@@ -120,6 +120,31 @@ Kịch bản khai báo ở mục `scenes:` của `config.yaml`, câu cảnh báo
 | `POST /api/assistant/scene/{id}` | 204; 403 khi cần PIN; 502 khi có bước không gửi được |
 | `POST /api/assistant/alarm/ack` | xác nhận cảnh báo, publish `hubd/alert/ack` |
 
+## Nhạc (Spotify)
+
+Thiết kế và các cách nối hub với amply: mục 18 của `docs/2026-10-26-trung-tam-dieu-khien-nha-design.md` (**chờ chủ nhà cho biết amply/loa từng khu** trước khi chọn đầu thu). Tiếng nhạc không đi qua hub; hub điều khiển Spotify Connect qua Web API, amply vẫn bật/tắt, đổi nguồn vào bằng hồng ngoại như "Loa quán".
+
+- **Cần Spotify Premium** cho cả tài khoản tạo app lẫn tài khoản phát nhạc. App ở chế độ Development dùng tối đa 5 tài khoản; tài khoản khác tài khoản tạo app phải thêm vào User Management của app.
+- **Một tài khoản chỉ phát ở một nơi tại một thời điểm**: trình phát hiện luồng đang phát, nút chọn thiết bị chuyển luồng sang đầu thu khác.
+- Refresh token lưu trong SQLite của hub (nhóm cấu hình `spotify`), access token chỉ ở RAM; trình duyệt chỉ gọi `/api/spotify/*` sau PIN, không thấy token.
+
+Bật lần đầu:
+
+1. Hub phải bật HTTPS cổng 8443 (dùng chung với micro trợ lý, các bước ở mục Trợ lý giọng nói: `scripts/tls-selfsigned.sh`, `HUBD_TLS_CERT`/`HUBD_TLS_KEY`, iPad tin `tls-ca/ca.crt`). Spotify chỉ trả về địa chỉ HTTPS hoặc `127.0.0.1`.
+2. developer.spotify.com → Dashboard → Create app → chọn Web API → Redirect URI `https://192.168.1.254:8443/api/spotify/callback` (trang Cài đặt hiện đúng địa chỉ theo IP đang mở). Chép Client ID (PKCE không cần client secret).
+3. Dashboard → Cài đặt → Spotify: dán Client ID → **Kết nối Spotify** → đồng ý trên trang Spotify. Trang trả về báo "Đã kết nối Spotify"; quay lại Hub Center.
+4. Đặt tên đầu thu Spotify Connect chứa tên hoặc id khu trong `config.yaml` (vd. "Khu cafe", "cafe", "Phòng ngủ 1") để trình phát trên trang phòng tự nhận đầu thu của phòng đó.
+
+| API (sau PIN) | |
+|---|---|
+| `POST /api/spotify/login` | `{url}` trang đồng ý của Spotify (PKCE S256, `state` dùng một lần, hết hạn 10 phút) |
+| `GET /api/spotify/callback` | Spotify trả về đây (không cần cookie: `state` xác thực), hub đổi mã lấy token |
+| `GET /api/spotify/player` | `{connected, playing, track, artist, art, device}` |
+| `GET /api/spotify/devices` | `{devices: [{id, name, type, is_active, volume_percent, supports_volume}]}` |
+| `POST /api/spotify/cmd` `{do, device?, volume?}` | `do`: `play`, `pause`, `next`, `prev`, `volume` (0–100), `transfer` (cần `device`). 403 khi cần Premium, 409 khi chưa kết nối hoặc chưa có thiết bị đang mở |
+
+Ngắt kết nối: nút **Ngắt kết nối** trong Cài đặt (xoá refresh token ở hub). Muốn chắc chắn thu hồi quyền: spotify.com → Tài khoản → Ứng dụng → gỡ app.
+
 ## Vận hành
 
 | Việc | Lệnh |
@@ -135,7 +160,7 @@ Thử MQTT: `mosquitto_pub -h 192.168.1.254 -u node -P <NODE_MQTT_PASS trong .en
 ## Kiểm thử
 
 ```bash
-go test ./...                                   # rules, lịch sử, PIN, API, firmware, camera, hikbridge, trợ lý
+go test ./...                                   # rules, lịch sử, PIN, API, firmware, camera, hikbridge, trợ lý, Spotify (Spotify giả)
 cd tuya-bridge && python3 -m unittest discover  # bridge + gen_config với thiết bị giả
 python3 -m unittest discover -s scripts         # đăng nhập QR Tuya, giả lập node năng lượng
 cd voiced && python3 -m unittest                # trợ lý: khớp lệnh, chặn PIN, vòng tool use (Claude giả); cần pip install anthropic numpy

@@ -559,3 +559,41 @@ Chủ nhà bổ sung ngày 2026-10-26. Mục tiêu: trung tâm giám sát kết 
 ### 17.4 Phần cứng
 
 Không mua gì. Chỉ phần mềm (`cbxd`) + cấu hình router. Nếu tủ chỉ bắt được DNS khi ở cùng mạng mà router không cho override, phương án dự phòng là một AP/định tuyến nhỏ đặt trước tủ — ghi ở Giai đoạn 0 sau khi biết model router.
+
+## 18. Nhạc: Spotify và nối hub với bộ khuếch đại (amply)
+
+**Chủ nhà muốn:** trình phát nhạc trên dashboard kết nối Spotify; biết hub nối với các amply của quán và các phòng bằng cách nào. Hiện "Loa quán" điều khiển bằng hồng ngoại qua node ESP32.
+
+**Nguyên tắc:**
+- Tiếng nhạc **không đi qua hub**. Hub chỉ điều khiển: chọn nơi phát, phát/dừng, chuyển bài, âm lượng (Spotify Web API), và bật/tắt, đổi nguồn vào của amply (hồng ngoại hoặc ổ cắm Tuya). Hub tắt thì nhạc đang phát vẫn phát; điều khiển bằng app Spotify trên điện thoại vẫn được.
+- Mỗi khu có loa cần một **đầu thu Spotify Connect** nối vào amply (AUX/RCA/quang), hoặc amply tự có Spotify Connect.
+- **Một tài khoản Spotify chỉ phát ở một thiết bị tại một thời điểm.** Quán và phòng muốn nghe nhạc khác nhau cùng lúc thì mỗi luồng cần một tài khoản Premium riêng (vd. gói Family), hoặc ghép các khu thành một nhóm phát chung một nhạc (phương án A dùng Snapcast, B dùng nhóm của hãng).
+- Điều khiển phát qua Web API **cần Spotify Premium**. Từ 02/2026, app Spotify ở chế độ Development cũng cần chủ app có Premium và chỉ cho tối đa 5 tài khoản dùng.
+
+### 18.1 Các cách nối hub ↔ amply
+
+Chi phí là **ước lượng cho một khu**, chưa tra giá cửa hàng lúc viết; chưa tính amply và loa.
+
+| Cách | Nối vào amply | Hub điều khiển bằng | Ưu | Nhược | Chi phí / khu |
+|---|---|---|---|---|---|
+| **A. Raspberry Pi Zero 2 W + DAC** (HiFiBerry DAC+ Zero hoặc mạch PCM5102A) chạy raspotify (librespot) | AUX/RCA | Spotify Web API; librespot có `onevent` để báo MQTT nếu cần | Mở, tự đặt tên thiết bị theo khu; thêm được AirPlay (shairport-sync) và Snapcast để nhiều khu phát đồng bộ một nhạc | Tự lắp, cần vỏ; thẻ nhớ có thể hỏng (nên để hệ thống chỉ đọc); Wi-Fi | ~1–1,5 triệu |
+| **B. Streamer có sẵn** (WiiM Mini/Pro, Arylic S10; hoặc Arylic Up2Stream Amp có sẵn công suất, kéo thẳng loa thụ động) | AUX/RCA/quang | Spotify Web API; HTTP API cục bộ (LinkPlay) cho âm lượng, nguồn vào, nhóm phát | Cắm là chạy, ổn định khi phát cả ngày; Spotify Connect + AirPlay 2; nhóm đa phòng trong app hãng | Đắt hơn A, phần mềm đóng | ~2–4 triệu |
+| **C. ESP32 (có PSRAM) + DAC I2S** chạy Squeezelite-ESP32 | AUX | Lyrion Music Server trên máy Ubuntu, hoặc Spotify Connect (cspot) tích hợp sẵn | Rẻ nhất, cùng loại ESP32 dự án đang dùng | Spotify Connect qua cspot kém ổn định hơn librespot; Wi-Fi ESP32 yếu; mày mò nhiều. Không khuyên cho quán phát cả ngày | ~0,3–0,5 triệu |
+| **D. Amply có mạng** (Yamaha MusicCast, Denon HEOS, amply Wi-Fi có Spotify Connect) | không cần đầu thu | Spotify Web API (amply hiện là một thiết bị Spotify Connect) + API cục bộ của hãng | Gọn nhất | Chỉ đáng nếu amply hiện tại đã có; mua mới đắt | 0 nếu đã có |
+| **E. Hồng ngoại / ổ cắm Tuya** (đi kèm A–D) | không đổi | Module hồng ngoại trên node ESP32 (đã có); ổ cắm Tuya | Có sẵn: bật/tắt, đổi nguồn vào, âm lượng của amply có remote | Hồng ngoại một chiều, không biết trạng thái thật. Ổ Tuya biết trạng thái nhưng chỉ dùng được với amply tự bật lại khi có điện | 0 |
+
+**Cách dùng gợi ý (chưa chốt):** đầu thu A hoặc B cạnh mỗi amply; amply để mức âm lượng cố định, chỉnh âm lượng trên dashboard qua Spotify; bật/tắt và đổi nguồn vào của amply bằng hồng ngoại như "Loa quán" hiện nay. Đặt tên đầu thu chứa tên hoặc id khu trong `config.yaml` (vd. "Khu cafe", "cafe", "Phòng ngủ 1"): trình phát trên trang phòng tự chọn đúng đầu thu.
+
+**Chờ chủ nhà trả lời trước khi chọn phần cứng:**
+1. Mỗi khu (quán, phòng làm việc, phòng ngủ, phòng đọc sách...) đang có amply/loa gì: hãng, model, có remote hồng ngoại không, có cổng vào AUX/RCA/quang/Bluetooth không, có Wi-Fi/LAN không?
+2. Các khu nghe nhạc khác nhau cùng lúc, hay chung một nhạc?
+3. Nhà có tài khoản Spotify Premium chưa (cá nhân, Duo hay Family)?
+4. Thích tự lắp (A, C) hay mua thiết bị có sẵn (B)? Ngân sách mỗi khu?
+5. Ai chọn nhạc ở quán: nhân viên trên iPad, hay điện thoại riêng bằng app Spotify?
+
+### 18.2 Phần mềm đã làm (không phụ thuộc phần cứng chọn sau)
+
+- `hubd` (`spotify.go`): đăng nhập OAuth PKCE, Client ID nhập ở trang Cài đặt (nhóm cấu hình `spotify`). Refresh token lưu trong SQLite của hub, access token chỉ trong RAM; trình duyệt chỉ gọi `/api/spotify/*` sau PIN, không bao giờ thấy token. Lệnh phát nhận một danh sách cố định (phát, dừng, bài trước, bài sau, âm lượng, chuyển thiết bị).
+- Spotify chỉ cho địa chỉ trả về (redirect URI) dạng HTTPS hoặc `http://127.0.0.1`. Hub dùng lại HTTPS cổng 8443 của nút nói trợ lý (`scripts/tls-selfsigned.sh`): cùng một chứng chỉ, cùng một CA cài trên iPad, không thêm cổng. Redirect URI = `https://<IP hub>:8443/api/spotify/callback`.
+- Dashboard: trình phát hiện bài đang phát (tên, nghệ sĩ, ảnh bìa trên đĩa), phát/dừng, bài sau, âm lượng, chọn thiết bị Spotify Connect (thiết bị của khu đang xem xếp trước). Loa hồng ngoại vẫn điều khiển như cũ, và khi Spotify chưa kết nối thì trình phát vẫn là loa hồng ngoại.
+- Dashboard hỏi trạng thái Spotify qua hub 5 giây một lần khi đang mở và màn hình bật; hub không hỏi Spotify khi không ai xem.

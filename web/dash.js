@@ -56,6 +56,7 @@ const ICON = {
   play: '<path d="M8 5.5v13l10-6.5z"/>', pause: '<path d="M8 5v14M16 5v14"/>',
   prev: '<path d="M6 5v14M19 5.5v13L9 12z"/>', next: '<path d="M18 5v14M5 5.5v13L15 12z"/>',
   vol: '<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4zM16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
+  cast: '<path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6M2 12a9 9 0 0 1 8 8M2 16a5 5 0 0 1 4 4M2 20h.01"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>',
   up: '<path d="M6 15l6-6 6 6"/>', down: '<path d="M6 9l6 6 6-6"/>', menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -797,18 +798,70 @@ let playerOpen = false, playerSlide = false;
 function player(f, zid) {
   const sps = cfg.devices.filter(d => kindOf(d) === 'speaker' && (zid ? d.zone === zid : !f || floorOf(d) === f));
   const sp = sps.find(d => xs(d, 'play') === '1') || sps[0];
-  if (!sp) return '';
-  const playing = xs(sp, 'play') === '1', b = (...a) => btn(sp.id, ...a), tr = xs(sp, 'track'), vol = Number(xs(sp, 'vol') ?? 50);
+  if (!sp && !SP.connected) return '';
+  const playing = SP.connected ? SP.playing : xs(sp, 'play') === '1';
+  const art = SP.connected && /^https:\/\/[^"'()\\\s]+$/.test(SP.art || '') ? SP.art : '';
   const slide = playerSlide;
   playerSlide = false;
-  // độ trễ âm theo đồng hồ để đĩa không giật về 0° mỗi lần vẽ lại
-  const disc = `<button class="disc${playing ? ' spin' : ''}" data-pl style="animation-delay:-${(Date.now() % 4000) / 1000}s" aria-expanded="${playerOpen}" aria-label="${playerOpen ? 'Thu gọn' : 'Mở'} trình phát nhạc"></button>`;
+  // độ trễ âm theo đồng hồ để đĩa không giật về 0° mỗi lần vẽ lại; có ảnh bìa Spotify thì in lên đĩa
+  const disc = `<button class="disc${playing ? ' spin' : ''}${art ? ' art' : ''}" data-pl style="animation-delay:-${(Date.now() % 4000) / 1000}s${art ? `;background-image:url('${esc(art)}')` : ''}" aria-expanded="${playerOpen}" aria-label="${playerOpen ? 'Thu gọn' : 'Mở'} trình phát nhạc"></button>`;
   if (!playerOpen) return `<div class="player mini">${disc}</div>`;
+  if (SP.connected) return `<div class="player${slide ? ' slide' : ''}">${disc}${spControls(f, zid, sps)}</div>`;
+  const b = (...a) => btn(sp.id, ...a), tr = xs(sp, 'track'), vol = Number(xs(sp, 'vol') ?? 50);
   return `<div class="player${slide ? ' slide' : ''}">${disc}
     <span class="pt"><b>${esc(tr || sp.name)}</b><small>${esc(tr ? sp.name + (zone(sp.zone) ? ', ' + zone(sp.zone).name : '') : 'Điều khiển hồng ngoại')}</small></span>
-    ${b('play', playing ? 'Dừng' : 'Phát', icon(playing ? 'pause' : 'play'), 'rb big')}${b('next', 'Bài sau', icon('next'))}
-    <span class="volw"><button class="rb" data-vol="${esc(sp.id)}" aria-label="Âm lượng" aria-expanded="${volOpen === sp.id}">${icon('vol')}</button>
-    ${volOpen === sp.id ? `<span class="volpop"><span class="vtrack" data-volt="${esc(sp.id)}" style="--v:${vol}%" role="slider" tabindex="0" aria-label="Âm lượng ${esc(sp.name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${vol}"><i></i><b></b></span><small>${vol}</small></span>` : ''}</span></div>`;
+    ${b('play', playing ? 'Dừng' : 'Phát', icon(playing ? 'pause' : 'play'), 'rb big')}${b('next', 'Bài sau', icon('next'))}${volw(sp.id, sp.name, vol)}</div>`;
+}
+const volw = (id, name, vol) => `<span class="volw"><button class="rb" data-vol="${esc(id)}" aria-label="Âm lượng" aria-expanded="${volOpen === id}">${icon('vol')}</button>
+    ${volOpen === id ? `<span class="volpop"><span class="vtrack" data-volt="${esc(id)}" style="--v:${vol}%" role="slider" tabindex="0" aria-label="Âm lượng ${esc(name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${vol}"><i></i><b></b></span><small>${vol}</small></span>` : ''}</span>`;
+
+/* Spotify (hubd /api/spotify/*, mục 18 thiết kế). Một tài khoản chỉ phát ở một nơi: trình phát luôn hiện luồng đang phát,
+   nút chọn thiết bị chuyển luồng sang đầu thu khác. Đầu thu thuộc khu khi tên chứa tên hoặc id khu (vd. "Khu cafe", "cafe-pi").
+   Hỏi lại 5 giây một lần khi màn hình bật (30 giây khi chưa kết nối). Loa hồng ngoại của khu vẫn mở được từ trình phát. */
+let SP = {connected: false}, spDevs = null, spDevOpen = false;
+const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+const spZone = d => d && cfg.zones.find(z => z.type !== 'panel' && [z.name, z.id].some(n => fold(d.name).includes(fold(n))));
+async function spFetch() {
+  try { const r = await fetch('/api/spotify/player'); if (r.ok) { SP = await r.json(); soon(); } } catch (_) { /* mất mạng: giữ trạng thái cũ */ }
+  if (SP.connected && playerOpen && !spDevs) spLoadDevs();   // mở trình phát trước lần hỏi đầu tiên
+}
+function spLoop() { if (!document.hidden) spFetch(); setTimeout(spLoop, SP.connected ? 5000 : 30000); }
+async function spLoadDevs() {
+  try { const r = await fetch('/api/spotify/devices'); spDevs = r.ok ? (await r.json()).devices || [] : []; } catch (_) { spDevs = []; }
+  soon();
+}
+async function spCmd(body) {
+  const r = await api('/api/spotify/cmd', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) toast(await r.text());
+  setTimeout(spFetch, 700);   // Spotify cập nhật trạng thái chậm một nhịp sau lệnh
+  return r.ok;
+}
+async function spAct(v) {
+  if (v === 'pick') { spDevOpen = true; spLoadDevs(); return draw(); }
+  const [cmd, device] = v.split(':');
+  if (cmd === 'play' || cmd === 'pause') SP.playing = cmd === 'play';   // vẽ ngay, lần hỏi sau xác nhận
+  if (cmd === 'transfer') spDevOpen = false;
+  draw();
+  if (await spCmd({do: cmd, device}) && cmd === 'transfer') toast(`Đã chuyển nhạc sang ${spDevs?.find(d => d.id === device)?.name || 'thiết bị đã chọn'}`);
+}
+function spControls(f, zid, sps) {
+  const d = SP.device, here = zid && spDevs?.find(x => spZone(x)?.id === zid);
+  const b = (v, l, ic, cls = 'rb') => `<button class="${cls}" data-sp="${esc(v)}" aria-label="${esc(l)}" title="${esc(l)}">${ic}</button>`;
+  const pp = d ? b(SP.playing ? 'pause' : 'play', SP.playing ? 'Dừng' : 'Phát', icon(SP.playing ? 'pause' : 'play'), 'rb big')
+    : b(here ? 'transfer:' + here.id : 'pick', here ? `Phát ở ${here.name}` : 'Chọn thiết bị phát', icon('play'), 'rb big');
+  // nhạc đang ở khu khác: nói nơi phát trước, dòng hẹp bị cắt phần sau
+  const sub = !d ? 'Chưa phát: chọn thiết bị' : here && here.id !== d.id ? `Đang phát ở ${d.name}${SP.artist ? ' · ' + SP.artist : ''}`
+    : `${SP.artist ? SP.artist + ' · ' : ''}${d.name}`;
+  // amply của khu (hồng ngoại): trang phòng, hoặc khu của đầu thu đang phát
+  const ir = zid ? sps[0] : sps.find(s => s.zone === spZone(d)?.id);
+  const inScope = x => { const z = spZone(x); return z && (zid ? z.id === zid : !f || z.floor === f); };
+  const list = !spDevOpen ? '' : `<span class="devpop">${spDevs === null ? '<small>Đang tìm thiết bị…</small>' : !spDevs.length
+    ? '<small>Không thấy thiết bị nào. Bật đầu thu Spotify, hoặc mở app Spotify trên điện thoại cùng tài khoản.</small>'
+    : [...spDevs].sort((a, c) => inScope(c) - inScope(a)).map(x => `<button class="rb${x.is_active ? ' sel' : ''}" data-sp="transfer:${esc(x.id)}">${icon('cast')}<span>${esc(x.name)}<small>${esc(spZone(x)?.name || x.type)}</small></span></button>`).join('')}</span>`;
+  return `<span class="pt"><b>${esc(SP.track || 'Spotify')}</b><small>${esc(sub)}</small></span>${pp}${d ? b('next', 'Bài sau', icon('next')) : ''}
+    ${d?.supports_volume ? volw('spotify', d.name, d.volume_percent ?? 50) : ''}
+    <span class="spdw"><button class="rb" data-spdev aria-expanded="${spDevOpen}" aria-label="Chọn thiết bị phát" title="Chọn thiết bị phát">${icon('cast')}</button>${list}</span>
+    ${ir ? `<button class="rb" data-sheet="dev:${esc(ir.id)}" aria-label="${esc(ir.name)}: nguồn, âm lượng (hồng ngoại)" title="${esc(ir.name)} (hồng ngoại)">${icon('speaker')}</button>` : ''}`;
 }
 // Thanh âm lượng dọc tự vẽ bằng Pointer Events: input range xoay dọc không kéo được bằng cảm ứng trên Safari iPad.
 let volDrag = null;
@@ -840,6 +893,7 @@ document.addEventListener('keydown', e => {
 });
 // Loa hồng ngoại không đặt được mức tuyệt đối: đổi mức thành số lần tăng/giảm (mỗi nấc 5%).
 async function setVolume(id, nv) {
+  if (id === 'spotify') { if (SP.device) SP.device.volume_percent = nv; draw(); return spCmd({do: 'volume', volume: nv}); }
   const d = cfg.devices.find(x => x.id === id), k = `x:${d.id}:vol`, old = Number(state[k] ?? 50);
   const steps = Math.round((nv - old) / 5);
   for (let i = 0; i < Math.abs(steps); i++) if (!(await act(d.id, steps > 0 ? 'vol_up' : 'vol_down', 'Âm lượng', true))) { draw(); return toast(`Hub chưa gửi được lệnh tới ${d.name}`); }
@@ -1218,11 +1272,14 @@ document.addEventListener('click', async e => {
   let el;
   if ((el = pick('[data-vol]'))) { volOpen = volOpen === el.dataset.vol ? '' : el.dataset.vol; return draw(); }
   if (volOpen && !pick('.volw')) { volOpen = ''; draw(); }
+  if (spDevOpen && !pick('.spdw')) { spDevOpen = false; draw(); }
   if ((el = pick('[data-pl]'))) {
-    if (!playerOpen) { playerOpen = playerSlide = true; return draw(); }
+    if (!playerOpen) { playerOpen = playerSlide = true; if (SP.connected) spLoadDevs(); return draw(); }
     el.parentElement.classList.add('closing');
-    return setTimeout(() => { playerOpen = false; volOpen = ''; draw(); }, 260);
+    return setTimeout(() => { playerOpen = false; volOpen = ''; spDevOpen = false; draw(); }, 260);
   }
+  if ((el = pick('[data-sp]'))) return spAct(el.dataset.sp);
+  if (pick('[data-spdev]')) { spDevOpen = !spDevOpen; if (spDevOpen) spLoadDevs(); return draw(); }
   if (DEBUG_ZONES && !pick('button') && (el = pick('.stage:not(.energy)'))) {   // chạm ảnh để lấy toạ độ % đặt nhãn
     const box = el.querySelector('.cover').getBoundingClientRect();
     return toast(`x: ${((e.clientX - box.left) / box.width * 100).toFixed(1)}, y: ${((e.clientY - box.top) / box.height * 100).toFixed(1)}`);
@@ -1326,6 +1383,7 @@ function connect() {
   es.onerror = () => { setConn('bad'); es.close(); setTimeout(connect, retry); retry = Math.min(retry * 2, 15000); };
 }
 document.addEventListener('visibilitychange', () => { if (!DEMO && !document.hidden && es && es.readyState === 2) connect(); });
+document.addEventListener('visibilitychange', () => { if (!DEMO && !document.hidden) spFetch(); });
 
 async function init() {
   $('#loginbox').innerHTML = LOGIN_HTML;
@@ -1338,6 +1396,7 @@ async function init() {
     cfg = await (await api('/api/config')).json();
     state = await (await api('/api/state')).json();
     connect();
+    spLoop();
   }
   layout = loadLayout();
   view = parseHash();
