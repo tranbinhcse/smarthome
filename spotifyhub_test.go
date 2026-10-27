@@ -1,67 +1,156 @@
 package main
 
 import (
-	"bufio"
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
-// librespot giả: chính file test này, chạy lại với HUBD_FAKE_LIBRESPOT=1. Cư xử như librespot v0.8.0 ở những chỗ hubd dùng:
-// --enable-oauth --oauth-port 0 in "Browse to: <url>" rồi "Provide redirect URL" và đọc địa chỉ trả về từ stdin; đăng nhập
-// xong ghi credentials.json vào --system-cache; có thông tin đăng nhập thì ghi PCM S16 44,1 kHz vào --device (FIFO).
-// Âm thanh giả là một giá trị không đổi (7777) để test phân biệt với nhạc MP3.
+// Soloist giả: chính file test này, chạy lại qua một script nằm trong gói soloist_release_*.tar.gz mà CDN giả trả về
+// (script đặt HUBD_FAKE=soloist: hubd chỉ đưa cho Soloist môi trường tối thiểu). Cư xử như Soloist 1.3.10 ở những chỗ hubd
+// dùng: in phiên bản và số ngày còn lại; ghi ws.port vào --data-dir; API WebSocket (auth_state, playback_state, lệnh →
+// command_result + sự kiện); ZeroConf HTTP /zc ở cổng ngẫu nhiên trên 0.0.0.0; phát qua PulseAudio, ở đây ghi thẳng vào
+// FIFO của module-pipe-sink: vài đoạn toàn số 0 rồi một giá trị không đổi (7777) để test phân biệt với nhạc MP3.
+// PulseAudio giả (HUBD_FAKE=pulse) chỉ mở socket rồi chờ.
 func TestMain(m *testing.M) {
-	if os.Getenv("HUBD_FAKE_LIBRESPOT") == "1" {
-		fakeLibrespot()
+	switch os.Getenv("HUBD_FAKE") {
+	case "soloist":
+		fakeSoloist()
+		os.Exit(0)
+	case "pulse":
+		fakePulse()
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
 
-func fakeLibrespot() {
+func fakePulse() {
+	for _, a := range os.Args {
+		if i := strings.Index(a, "socket="); i >= 0 {
+			if _, err := net.Listen("unix", strings.Fields(a[i+7:])[0]); err != nil {
+				os.Exit(3)
+			}
+		}
+	}
+	time.Sleep(time.Hour) // select{} bị Go coi là treo, tiến trình sập
+}
+
+func fakeSoloist() {
 	arg := map[string]string{}
-	for i, a := range os.Args {
-		if strings.HasPrefix(a, "--") && i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "--") {
-			arg[a] = os.Args[i+1]
-		} else if strings.HasPrefix(a, "--") {
-			arg[a] = "1"
+	for i := 1; i+1 < len(os.Args); i += 2 { // mọi tham số hubd dùng đều có giá trị
+		arg[os.Args[i]] = os.Args[i+1]
+	}
+	fail := func(f string, a ...any) { fmt.Fprintf(os.Stderr, "soloist giả: "+f+"\n", a...); os.Exit(2) }
+	key := os.Getenv("HUBD_FAKE_KEY")
+	if os.Getenv("SOLOIST_API_KEY") != key || arg["-k"] != "@SOLOIST_API_KEY" {
+		fail("khoá phải qua biến môi trường SOLOIST_API_KEY, -k chỉ là chữ giữ chỗ")
+	}
+	for _, a := range os.Args {
+		if strings.Contains(a, key) {
+			fail("khoá lộ trên dòng lệnh")
 		}
 	}
-	cred := filepath.Join(arg["--system-cache"], "credentials.json")
-	if arg["--enable-oauth"] == "1" {
-		fmt.Println("Browse to: https://accounts.spotify.com/authorize?client_id=65b708073fc0480ea92a077233ca87bd&state=s1")
-		fmt.Println("Provide redirect URL")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if !strings.Contains(line, "code=") {
-			fmt.Fprintln(os.Stderr, "[ERROR librespot] no code")
-			os.Exit(1)
+	if os.Getenv("HUBD_PIN") != "" || os.Getenv("HUBD_MQTT_PASS") != "" {
+		fail("Soloist không được thừa hưởng môi trường của hubd")
+	}
+	if arg["-n"] != "iNIX Smart" || arg["--ws"] != "127.0.0.1:0" || !strings.HasPrefix(os.Getenv("PULSE_SERVER"), "unix:") {
+		fail("tham số sai: %v", os.Args)
+	}
+	fmt.Println("2026-10-27 10:46:15.929: soloist 1.3.10.19 build 1793080877 (20261027) (gtest) (linux/x86_64)")
+	fmt.Println("2026-10-27 10:46:15.929: client expires in 89 days")
+	if os.Getenv("HUBD_FAKE_MODE") == "expired" {
+		fmt.Println("2026-10-27 10:46:15.930: client expired")
+		os.Exit(10)
+	}
+
+	zc, _ := net.Listen("tcp4", "0.0.0.0:0")
+	go http.Serve(zc, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zc" || r.URL.Query().Get("action") != "getInfo" {
+			http.Error(w, "?", 400)
+			return
 		}
-		os.MkdirAll(arg["--system-cache"], 0o700)
-		os.WriteFile(cred, []byte(`{"username":"thu","auth_type":1}`), 0o600)
-	} else if _, err := os.Stat(cred); err != nil {
-		fmt.Fprintln(os.Stderr, "[ERROR librespot] Credentials are required if discovery and oauth login are disabled.")
-		os.Exit(1)
+		json.NewEncoder(w).Encode(map[string]any{"remoteName": arg["-n"], "status": 101, "deviceType": "SPEAKER"})
+	}))
+
+	item := func(name string) map[string]any {
+		return map[string]any{"uri": "spotify:track:" + name, "entity_type": "track", "decorations": map[string]any{
+			"identity":        map[string]any{"name": name},
+			"visual_identity": map[string]any{"cover": []any{map[string]any{"url": "https://i.scdn.co/image/nho", "size": "small"}, map[string]any{"url": "https://i.scdn.co/image/lon", "size": "large"}}},
+			"parent":          map[string]any{"entity": map[string]any{"uri": "spotify:album:a", "decorations": map[string]any{"identity": map[string]any{"name": "Album thử"}}}},
+			"creators":        []any{map[string]any{"entity": map[string]any{"decorations": map[string]any{"identity": map[string]any{"name": "Ca sĩ thử"}}}}},
+			"playback":        map[string]any{"duration_ms": 210000},
+		}}
 	}
-	fmt.Fprintln(os.Stderr, `[INFO librespot_core::session] Authenticated as 'thu' !`)
-	if arg["--name"] != "iNIX Smart" || arg["--backend"] != "pipe" || arg["--disable-discovery"] != "1" {
-		fmt.Fprintln(os.Stderr, "[ERROR librespot] tham số sai:", os.Args)
-		os.Exit(2)
-	}
-	secs := 1.0
-	fmt.Sscan(os.Getenv("HUBD_FAKE_LIBRESPOT_SECS"), &secs)
+	ms := func() int64 { return time.Now().UnixMilli() }
+	ws, _ := net.Listen("tcp", "127.0.0.1:0")
+	go http.Serve(ws, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		c.WriteJSON(map[string]any{"type": "auth_state", "logged_in": true, "is_active": true, "device_name": arg["-n"]})
+		c.WriteJSON(map[string]any{"type": "playback_state", "status": "playing", "item": item("Bài thử"), "volume": 65, "is_active": true,
+			"position": map[string]any{"position_ms": 45000, "timestamp_ms": ms(), "speed": 1.0}, "options": map[string]any{"shuffle": false, "repeat": "off"}})
+		for {
+			var m map[string]any
+			if c.ReadJSON(&m) != nil {
+				return
+			}
+			if m["type"] != "command" {
+				c.WriteJSON(map[string]any{"type": "error", "message": "unknown message type"})
+				continue
+			}
+			ev := map[string]any{}
+			switch m["command"] {
+			case "pause", "play":
+				st := map[string]string{"pause": "paused", "play": "playing"}[m["command"].(string)]
+				ev = map[string]any{"type": "playback_changed", "status": st}
+			case "set_volume":
+				ev = map[string]any{"type": "volume_changed", "volume": m["volume"]}
+			case "seek":
+				ev = map[string]any{"type": "position_sync", "position": map[string]any{"position_ms": m["position_ms"], "timestamp_ms": ms(), "speed": 1.0}}
+			case "skip_next":
+				ev = map[string]any{"type": "track_changed", "item": item("Bài thứ hai")}
+			case "skip_prev":
+				ev = map[string]any{"type": "track_changed", "item": item("Bài thử")}
+			default:
+				c.WriteJSON(map[string]any{"type": "error", "message": "unknown command"})
+				continue
+			}
+			c.WriteJSON(map[string]any{"type": "command_result", "command": m["command"]})
+			c.WriteJSON(ev)
+		}
+	}))
+	os.WriteFile(filepath.Join(arg["-D"], "ws.addr"), []byte("127.0.0.1"), 0o644)
+	os.WriteFile(filepath.Join(arg["-D"], "ws.port"), []byte(strconv.Itoa(ws.Addr().(*net.TCPAddr).Port)), 0o644)
+	fmt.Println("2026-10-27 10:46:15.962: running")
+
+	secs := 0.0
+	fmt.Sscan(os.Getenv("HUBD_FAKE_SECS"), &secs)
 	if secs > 0 {
-		f, err := os.OpenFile(arg["--device"], os.O_WRONLY, 0)
+		f, err := os.OpenFile(filepath.Join(filepath.Dir(strings.TrimPrefix(os.Getenv("PULSE_SERVER"), "unix:")), "audio.fifo"), os.O_WRONLY, 0)
 		if err != nil {
 			os.Exit(3)
 		}
-		buf := make([]byte, 4*441)
+		buf := make([]byte, 4*441) // 10 ms
+		f.Write(make([]byte, 5*len(buf)))
 		for i := 0; i < len(buf); i += 2 {
 			binary.LittleEndian.PutUint16(buf[i:], 7777)
 		}
@@ -70,112 +159,282 @@ func fakeLibrespot() {
 		}
 		f.Close()
 	}
-	time.Sleep(time.Hour) // giữ tiến trình như librespot đang chờ lệnh (select{} bị Go coi là treo, tiến trình sập)
+	time.Sleep(time.Hour)
 }
 
-func spotHubMux(t *testing.T, bin string, creds bool, secs string) (*http.ServeMux, *Hub, []*http.Cookie, string, string) {
-	t.Helper()
-	cache := t.TempDir()
-	if creds {
-		os.WriteFile(filepath.Join(cache, "credentials.json"), []byte(`{}`), 0o600)
+// fakeCDN: soloist-builds.spotifycdn.com giả. Gói chứa script chạy file test này như Soloist; Last-Modified/304 như CDN thật.
+type fakeCDN struct {
+	mu   sync.Mutex
+	mod  time.Time
+	mode string   // HUBD_FAKE_MODE của bản dựng đang phát hành
+	ims  []string // If-Modified-Since của từng lần hub hỏi
+}
+
+func (c *fakeCDN) publish(mode string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mode, c.mod = mode, c.mod.Add(24*time.Hour)
+}
+
+func (c *fakeCDN) hits() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.ims...)
+}
+
+func (c *fakeCDN) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ims = append(c.ims, r.Header.Get("If-Modified-Since"))
+	if t, err := http.ParseTime(r.Header.Get("If-Modified-Since")); err == nil && !c.mod.After(t) {
+		w.WriteHeader(304)
+		return
 	}
-	t.Setenv("HUBD_LIBRESPOT", bin)
-	t.Setenv("HUBD_SPOTIFY_CACHE", cache)
-	t.Setenv("HUBD_FAKE_LIBRESPOT", "1")
-	t.Setenv("HUBD_FAKE_LIBRESPOT_SECS", secs)
-	// giữ HUBD_FAKE_LIBRESPOT tới hết test: tiến trình con nào thiếu nó sẽ chạy lại cả bộ test (đệ quy)
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	add := func(name, body string, mode int64) {
+		tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		tw.Write([]byte(body))
+	}
+	add("CHANGELOG.md", "# Soloist Changelog\n", 0o644)
+	add("soloist", fmt.Sprintf("#!/bin/sh\nHUBD_FAKE=soloist HUBD_FAKE_MODE=%s HUBD_FAKE_KEY=%s HUBD_FAKE_SECS=%s exec '%s' \"$@\"\n",
+		c.mode, testKey, os.Getenv("HUBD_FAKE_SECS"), os.Args[0]), 0o555)
+	tw.Close()
+	gz.Close()
+	w.Header().Set("Last-Modified", c.mod.UTC().Format(http.TimeFormat))
+	w.Write(b.Bytes())
+}
+
+const testKey = "sk-THU-bi-mat-8f3a"
+
+// soloistHub: hub thử với CDN giả và PulseAudio giả; secs = số giây Soloist giả phát (0 = không phát).
+func soloistHub(t *testing.T, secs string) (*http.ServeMux, *Hub, []*http.Cookie, string, *fakeCDN) {
+	t.Helper()
+	cdn := &fakeCDN{mod: time.Date(2026, 10, 27, 6, 24, 49, 0, time.UTC)}
+	srv := httptest.NewServer(cdn)
+	t.Cleanup(srv.Close)
+	pulse := filepath.Join(t.TempDir(), "pulseaudio")
+	os.WriteFile(pulse, []byte(fmt.Sprintf("#!/bin/sh\nHUBD_FAKE=pulse exec '%s' \"$@\"\n", os.Args[0])), 0o755)
+	t.Setenv("HUBD_SOLOIST_URL", srv.URL+"/soloist_release_x86_64.tar.gz")
+	t.Setenv("HUBD_SOLOIST_DIR", t.TempDir())
+	t.Setenv("HUBD_PULSEAUDIO", pulse)
+	t.Setenv("HUBD_SOLOIST_PRELOAD", "")
+	t.Setenv("HUBD_FAKE_SECS", secs)
+	t.Setenv("HUBD_MQTT_PASS", "mat-khau-mqtt") // Soloist giả thấy biến này = hubd đưa nguyên môi trường của nó cho Soloist
 	mux, h, ck, addr := musicMux(t, musicLib(t))
 	t.Cleanup(h.music.spot.stop)
-	return mux, h, ck, addr, cache
+	return mux, h, ck, addr, cdn
 }
 
 type hubSpotState struct {
-	Available        bool
-	LoggedIn         bool `json:"logged_in"`
-	State, URL, Name string
+	State, Error, Version, Name string
+	Days                        int
+	KeySet                      bool `json:"key_set"`
+	LoggedIn                    bool `json:"logged_in"`
 }
 
 func hubSpot(t *testing.T, mux http.Handler, ck []*http.Cookie) (s hubSpotState) {
 	t.Helper()
 	w := call(mux, "GET", "/api/spotify/hub", "", "", ck...)
-	json.Unmarshal(w.Body.Bytes(), &s)
-	if w.Code != 200 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &s) != nil {
 		t.Fatalf("GET /api/spotify/hub: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), testKey) {
+		t.Fatal("API tình trạng Soloist lộ khoá")
 	}
 	return
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Helper()
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 400; i++ {
 		if ok() {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("chờ quá lâu: %s", what)
 }
 
-func TestHubSpotifyUnavailable(t *testing.T) {
-	mux, _, ck, _, _ := spotHubMux(t, "/khong-co/librespot", true, "0")
-	if w := call(mux, "GET", "/api/spotify/hub", "", ""); w.Code != 401 {
-		t.Fatalf("không có PIN: code=%d", w.Code)
-	}
-	if s := hubSpot(t, mux, ck); s.Available || s.State != "off" {
-		t.Fatalf("thiếu librespot phải báo không có: %+v", s)
-	}
-	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"login"}`, "", ck...); w.Code != 409 {
-		t.Fatalf("đăng nhập khi thiếu librespot: code=%d", w.Code)
+func putKey(t *testing.T, mux http.Handler, ck []*http.Cookie, v any) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]any{"api_key": v})
+	if w := call(mux, "PUT", "/api/settings/soloist", string(b), "", ck...); w.Code != 204 {
+		t.Fatalf("lưu khoá: %d %s", w.Code, w.Body)
 	}
 }
 
-// Đăng nhập một lần qua Cài đặt: hub đưa địa chỉ "Browse to", người dùng dán địa chỉ trang trả về, hub chuyển qua stdin.
-func TestHubSpotifyLogin(t *testing.T) {
-	mux, _, ck, _, cache := spotHubMux(t, os.Args[0], false, "0")
-	if s := hubSpot(t, mux, ck); !s.Available || s.LoggedIn || s.State != "off" {
-		t.Fatalf("chưa đăng nhập thì không chạy librespot: %+v", s)
+// pids: tiến trình Soloist và PulseAudio hubd đang giữ (0 = không có).
+func pids(s *hubSpotify) (sol, pa int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sol != nil {
+		sol = s.sol.Process.Pid
 	}
-	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"login"}`, ""); w.Code != 401 {
-		t.Fatalf("đăng nhập không có PIN: code=%d", w.Code)
+	if s.pa != nil {
+		pa = s.pa.Process.Pid
 	}
-	w := call(mux, "POST", "/api/spotify/hub", `{"do":"login"}`, "", ck...)
-	var r struct{ URL string }
-	json.Unmarshal(w.Body.Bytes(), &r)
-	if w.Code != 200 || !strings.HasPrefix(r.URL, "https://accounts.spotify.com/authorize?") {
-		t.Fatalf("địa chỉ đăng nhập: code=%d %s", w.Code, w.Body)
+	return
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// Chưa có khoá API: không tải, không chạy gì.
+func TestSoloistWaitsForKey(t *testing.T) {
+	mux, h, ck, _, cdn := soloistHub(t, "0")
+	if w := call(mux, "GET", "/api/spotify/hub", "", ""); w.Code != 401 {
+		t.Fatalf("không có PIN: code=%d", w.Code)
 	}
-	if s := hubSpot(t, mux, ck); s.State != "login" || s.URL != r.URL {
-		t.Fatalf("đang chờ đăng nhập: %+v", s)
+	time.Sleep(200 * time.Millisecond)
+	if s := hubSpot(t, mux, ck); s.State != "nokey" || s.KeySet {
+		t.Fatalf("chưa có khoá: %+v", s)
 	}
-	// chỉ nhận địa chỉ trả về đúng dạng http://127.0.0.1/login?code=..., không xuống dòng (không chèn thêm lệnh vào stdin)
-	for _, u := range []string{"", "https://evil.example/login?code=a", "http://127.0.0.1/login?state=x", "http://127.0.0.1/login?code=a\nrm -rf /",
-		"http://127.0.0.1/login?code=" + strings.Repeat("a", 4096)} {
-		b, _ := json.Marshal(map[string]string{"do": "code", "url": u})
-		if w := call(mux, "POST", "/api/spotify/hub", string(b), "", ck...); w.Code != 400 {
-			t.Errorf("địa chỉ %q phải bị từ chối: code=%d", u, w.Code)
+	if sol, pa := pids(h.music.spot); sol != 0 || pa != 0 || len(cdn.hits()) != 0 {
+		t.Fatalf("chưa có khoá mà đã tải/chạy: soloist=%d pulse=%d cdn=%v", sol, pa, cdn.hits())
+	}
+	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"pause"}`, "", ck...); w.Code != 409 {
+		t.Fatalf("lệnh khi Soloist chưa chạy: code=%d", w.Code)
+	}
+}
+
+// Nhập khoá → hub tải Soloist, chạy với khoá qua biến môi trường (Soloist giả tự thoát nếu khoá ở dòng lệnh), khoá không
+// lộ ra API hay log. Cập nhật Soloist: hỏi lại CDN bằng If-Modified-Since. Xoá khoá: dừng Soloist và PulseAudio.
+func TestSoloistKeyStaysSecret(t *testing.T) {
+	var logs lockedBuf
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	mux, h, ck, _, cdn := soloistHub(t, "0")
+	putKey(t, mux, ck, testKey)
+	waitFor(t, "Soloist chạy và đăng nhập", func() bool { s := hubSpot(t, mux, ck); return s.State == "running" && s.LoggedIn })
+	s := hubSpot(t, mux, ck)
+	if !s.KeySet || s.Version != "1.3.10.19" || s.Days != 89 || s.Name != "iNIX Smart" {
+		t.Fatalf("tình trạng: %+v", s)
+	}
+	w := call(mux, "GET", "/api/settings/soloist", "", "", ck...)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"api_key_set":true`) || strings.Contains(w.Body.String(), testKey) {
+		t.Fatalf("cài đặt soloist chỉ được báo đã có khoá: %d %s", w.Code, w.Body)
+	}
+	if b := call(mux, "GET", "/api/music/state", "", "", ck...).Body.String(); strings.Contains(b, testKey) {
+		t.Fatal("trạng thái nhạc lộ khoá")
+	}
+	if hs := cdn.hits(); len(hs) != 1 || hs[0] != "" {
+		t.Fatalf("lần đầu tải không điều kiện: %q", hs)
+	}
+
+	sol, _ := pids(h.music.spot)
+	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"update"}`, "", ck...); w.Code != 202 {
+		t.Fatalf("Cập nhật Soloist: code=%d", w.Code)
+	}
+	waitFor(t, "chạy lại sau khi cập nhật", func() bool {
+		n, _ := pids(h.music.spot)
+		return n != 0 && n != sol && hubSpot(t, mux, ck).State == "running"
+	})
+	if hs := cdn.hits(); len(hs) != 2 || hs[1] != "Tue, 27 Oct 2026 06:24:49 GMT" {
+		t.Fatalf("cập nhật phải hỏi CDN bằng If-Modified-Since theo Last-Modified lần trước: %q", hs)
+	}
+
+	sol, pa := pids(h.music.spot)
+	putKey(t, mux, ck, nil)
+	waitFor(t, "xoá khoá thì dừng", func() bool { return hubSpot(t, mux, ck).State == "nokey" })
+	waitFor(t, "Soloist và PulseAudio thoát", func() bool {
+		return syscall.Kill(sol, 0) != nil && syscall.Kill(pa, 0) != nil
+	})
+	if strings.Contains(logs.String(), testKey) {
+		t.Fatal("log lộ khoá")
+	}
+	if !strings.Contains(logs.String(), "soloist: ") {
+		t.Fatalf("log của Soloist phải vào log hubd: %s", logs.String())
+	}
+}
+
+// Bản dựng hết hạn (thoát mã 10): báo "expired"; Spotify có bản mới thì bấm Cập nhật Soloist là chạy lại.
+func TestSoloistExpired(t *testing.T) {
+	mux, _, ck, _, cdn := soloistHub(t, "0")
+	cdn.publish("expired")
+	putKey(t, mux, ck, testKey)
+	waitFor(t, "báo hết hạn", func() bool { return hubSpot(t, mux, ck).State == "expired" })
+	cdn.publish("")
+	call(mux, "POST", "/api/spotify/hub", `{"do":"update"}`, "", ck...)
+	waitFor(t, "chạy bản mới", func() bool { return hubSpot(t, mux, ck).State == "running" })
+}
+
+type hubSpotNow struct {
+	Track, Artist, Album, Art, Status string
+	Volume                            int
+	Dur                               int64 `json:"dur_ms"`
+	Pos                               int64 `json:"pos_ms"`
+}
+
+func spotNow(t *testing.T, mux http.Handler, ck []*http.Cookie) (n hubSpotNow) {
+	t.Helper()
+	var s struct{ Spotify *hubSpotNow }
+	w := call(mux, "GET", "/api/music/state", "", "", ck...)
+	if json.Unmarshal(w.Body.Bytes(), &s) != nil {
+		t.Fatalf("state: %s", w.Body)
+	}
+	if s.Spotify != nil {
+		n = *s.Spotify
+	}
+	return
+}
+
+// Trạng thái và lệnh qua WebSocket của Soloist; ghép đôi qua /zc của hubd.
+func TestSoloistControl(t *testing.T) {
+	mux, _, ck, _, _ := soloistHub(t, "0")
+	if w := call(mux, "GET", "/zc?action=getInfo&version=2.10.0", "", ""); w.Code != 503 {
+		t.Fatalf("/zc khi Soloist chưa chạy: code=%d", w.Code)
+	}
+	putKey(t, mux, ck, testKey)
+	waitFor(t, "có bài đang phát", func() bool { return spotNow(t, mux, ck).Track != "" })
+	n := spotNow(t, mux, ck)
+	if n.Track != "Bài thử" || n.Artist != "Ca sĩ thử" || n.Album != "Album thử" || n.Art != "https://i.scdn.co/image/lon" ||
+		n.Status != "playing" || n.Volume != 65 || n.Dur != 210000 || n.Pos < 45000 {
+		t.Fatalf("trạng thái Spotify trên hub: %+v", n)
+	}
+	// app Spotify trong LAN gọi ZeroConf qua hubd (không có PIN, như loa Spotify Connect thật)
+	w := call(mux, "GET", "/zc?action=getInfo&version=2.10.0", "", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"remoteName":"iNIX Smart"`) {
+		t.Fatalf("ZeroConf qua hubd: %d %s", w.Code, w.Body)
+	}
+	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"pause"}`, ""); w.Code != 401 {
+		t.Fatalf("lệnh không có PIN: code=%d", w.Code)
+	}
+	for _, c := range []struct {
+		body string
+		ok   func(hubSpotNow) bool
+	}{
+		{`{"do":"pause"}`, func(n hubSpotNow) bool { return n.Status == "paused" }},
+		{`{"do":"play"}`, func(n hubSpotNow) bool { return n.Status == "playing" }},
+		{`{"do":"volume","volume":30}`, func(n hubSpotNow) bool { return n.Volume == 30 }},
+		{`{"do":"seek","position_ms":120000}`, func(n hubSpotNow) bool { return n.Pos >= 120000 }},
+		{`{"do":"next"}`, func(n hubSpotNow) bool { return n.Track == "Bài thứ hai" }},
+		{`{"do":"prev"}`, func(n hubSpotNow) bool { return n.Track == "Bài thử" }},
+	} {
+		if w := call(mux, "POST", "/api/spotify/hub", c.body, "", ck...); w.Code != 204 {
+			t.Fatalf("%s: code=%d %s", c.body, w.Code, w.Body)
 		}
+		waitFor(t, c.body, func() bool { return c.ok(spotNow(t, mux, ck)) })
 	}
-	if s := hubSpot(t, mux, ck); s.State != "login" {
-		t.Fatalf("địa chỉ sai không được tới librespot: %+v", s)
-	}
-	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"code","url":"http://127.0.0.1/login?code=ma-thu&state=s1"}`, "", ck...); w.Code != 204 {
-		t.Fatalf("dán địa chỉ trả về: code=%d %s", w.Code, w.Body)
-	}
-	waitFor(t, "librespot đăng nhập xong", func() bool { s := hubSpot(t, mux, ck); return s.State == "running" && s.LoggedIn && s.URL == "" })
-	if _, err := os.Stat(filepath.Join(cache, "credentials.json")); err != nil {
-		t.Fatal("thông tin đăng nhập phải được lưu cho lần sau")
-	}
-	if s := hubSpot(t, mux, ck); s.Name != "iNIX Smart" {
-		t.Fatalf("tên thiết bị Spotify: %+v", s)
-	}
-	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"logout"}`, "", ck...); w.Code != 204 {
-		t.Fatalf("đăng xuất: code=%d", w.Code)
-	}
-	if _, err := os.Stat(filepath.Join(cache, "credentials.json")); err == nil {
-		t.Fatal("đăng xuất phải xoá thông tin đăng nhập")
-	}
-	if s := hubSpot(t, mux, ck); s.LoggedIn || s.State != "off" {
-		t.Fatalf("sau đăng xuất: %+v", s)
+	for _, b := range []string{`{"do":"volume","volume":101}`, `{"do":"volume"}`, `{"do":"seek","position_ms":-1}`, `{"do":"rm"}`, `x`} {
+		if w := call(mux, "POST", "/api/spotify/hub", b, "", ck...); w.Code != 400 {
+			t.Errorf("%s phải bị từ chối: code=%d", b, w.Code)
+		}
 	}
 }
 
@@ -183,13 +442,29 @@ func isSpot(pcm []byte) bool {
 	return len(pcm) >= 4 && binary.LittleEndian.Uint16(pcm) == 7777 && binary.LittleEndian.Uint16(pcm[len(pcm)-2:]) == 7777
 }
 
-// Đã đăng nhập: hubd tự chạy librespot; âm thanh Spotify tới đầu nhận, nhạc MP3 đang phát thì tự dừng.
-func TestHubSpotifyAudioToReceivers(t *testing.T) {
-	mux, _, ck, addr, _ := spotHubMux(t, os.Args[0], true, "1")
+// Đoạn toàn số 0 (sink PulseAudio đang im) không tính là Spotify đang phát.
+func TestSoloistSilenceIsNotPlaying(t *testing.T) {
+	s := &hubSpotify{pcm: make(chan []byte, 2)}
+	s.pcm <- make([]byte, snapFrames*4)
+	if s.take() != nil || s.active() {
+		t.Fatal("đoạn toàn số 0 không phải tiếng Spotify")
+	}
+	b := make([]byte, snapFrames*4)
+	b[7] = 1
+	s.pcm <- b
+	if s.take() == nil || !s.active() {
+		t.Fatal("đoạn có tiếng phải tới các khu")
+	}
+}
+
+// Đã có khoá: âm thanh Soloist (qua FIFO của PulseAudio) tới đầu nhận.
+func TestSoloistAudioToReceivers(t *testing.T) {
+	mux, _, ck, addr, _ := soloistHub(t, "1")
 	f := dialSnap(t, addr, "loa")
 	f.read()
 	f.read()
-	waitFor(t, "librespot tự chạy khi đã có thông tin đăng nhập", func() bool { return hubSpot(t, mux, ck).State == "running" })
+	putKey(t, mux, ck, testKey)
+	waitFor(t, "Soloist chạy", func() bool { return hubSpot(t, mux, ck).State == "running" })
 	pcm := collect(t, f, 1500*time.Millisecond)
 	spot := 0
 	for i := 0; i+snapFrames*4 <= len(pcm); i += snapFrames * 4 {
@@ -202,13 +477,13 @@ func TestHubSpotifyAudioToReceivers(t *testing.T) {
 	}
 }
 
-// Người dùng chọn phát MP3 khi Spotify còn đang phát trên hub: MP3 thắng tới khi Spotify ngừng hẳn;
-// Spotify phát lại sau đó thì Spotify thắng và MP3 tự dừng.
+// Người dùng chọn phát MP3 khi Spotify còn đang phát trên hub: MP3 thắng tới khi Spotify ngừng hẳn.
 func TestHubSpotifyAndFilesShareTheStream(t *testing.T) {
-	mux, h, ck, addr, _ := spotHubMux(t, os.Args[0], true, "3")
+	mux, h, ck, addr, _ := soloistHub(t, "3")
 	f := dialSnap(t, addr, "loa")
 	f.read()
 	f.read()
+	putKey(t, mux, ck, testKey)
 	waitFor(t, "có tiếng Spotify", func() bool { return h.music.spot.active() })
 	if getState(t, mux, ck).Source != "spotify" {
 		t.Fatalf("nguồn đang phát phải là spotify: %+v", getState(t, mux, ck))

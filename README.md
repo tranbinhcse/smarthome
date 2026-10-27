@@ -199,18 +199,23 @@ Hub tự phát nhạc, không cần mở app nào (mục 18.3 tài liệu thiế
 - **Đầu nhận:** snapclient trỏ tới IP hub, cổng `1704` (vd. Pi: `apt install snapclient`, sửa `/etc/default/snapclient` thành `SNAPCLIENT_OPTS="--host 192.168.1.254 --hostID khu-cafe"`). Mở `ufw` cho LAN vào cổng 1704. Đặt `--hostID` theo khu để nhận ra dễ, đổi tên hiển thị ngay trên dashboard.
 - **NAS trong nhà:** Cài đặt → Nhạc trên hub → nhập địa chỉ NAS, tài khoản, mật khẩu → Duyệt NAS → chọn chia sẻ, thư mục → Dùng thư mục này. hubd tự đọc chia sẻ SMB (cổng 445, `nas.go`), không cần gắn ổ trên máy Ubuntu; mật khẩu chỉ lưu ở hub. Mỗi bài được đọc cả vào bộ nhớ trước khi phát nên mạng chập chờn không ngắt tiếng giữa bài.
 - **Dashboard:** mở thanh nhạc → chạm đĩa → bảng trình phát → nguồn **Trên hub**: thư mục → bài, ô tìm, khu phát.
-- **Spotify qua hub** (cần Premium, `spotifyhub.go`): image hubd có sẵn librespot 0.8.0. Cài đặt → Spotify → Phát Spotify qua hub → **Đăng nhập cho hub** → Mở trang đăng nhập Spotify → đăng nhập → trang chuyển tới `http://127.0.0.1/login?code=...` và báo không mở được: chép nguyên địa chỉ đó dán vào ô → Gửi cho hub. Chỉ làm một lần (thông tin đăng nhập lưu ở `/db/librespot`). Sau đó trong trình phát Spotify chọn thiết bị **Hub Center**: nhạc ra mọi khu, nhạc MP3 đang phát tự dừng; chọn bài MP3 thì MP3 thắng tới khi Spotify ngừng.
+- **Spotify trên hub** (cần Premium, `spotifyhub.go`, mục 18.3 tài liệu thiết kế): hubd chạy **Soloist** (trình nhận Spotify Connect chính thức của Spotify) và PulseAudio ngay trong container `hubd`, không thêm container. Soloist không đóng gói trong image (Spotify không cho phân phối lại): hub tự tải từ `soloist-builds.spotifycdn.com` vào `/db/soloist` khi chạy, mỗi bản dùng được 90 ngày, hết hạn thì tự tải bản mới.
+  1. **Khoá API:** developer.spotify.com → đăng nhập tài khoản Premium → Dashboard → **Spotify Soloist API Key** → đồng ý điều khoản nếu được hỏi → tạo khoá. Dashboard hub → Cài đặt → Nhạc → **Spotify trên hub** → dán khoá → **Lưu khoá**. Khoá chỉ lưu ở hub (API chỉ báo `api_key_set`), đưa cho Soloist qua biến môi trường, không vào log.
+  2. **avahi trên máy chủ (một lần):** `sudo cp avahi/spotify-connect.service /etc/avahi/services/` (cần `avahi-daemon`). Container `hubd` ở mạng bridge nên mDNS của Soloist không ra LAN; avahi quảng bá thay, app Spotify gọi ZeroConf ở `http://<IP hub>:8080/zc`, hubd chuyển tới Soloist.
+  3. **Ghép đôi (một lần):** điện thoại cùng Wi-Fi với hub → app Spotify → chọn thiết bị **iNIX Smart** (`HUBD_SPOTIFY_NAME`) → phát một bài. Soloist lưu phiên ở `/db/soloist/data`, lần sau tự vào. Nhạc ra mọi khu, nhạc MP3 đang phát tự dừng; chọn bài MP3 thì MP3 thắng tới khi Spotify ngừng. Trình phát → **Trên hub** hiện bài, bìa, tiến độ, tua, trước/dừng/sau, âm lượng.
+  4. Cài đặt hiện tình trạng (thiếu khoá, đang tải, chờ ghép đôi, đang chạy, hết hạn, lỗi; phiên bản, số ngày còn lại); **Cập nhật Soloist** kiểm bản mới (`If-Modified-Since`) rồi chạy lại.
 
 | API (sau PIN) | |
 |---|---|
 | `GET /api/music/library` | `{files: [{id, title, folder}], roots: [{path, ok}]}` |
-| `GET /api/music/state` | `{playing, file, index, queue, pos_ms, dur_ms, zones: [{id, name, connected, volume, muted}]}` |
+| `GET /api/music/state` | `{playing, source, file, index, queue, pos_ms, dur_ms, zones: [{id, name, connected, volume, muted}], spotify}`; `spotify` = bài đang phát trên hub qua Soloist `{active, status, uri, track, artist, album, art, dur_ms, pos_ms, volume, shuffle}` hoặc `null` |
 | `POST /api/music/cmd` | `{do: play, files: [id...], index}` (hàng đợi mới, tối đa 2000 bài), `{do: play}` phát tiếp, `pause`, `next`, `prev`, `stop`, `{do: zone, id, volume?, muted?, name?}` |
 | `POST /api/music/nas` | `{host, user, pass?}` → `{shares}`; thêm `share`, `path` → `{dirs, mp3}`; `{do: save, host, user, pass?, share, path}` lưu thư mục; `{do: unset}` bỏ. `pass` trống = mật khẩu đã lưu, chỉ cho đúng địa chỉ và tài khoản lúc lưu (đổi địa chỉ phải nhập lại, để mật khẩu NAS không bị gửi tới máy lạ) |
-| `GET /api/spotify/hub` | `{available, logged_in, state: off/starting/login/running, url, name, error}` |
-| `POST /api/spotify/hub` | `{do: login}` → `{url}`; `{do: code, url}` (địa chỉ trang trả về); `{do: logout}` |
+| `GET /api/spotify/hub` | `{state: nokey/downloading/starting/running/expired/error, error, version, days, name, key_set, logged_in, active}` |
+| `POST /api/spotify/hub` | `{do: play \| pause \| next \| prev}`, `{do: seek, position_ms}`, `{do: volume, volume}` (0–100); 409 khi Soloist chưa chạy hoặc chưa ghép đôi. `{do: update}` → 202: kiểm bản Soloist mới và chạy lại |
+| `GET/POST /zc` (không PIN) | ZeroConf của Spotify Connect, hubd chuyển tới Soloist (ghép đôi từ app Spotify trong LAN); 503 khi Soloist chưa chạy |
 
-Luồng: PCM 44,1 kHz/16 bit stereo, khoảng 1,4 Mbit/s mỗi đầu nhận trong LAN, đệm 1 giây. Dựng image lần đầu mất thêm khoảng 3 phút cho librespot.
+Luồng: PCM 44,1 kHz/16 bit stereo, khoảng 1,4 Mbit/s mỗi đầu nhận trong LAN, đệm 1 giây.
 
 ## Vận hành
 

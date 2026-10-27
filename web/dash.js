@@ -826,11 +826,12 @@ let playerOpen = false, playerSlide = false;
 function player(f, zid) {
   const sps = cfg.devices.filter(d => kindOf(d) === 'speaker' && (zid ? d.zone === zid : !f || floorOf(d) === f));
   const sp = sps.find(d => xs(d, 'play') === '1') || sps[0];
-  // nhạc trên hub (music.js) đang phát, hoặc chưa kết nối Spotify: thanh nhạc theo nhạc trên hub
-  const hub = HM.playing || HM.ok && !SP.connected;
+  // nhạc trên hub (music.js) đang phát, Spotify đang phát trên hub (Soloist), hoặc chưa kết nối Spotify: thanh nhạc theo hub
+  const hs = !HM.playing && HM.spotify?.active ? HM.spotify : null;
+  const hub = HM.playing || hs || HM.ok && !SP.connected;
   if (!sp && !SP.connected && !HM.ok) return '';
-  const playing = hub ? HM.playing : SP.connected ? SP.playing : xs(sp, 'play') === '1';
-  const art = !hub && SP.connected && /^https:\/\/[^"'()\\\s]+$/.test(SP.art || '') ? SP.art : '';
+  const playing = hub ? HM.playing || hs?.status === 'playing' : SP.connected ? SP.playing : xs(sp, 'play') === '1';
+  const a = hub ? hs?.art : SP.connected ? SP.art : '', art = /^https:\/\/[^"'()\\\s]+$/.test(a || '') ? a : '';
   const slide = playerSlide;
   playerSlide = false;
   // độ trễ âm theo đồng hồ để đĩa không giật về 0° mỗi lần vẽ lại; có ảnh bìa Spotify thì in lên đĩa

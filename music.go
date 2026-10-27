@@ -71,7 +71,7 @@ func mountMusic(mux *http.ServeMux, h *Hub, a *Auth) *hubMusic {
 	}
 	m := &hubMusic{dirs: filepath.SplitList(dirs), db: h.db}
 	m.snap = newSnapServer(func(id string) (int, bool) { z := m.zone(id); return z.Volume, z.Muted })
-	m.spot = newHubSpotify()
+	m.spot = newHubSpotify(h.db)
 	go m.run()
 	if addr := os.Getenv("HUBD_SNAP_LISTEN"); addr != "" {
 		if ln, err := net.Listen("tcp", addr); err != nil {
@@ -86,6 +86,7 @@ func mountMusic(mux *http.ServeMux, h *Hub, a *Auth) *hubMusic {
 	mux.HandleFunc("POST /api/music/nas", a.Require(m.nasBrowse))
 	mux.HandleFunc("GET /api/spotify/hub", a.Require(m.spot.status))
 	mux.HandleFunc("POST /api/spotify/hub", a.Require(m.spot.action))
+	mux.HandleFunc("/zc", m.spot.zeroconf) // ghép đôi Spotify Connect từ app trong LAN: không PIN
 	return m
 }
 
@@ -232,6 +233,7 @@ func (m *hubMusic) state(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Unlock()
 	out["zones"] = m.zones()
+	out["spotify"] = m.spot.player() // Spotify đang phát trên hub (Soloist), null khi chưa có
 	writeJSON(w, out)
 }
 
