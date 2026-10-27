@@ -29,6 +29,7 @@ type Zone struct {
 	Name  string `yaml:"name" json:"name"`
 	Floor int    `yaml:"floor" json:"floor"`
 	Type  string `yaml:"type" json:"type,omitempty"`
+	Desc  string `yaml:"desc" json:"desc,omitempty"` // mô tả ngắn, sửa trên trang Cài đặt
 }
 
 // Entity là một số đo. Field: đọc một khoá của payload JSON (vd dps Tuya), nhân Scale.
@@ -118,6 +119,9 @@ func LoadConfig(path string) (Config, string, error) {
 	}
 	if cfg.Scenes == nil {
 		cfg.Scenes = []Scene{}
+	}
+	if cfg.Rules == nil {
+		cfg.Rules = []Rule{}
 	}
 	if cfg.HTTP.Listen == "" {
 		cfg.HTTP.Listen = ":8080"

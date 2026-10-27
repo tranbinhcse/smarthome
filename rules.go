@@ -9,28 +9,28 @@ import (
 // Kích hoạt khi value > Above (hoặc < Below) liên tục For. Nhả khi value <= ClearBelow
 // (mặc định = Above) hoặc value >= ClearAbove (mặc định = Below).
 type Rule struct {
-	ID         string        `yaml:"id"`
-	Entity     string        `yaml:"entity"`
-	Above      *float64      `yaml:"above"`
-	Below      *float64      `yaml:"below"`
-	ClearBelow *float64      `yaml:"clear_below"`
-	ClearAbove *float64      `yaml:"clear_above"`
-	For        time.Duration `yaml:"for"`
-	Then       []Action      `yaml:"then"`
-	OnClear    []Action      `yaml:"on_clear"`
-	Alert      string        `yaml:"alert"` // lời cảnh báo: khi kích hoạt, state "alert:<id>" = chuỗi này; khi nhả = ""
+	ID         string        `yaml:"id" json:"id"`
+	Entity     string        `yaml:"entity" json:"entity"`
+	Above      *float64      `yaml:"above" json:"above,omitempty"`
+	Below      *float64      `yaml:"below" json:"below,omitempty"`
+	ClearBelow *float64      `yaml:"clear_below" json:"clear_below,omitempty"`
+	ClearAbove *float64      `yaml:"clear_above" json:"clear_above,omitempty"`
+	For        time.Duration `yaml:"for" json:"for,omitempty"` // JSON: nano giây
+	Then       []Action      `yaml:"then" json:"then,omitempty"`
+	OnClear    []Action      `yaml:"on_clear" json:"on_clear,omitempty"`
+	Alert      string        `yaml:"alert" json:"alert,omitempty"` // lời cảnh báo: khi kích hoạt, state "alert:<id>" = chuỗi này; khi nhả = ""
 }
 
 type Action struct {
-	Set string `yaml:"set"`
-	To  string `yaml:"to"` // on | off
+	Set string `yaml:"set" json:"set,omitempty"`
+	To  string `yaml:"to" json:"to,omitempty"` // on | off
 
-	Notify string `yaml:"notify"` // câu cảnh báo, publish lên hubd/alert
-	Level  string `yaml:"level"`  // urgent | warn | info (rỗng = info)
-	Kind   string `yaml:"kind"`   // loại thông báo (co2, bui, mua, nong...): tắt được từng loại trong Cài đặt (notify.go)
+	Notify string `yaml:"notify" json:"notify,omitempty"` // câu cảnh báo, publish lên hubd/alert
+	Level  string `yaml:"level" json:"level,omitempty"`   // urgent | warn | info (rỗng = info)
+	Kind   string `yaml:"kind" json:"kind,omitempty"`     // loại thông báo (co2, bui, mua, nong...): tắt được từng loại trong Cài đặt (notify.go)
 
-	Alert string `yaml:"-"` // engine tự tạo cho luật có alert: id luật; Text rỗng = nhả cảnh báo
-	Text  string `yaml:"-"`
+	Alert string `yaml:"-" json:"-"` // engine tự tạo cho luật có alert: id luật; Text rỗng = nhả cảnh báo
+	Text  string `yaml:"-" json:"-"`
 }
 
 type ruleState struct {

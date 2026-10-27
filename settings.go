@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
+	"time"
 )
 
 // Cấu hình nhập từ trang Cài đặt (Tuya, AI, đầu ghi camera, Spotify...): mỗi nhóm một object JSON trong SQLite.
@@ -65,6 +67,49 @@ func (d *DB) PutSetting(ns string, patch map[string]any) error {
 	return err
 }
 
+// putSetting lưu một nhóm như PUT /api/settings/{ns}: đầu ghi đổi IP thì bỏ mật khẩu cũ và ghi lại file camera sinh,
+// báo dịch vụ đọc lại qua MQTT (tin không kèm giá trị). Trả true khi nhóm đó chỉ áp lúc khởi động (thiết bị, phòng).
+func putSetting(h *Hub, n string, patch map[string]any) (restart bool, err error) {
+	if n == "nvr" {
+		nvrPatch(h.db, patch)
+	}
+	if err := h.db.PutSetting(n, patch); err != nil {
+		return false, err
+	}
+	if n == "nvr" {
+		syncCamGen(h.db)
+	}
+	h.publish("hubd/settings/"+n, "changed")
+	return n == "devices" || n == "zones", nil
+}
+
+// SettingNSs: tên mọi nhóm cài đặt đã lưu.
+func (d *DB) SettingNSs() []string {
+	var out []string
+	rows, err := d.sql.Query(`SELECT ns FROM settings ORDER BY ns`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func withoutSecrets(s map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range s {
+		if !secretKey.MatchString(k) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // masked: bản cho trình duyệt, bí mật thay bằng "<khoá>_set".
 func masked(s map[string]any) map[string]any {
 	out := map[string]any{}
@@ -102,20 +147,48 @@ func mountSettings(mux *http.ServeMux, h *Hub, a *Auth) {
 			http.Error(w, "cần một object JSON", 400)
 			return
 		}
-		if n == "nvr" {
-			nvrPatch(h.db, patch) // đổi IP đầu ghi: không giữ mật khẩu cũ (camera.go)
-		}
-		if err := h.db.PutSetting(n, patch); err != nil {
+		restart, err := putSetting(h, n, patch)
+		if err != nil {
 			http.Error(w, "không lưu được", 500)
 			return
 		}
-		if n == "nvr" {
-			syncCamGen(h.db) // kênh camera đổi: ghi file sinh, hubd tự khởi động lại để nạp (camera.go)
-		}
-		h.publish("hubd/settings/"+n, "changed") // dịch vụ đọc lại qua API; tin này không kèm giá trị
-		if n == "devices" {                      // sắp xếp thiết bị vào phòng: áp lúc khởi động (main.go), nên nạp lại
+		if restart {
 			go restartHub()
 		}
+		w.WriteHeader(204)
+	}))
+	// Sao lưu: mọi nhóm cài đặt, bỏ hẳn trường bí mật (khoá API, mật khẩu, token) nên tệp tải về không chứa bí mật.
+	mux.HandleFunc("GET /api/backup", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]any{}
+		for _, n := range h.db.SettingNSs() {
+			out[n] = withoutSecrets(h.db.Setting(n))
+		}
+		now := time.Now()
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="inix-home-%s.json"`, now.Format("20060102-1504")))
+		writeJSON(w, map[string]any{"app": "iNIX Home", "version": 1, "at": now.Unix(), "settings": out})
+	}))
+	// Khôi phục: ghi lại từng nhóm như lưu tay (trộn theo trường, bí mật đang có giữ nguyên), rồi nạp lại hubd.
+	mux.HandleFunc("POST /api/restore", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Settings map[string]map[string]any `json:"settings"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&b) != nil || len(b.Settings) == 0 {
+			http.Error(w, "không phải tệp sao lưu iNIX Home", 400)
+			return
+		}
+		for n := range b.Settings {
+			if !settingNS.MatchString(n) {
+				http.Error(w, "tệp sao lưu có nhóm cài đặt lạ: "+n, 400)
+				return
+			}
+		}
+		for n, s := range b.Settings {
+			if _, err := putSetting(h, n, withoutSecrets(s)); err != nil {
+				http.Error(w, "không lưu được", 500)
+				return
+			}
+		}
+		go restartHub()
 		w.WriteHeader(204)
 	}))
 	mux.HandleFunc("GET /api/assistant/settings/{ns}", a.Assistant(func(w http.ResponseWriter, r *http.Request) {

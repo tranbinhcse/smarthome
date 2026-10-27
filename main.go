@@ -34,6 +34,7 @@ func main() {
 	if syncCamGen(db) { // camera gán trên trang Cài đặt: ghi file sinh trước khi theo dõi thư mục
 		mergeGenerated(&cfg, os.Getenv("HUBD_GEN_DIR"))
 	}
+	applyZoneOverrides(&cfg, db.Setting("zones"))      // phòng sửa / thêm trên trang Cài đặt (trước thiết bị)
 	applyDeviceOverrides(&cfg, db.Setting("devices")) // phòng / tên thiết bị sắp xếp trên trang Cài đặt
 	if pin == "" {
 		log.Println("CẢNH BÁO: HUBD_PIN trống — giao diện và lệnh KHÔNG có mật khẩu")
@@ -108,7 +109,8 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /api/login", auth.Login)
 	mux.HandleFunc("GET /api/config", auth.Require(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"zones": hub.cfg.Zones, "entities": hub.cfg.Entities, "devices": hub.cfg.Devices, "scenes": hub.cfg.Scenes})
+		writeJSON(w, map[string]any{"zones": hub.cfg.Zones, "entities": hub.cfg.Entities, "devices": hub.cfg.Devices, "scenes": hub.cfg.Scenes,
+			"rules": hub.cfg.Rules}) // luật: trang Cài đặt → Tự động hoá (chỉ xem)
 	}))
 	mux.HandleFunc("GET /api/state", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, hub.Snapshot())
@@ -167,6 +169,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	}))
 	mountAssistant(mux, hub, auth)
 	mountSettings(mux, hub, auth)
+	mountSessions(mux, auth)
 	mountTuyaSetup(mux, hub, auth)
 	mountSpotify(mux, hub, auth)
 	mountNodes(mux, hub, auth)

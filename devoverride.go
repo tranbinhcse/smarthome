@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -45,6 +46,53 @@ func applyDeviceOverrides(cfg *Config, over map[string]any) {
 				}
 			}
 		}
+	}
+}
+
+var zoneID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,31}$`)
+
+// applyZoneOverrides áp phòng sửa / thêm trên trang Cài đặt (nhóm cấu hình "zones"):
+// {"<id phòng>": {"name": "<tên>", "floor": <tầng 1..9>, "desc": "<mô tả>"}}. Phòng đã có thì đổi các trường hợp lệ;
+// id chưa có thì thêm phòng mới (cần tên và tầng). Gọi trước applyDeviceOverrides để chuyển được thiết bị vào phòng mới.
+func applyZoneOverrides(cfg *Config, over map[string]any) {
+	str := func(m map[string]any, k string) string { s, _ := m[k].(string); return strings.TrimSpace(s) }
+	floor := func(m map[string]any) int {
+		if f, ok := m["floor"].(float64); ok && f >= 1 && f <= 9 && f == float64(int(f)) {
+			return int(f)
+		}
+		return 0
+	}
+	at := map[string]int{}
+	for i, z := range cfg.Zones {
+		at[z.ID] = i
+	}
+	var added []string
+	for id, v := range over {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		i, ok := at[id]
+		if !ok {
+			if zoneID.MatchString(id) && str(m, "name") != "" && floor(m) != 0 {
+				added = append(added, id)
+			}
+			continue
+		}
+		if n := str(m, "name"); n != "" {
+			cfg.Zones[i].Name = n
+		}
+		if f := floor(m); f != 0 {
+			cfg.Zones[i].Floor = f
+		}
+		if _, ok := m["desc"].(string); ok {
+			cfg.Zones[i].Desc = str(m, "desc")
+		}
+	}
+	sort.Strings(added) // thứ tự ổn định giữa các lần khởi động
+	for _, id := range added {
+		m := over[id].(map[string]any)
+		cfg.Zones = append(cfg.Zones, Zone{ID: id, Name: str(m, "name"), Floor: floor(m), Desc: str(m, "desc")})
 	}
 }
 

@@ -2,10 +2,12 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
@@ -86,4 +88,57 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: tok, Path: "/", HttpOnly: true,
 		SameSite: http.SameSiteLaxMode, MaxAge: 90 * 24 * 3600})
 	w.WriteHeader(204)
+}
+
+// mountSessions: Cài đặt → Tài khoản & chia sẻ. Liệt kê máy đã đăng nhập theo mã rút gọn từ token (sha256, không gửi
+// token ra trình duyệt), đăng xuất từ xa một máy hoặc mọi máy khác máy đang dùng.
+func mountSessions(mux *http.ServeMux, a *Auth) {
+	sid := func(tok string) string { s := sha256.Sum256([]byte(tok)); return hex.EncodeToString(s[:6]) }
+	mine := func(r *http.Request) string {
+		if c, err := r.Cookie(cookieName); err == nil {
+			return c.Value
+		}
+		return ""
+	}
+	tokens := func() map[string]int64 {
+		out := map[string]int64{}
+		rows, err := a.db.sql.Query(`SELECT token, created FROM tokens WHERE created>?`, a.now().Add(-90*24*time.Hour).Unix())
+		if err != nil {
+			return out
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var t string
+			var c int64
+			if rows.Scan(&t, &c) == nil {
+				out[t] = c
+			}
+		}
+		return out
+	}
+	type session struct {
+		ID      string `json:"id"`
+		Created int64  `json:"created"`
+		Current bool   `json:"current"`
+	}
+	mux.HandleFunc("GET /api/sessions", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		out := []session{}
+		for t, c := range tokens() {
+			out = append(out, session{sid(t), c, t == mine(r)})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Created > out[j].Created })
+		writeJSON(w, out)
+	}))
+	mux.HandleFunc("DELETE /api/sessions/{id}", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		for t := range tokens() {
+			if sid(t) == r.PathValue("id") {
+				a.db.sql.Exec(`DELETE FROM tokens WHERE token=?`, t)
+			}
+		}
+		w.WriteHeader(204)
+	}))
+	mux.HandleFunc("DELETE /api/sessions", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		a.db.sql.Exec(`DELETE FROM tokens WHERE token<>?`, mine(r))
+		w.WriteHeader(204)
+	}))
 }
