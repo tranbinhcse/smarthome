@@ -98,8 +98,9 @@ Hành động `{ notify: "câu", level: info|warn|urgent, kind: co2 }` gửi câ
 Thiết kế: mục 15.2 của `docs/2026-10-26-trung-tam-dieu-khien-nha-design.md`. Container thứ 4, tắt đi thì lõi vẫn chạy đủ.
 
 - **Nói:** nút micro trên thanh trên của dashboard. Chạm để nghe, chạm lần nữa (hoặc sau 8 giây) để gửi. Âm thanh đi qua hubd `/voice/*` (cần đăng nhập PIN) tới `voiced`, không mở cổng nào khác.
-- **Hiểu:** chuyển giọng nói thành chữ ngay trên máy Ubuntu (sherpa-onnx, Zipformer tiếng Việt). Lệnh cố định khớp theo tên trong `config.yaml`, chạy cả khi mất internet: "bật đèn kho", "tắt đèn phòng lạnh", "ra khỏi nhà" (tên kịch bản), "pin còn bao nhiêu", "đèn kho đang bật không", "tắt báo động", "tình hình thế nào". Câu khác gửi AI qua API chat completions **tương thích OpenAI** (OpenAI, OpenRouter, Groq, Gemini, Ollama/LM Studio trong LAN...) kèm tool `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`. Chưa cài AI thì chỉ chạy lệnh cố định.
-- **Đọc:** VieNeu-TTS giọng Hải Đăng, chạy cục bộ. Nút loa trên thanh trên đọc tóm tắt tình hình: thời tiết (cảm biến ngoài trời), không khí trong nhà (CO₂, bụi mịn cao nhất ở đâu), pin/điện mặt trời/lưới, cảnh báo đang mở; tính ngay trong nhà, không cần AI. Cảnh báo `notify` của luật được publish lên MQTT `hubd/alert`; `voiced` đọc lên mọi màn hình đang mở dashboard. Câu cảnh báo cố định được tạo sẵn âm thanh lúc khởi động. **Đọc chạy cả trên HTTP**; chỉ micro cần HTTPS.
+- **Gọi tên:** bật "Nghe gọi tên ở màn hình này" (Cài đặt → Giọng và xưng hô, riêng từng màn hình, cần HTTPS, để màn hình sáng). Micro mở liên tục, dashboard chỉ gửi đoạn có tiếng nói; `voiced` nhận dạng trong nhà và chỉ làm theo câu mở đầu bằng tên trợ lý: "Mây ơi, bật đèn kho" (chưa đặt tên thì "trợ lý ơi"). Câu khác bị bỏ qua, không trả lời, không ghi log. Chỉ gọi "Mây ơi" thì trợ lý hỏi lại và câu kế không cần gọi tên. Viền xanh trên nút micro = đang nghe.
+- **Hiểu:** chuyển giọng nói thành chữ ngay trên máy Ubuntu (sherpa-onnx, Zipformer tiếng Việt). Lệnh cố định khớp theo tên trong `config.yaml`, chạy cả khi mất internet: "bật đèn kho", "tắt đèn phòng lạnh", "ra khỏi nhà" (tên kịch bản), "pin còn bao nhiêu", "đèn kho đang bật không", "tắt báo động", "tình hình thế nào", "chào"/"Mây ơi". Thiết bị nhiều nút đã tách kênh (cùng `group`, vd "Nút 1", "Nút 2" của "Đèn phòng lạnh"): gọi cả nhóm "bật đèn phòng lạnh" (bật từng kênh) hoặc một kênh "tắt đèn phòng lạnh nút 2"; kênh cần PIN vẫn bị chặn và câu trả lời nói rõ kênh nào. Câu khác gửi AI qua API chat completions **tương thích OpenAI** (OpenAI, OpenRouter, Groq, Gemini, Ollama/LM Studio trong LAN...) kèm tool `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`. Chưa cài AI thì chỉ chạy lệnh cố định.
+- **Đọc:** VieNeu-TTS chạy cục bộ, giọng Nam (Hải Đăng) hoặc Nữ (Trúc Ly), cả hai có sẵn trong gói `vieneu` (gói có 25 giọng; đổi lựa chọn ở `VOICES` trong `voiced.py`). Câu trả lời dài được đọc theo từng câu: câu đầu phát ngay (tóm tắt ~1,2–1,8 s thay vì 8,6 s), câu sau tổng hợp trong lúc đang phát. Nút loa trên thanh trên đọc tóm tắt tình hình: thời tiết (cảm biến ngoài trời), không khí trong nhà (CO₂, bụi mịn cao nhất ở đâu), pin/điện mặt trời/lưới, cảnh báo đang mở; tính ngay trong nhà, không cần AI. Cảnh báo `notify` của luật được publish lên MQTT `hubd/alert`; `voiced` đọc lên mọi màn hình đang mở dashboard. Câu cảnh báo cố định được tạo sẵn âm thanh lúc khởi động. **Đọc chạy cả trên HTTP**; chỉ micro cần HTTPS.
 - **Quyền:** `voiced` gọi hubd bằng `HUBD_ASSISTANT_TOKEN`, chỉ qua `/api/assistant/*`, quyền như người chưa nhập PIN. hubd từ chối (403) lệnh tới thiết bị `pin: true`/`protected: true` và kịch bản `pin: true` hoặc có bước đụng các thiết bị đó. PIN của iPad không truyền sang trợ lý.
 
 Bật lần đầu (máy đã có `.env`):
@@ -114,6 +115,13 @@ Bật dịch vụ bằng profile `voice`: thêm `voice` vào `COMPOSE_PROFILES` 
 1. **Cài đặt → Trợ lý AI:** nhập địa chỉ API (base URL, vd `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, `http://192.168.1.x:11434/v1` cho Ollama), API key (trống nếu máy AI trong nhà không cần), bấm **Thử kết nối** để lấy danh sách model (endpoint không trả danh sách thì gõ tên model), chọn model, **Lưu**. Khoá lưu trong hubd (nhóm `ai`), trình duyệt chỉ thấy "đã lưu"; nút Thử đi qua hubd → `voiced`, trình duyệt không gọi thẳng endpoint. Đổi địa chỉ thì phải nhập lại khoá (khoá cũ không gửi sang máy khác). `voiced` đọc lại cấu hình ngay khi lưu (MQTT `hubd/settings/ai`).
 2. **Cài đặt → HTTPS:** bấm **Bật HTTPS** rồi cài chứng chỉ lên iPad theo các bước hiện ngay trong mục đó (mục HTTPS bên dưới). Chạm màn hình một lần sau khi mở dashboard để iOS cho phép tự đọc cảnh báo.
 3. **Cài đặt → Đọc thông báo:** tắt loại không muốn nghe.
+4. **Cài đặt → Giọng và xưng hô** (nhóm `voice`, `voiced` áp dụng ngay khi lưu qua MQTT `hubd/settings/voice`):
+   - giọng Nam/Nữ, có nút **Nghe thử** dùng giá trị đang nhập;
+   - **Gọi chủ nhà là** (vd "anh Bình"): trợ lý xưng "em", mở đầu câu trả lời bằng "Dạ anh Bình, ...", chào trong tóm tắt, dặn AI cách xưng hô. Để trống thì nói "tôi/bạn" như cũ;
+   - **Tên trợ lý:** dùng để gọi ("Mây ơi") và khi tự giới thiệu;
+   - **Tốc độ đọc:** dashboard áp khi phát, giữ cao độ;
+   - **Giờ yên lặng** (vd 22:00–06:00): cảnh báo chỉ hiện chữ, cảnh báo `urgent` vẫn đọc;
+   - **Nghe gọi tên ở màn hình này.**
 
 Câu hỏi tự do và trạng thái thiết bị dạng chữ được gửi tới địa chỉ AI đã nhập; âm thanh không rời khỏi nhà.
 
@@ -127,14 +135,16 @@ Kịch bản khai báo ở mục `scenes:` của `config.yaml`, câu cảnh báo
 | `POST /api/assistant/cmd` `{device, to}` | 204; 403 khi cần PIN |
 | `POST /api/assistant/scene/{id}` | 204; 403 khi cần PIN; 502 khi có bước không gửi được |
 | `POST /api/assistant/alarm/ack` | xác nhận cảnh báo, publish `hubd/alert/ack` |
-| `GET /api/assistant/settings/ai` | `{url, api_key, model}` đầy đủ cho `voiced` (token trợ lý chỉ đọc được nhóm `ai`) |
+| `GET /api/assistant/settings/{ai,voice}` | `ai`: `{url, api_key, model}`; `voice`: `{voice, owner, name, speed, quiet_from, quiet_to}`. Token trợ lý chỉ đọc được hai nhóm này (`serviceNSs`) |
 
 | `voiced` qua hubd `/voice/*` (cần PIN) | |
 |---|---|
-| `POST /voice/ask` | WAV hoặc `{text}` → `{heard, reply, audio}` |
+| `POST /voice/ask` | WAV hoặc `{text}` → `{heard, reply, audio}`; `audio` là danh sách URL từng câu, phát lần lượt (`/voice/tts/<khoá>.wav`, câu sau tổng hợp khi được xin nếu nền chưa xong) |
+| `POST /voice/ask?listen=1` | nghe gọi tên (iPad; loa vệ tinh ESP32 sau này gửi y như vậy): câu không mở đầu bằng tên trợ lý → `{ignored: true}`; chỉ gọi tên → lời chào + `awaiting: true` |
 | `POST /voice/brief` | tóm tắt tình hình → `{reply, audio}` |
+| `POST /voice/preview` `{voice, owner, name}` | lời chào thử bằng giá trị đang nhập (chưa lưu) |
 | `POST /voice/ai/check` `{url, api_key, model}` | ô trống = giá trị đã lưu → `{ok, models, message}`; chỉ gọi `{url}/models`, `{url}/chat/completions`, không theo chuyển hướng |
-| `GET /voice/events` | SSE cảnh báo `{type: alert, level, text, audio}` / `{type: ack}` |
+| `GET /voice/events` | SSE cảnh báo `{type: alert, level, text, audio}` (`audio` = null trong giờ yên lặng) / `{type: ack}` |
 
 ## HTTPS (dùng chung: micro của trợ lý, đăng nhập Spotify)
 

@@ -12,7 +12,7 @@ import (
 var (
 	settingNS  = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 	secretKey  = regexp.MustCompile(`(?i)(key|pass|password|token|secret)$`)
-	serviceNSs = map[string]bool{"ai": true} // nhóm mà dịch vụ dùng token trợ lý (voiced) được đọc đầy đủ
+	serviceNSs = map[string]bool{"ai": true, "voice": true} // nhóm mà dịch vụ dùng token trợ lý (voiced) được đọc đầy đủ
 )
 
 func (d *DB) Setting(ns string) map[string]any {

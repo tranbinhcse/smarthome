@@ -491,6 +491,22 @@ Cả vòng qua `hubd` (nhận WAV → STT → khớp lệnh → gửi lệnh →
 
 **Chưa kiểm:** cài và tin cậy CA trên iPad thật (iOS hỗ trợ giới hạn tên của CA, nhưng chưa thử trên máy của nhà); gọi AI thật (chờ chủ nhà nhập URL/khoá; đã thử với endpoint giả tương thích OpenAI).
 
+#### 15.2.3 Bản 3: giọng Nam/Nữ, xưng hô, nghe gọi tên, đọc theo câu (2026-10-27)
+
+Chủ nhà chọn: nghe gọi tên ở cả iPad và loa vệ tinh (làm iPad trước, loa vệ tinh khi có phần cứng); cảnh báo phát trên dashboard đang mở; model AI nhỏ trên máy Ubuntu thì đo trước rồi quyết.
+
+| Phần | Cách làm |
+|---|---|
+| Giọng | Hải Đăng (Nam) và Trúc Ly (Nữ), cùng miền Bắc, đọc tự nhiên. Cả hai nằm sẵn trong gói `vieneu` 3.8.3 (`assets/voices_v3_turbo.json`, 25 giọng), không phải tải thêm; đã thử tổng hợp khi container không có mạng. Cache âm thanh tách theo giọng; đổi giọng thì tạo lại câu đọc sẵn ở nền (12 câu, 15,8 s) |
+| Xưng hô | Nhóm cấu hình `voice`: `owner` ("anh Bình") → trợ lý xưng "em", câu cố định mở đầu "Dạ anh Bình, ...", tóm tắt mở đầu "Chào anh Bình.", system prompt dặn AI cách gọi; `name` = tên trợ lý (lời chào, gọi tên). Trống thì như cũ |
+| Giờ yên lặng | `quiet_from`/`quiet_to`: cảnh báo vẫn hiện chữ, không tổng hợp và không đọc, trừ `urgent` |
+| Tốc độ đọc | `speed`, dashboard đặt `playbackRate` (giữ cao độ). VieNeu không có tham số tốc độ; làm ở trình duyệt nên không tốn TTS, không đổi cache |
+| Đọc theo câu | Câu trả lời cắt theo câu, câu đầu tổng hợp trước khi trả lời, câu sau ở nền; `audio` thành danh sách URL. Tóm tắt dài ~20 s: trả lời sau 1,2–1,8 s (trước 8,6 s), các câu sau xong trước khi câu đang phát hết |
+| Nghe gọi tên (iPad) | Dashboard mở micro liên tục, cắt đoạn có tiếng bằng ngưỡng năng lượng (nền ồn tự đo), hạ về ~16 kHz, gửi `/voice/ask?listen=1`. `voiced` nhận dạng bằng STT hiện có rồi xét tên ở đầu câu (đúng dấu, hoặc sai dấu nhưng có "ơi" sau; "máy lạnh" không gọi nhầm "Mây"); câu khác bỏ qua, không ghi log. Đo trên stack thử (giọng tổng hợp): "Mây ơi, bật đèn kho" 0,6 s; câu không gọi tên bị bỏ trong ~20 ms |
+| Thiết bị nhiều nút | Kênh tách từ quét QR (cùng `group`) gọi là "<nhóm> <kênh>"; nhóm một kênh gọi bằng tên nhóm; thêm mục cả nhóm `group:<nhóm>` cho lệnh cố định và tool AI; kênh cần PIN vẫn bị hubd chặn |
+
+**Chưa kiểm:** gọi tên bằng giọng thật qua micro iPad trong quán ồn (mới thử bằng giọng tổng hợp); ngưỡng năng lượng là số cố định trong `voice.js`, có thể phải chỉnh. Loa vệ tinh ESP32-S3 dùng cùng `/voice/ask?listen=1`, chưa làm firmware.
+
 ## 16. Chất lượng nước uống (máy lọc RO)
 
 Chủ nhà bổ sung ngày 2026-10-26. Hồ cá đã bỏ khỏi phạm vi. Phần này làm cùng Giai đoạn 4.

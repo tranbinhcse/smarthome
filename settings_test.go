@@ -83,3 +83,18 @@ func TestSettingsSecretBoundToURL(t *testing.T) {
 		t.Fatalf("đổi url kèm khoá mới: %v", s)
 	}
 }
+
+// Giọng đọc, xưng hô, giờ yên lặng (Cài đặt → Giọng và xưng hô): voiced đọc nhóm "voice" bằng token trợ lý.
+func TestAssistantReadsVoiceSettings(t *testing.T) {
+	mux, _, pub := assistantMux(t, Config{})
+	ck := call(mux, "POST", "/api/login", `{"pin":"1234"}`, "").Result().Cookies()
+	if w := call(mux, "PUT", "/api/settings/voice", `{"voice":"Trúc Ly","owner":"anh Bình","quiet_from":"22:00"}`, "", ck...); w.Code != 204 {
+		t.Fatalf("lưu: %d", w.Code)
+	}
+	if b := call(mux, "GET", "/api/assistant/settings/voice", "", testTok).Body.String(); !strings.Contains(b, `"owner":"anh Bình"`) {
+		t.Fatalf("voiced không đọc được nhóm voice: %s", b)
+	}
+	if !strings.Contains(strings.Join(*pub, "\n"), "hubd/settings/voice changed") {
+		t.Fatalf("lưu phải báo voiced đọc lại: %v", *pub)
+	}
+}

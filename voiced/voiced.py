@@ -4,17 +4,21 @@
 → lệnh cố định khớp cục bộ theo tên thiết bị/kịch bản/số đo trong config (chạy cả khi mất internet)
 → câu tự do gửi AI qua API chat completions tương thích OpenAI (tool calling; URL, khoá, model nhập ở trang Cài đặt,
 lưu trong hubd nhóm "ai") → mọi thao tác đi qua API trợ lý của hubd bằng token riêng; hubd tự chặn thiết bị/kịch bản
-cần PIN → câu trả lời đọc bằng VieNeu-TTS (giọng Hải Đăng), cache theo nội dung câu.
+cần PIN → câu trả lời đọc bằng VieNeu-TTS (giọng Nam/Nữ chọn ở Cài đặt), cache theo giọng + câu.
 Cảnh báo nghe từ MQTT hubd/alert, đẩy tới loa (iPad) qua SSE; câu cảnh báo cố định tạo sẵn âm thanh lúc khởi động.
-Cấu hình AI đọc qua GET /api/assistant/settings/ai, đọc lại khi MQTT hubd/settings/ai = changed.
+Cấu hình đọc qua GET /api/assistant/settings/{ai,voice}, đọc lại khi MQTT hubd/settings/<nhóm> = changed:
+nhóm "ai" (URL, khoá, model), nhóm "voice" (giọng, cách gọi chủ nhà, tên trợ lý, tốc độ đọc, giờ yên lặng).
 
 HTTP (chỉ trong mạng docker; dashboard đi qua hubd /voice/*, không mở cổng ra LAN):
   POST /voice/ask       body audio/wav (PCM 16-bit, tần số bất kỳ) hoặc JSON {"text": "..."}
-                        → {"heard", "reply", "audio": "/voice/tts/<key>.wav"}
+                        → {"heard", "reply", "audio": ["/voice/tts/<key>.wav", ...]} (từng câu, phát lần lượt)
+  POST /voice/ask?listen=1  (nghe gọi tên: iPad/loa vệ tinh gửi từng đoạn có tiếng) câu không mở đầu bằng tên trợ lý
+                        → {"ignored": true}, không trả lời, không ghi log; chỉ gọi tên → lời chào + "awaiting": true
   POST /voice/brief     tóm tắt tình hình (thời tiết, không khí, điện/pin, cảnh báo) → {"reply", "audio"}
   POST /voice/ai/check  JSON {url, api_key, model} (ô trống = giá trị đã lưu) → {"ok", "models", "message"}
+  POST /voice/preview   JSON {voice, owner, name} (đang nhập, chưa lưu) → lời chào thử {"reply", "audio"}
   GET  /voice/tts/<key>.wav
-  GET  /voice/events    SSE: {"type": "alert", "level", "text", "audio"} | {"type": "ack"}
+  GET  /voice/events    SSE: {"type": "alert", "level", "text", "audio": [...] | null} | {"type": "ack"}
 """
 import hashlib
 import io
@@ -32,19 +36,23 @@ import wave
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import numpy as np
 
-VOICE = os.environ.get("VOICED_VOICE", "Hải Đăng")
+# Giọng có sẵn trong gói vieneu (assets/voices_v3_turbo.json, 25 giọng): chạy không cần mạng, không phải tải thêm.
+VOICES = {"Hải Đăng": "Nam", "Trúc Ly": "Nữ"}  # cùng kiểu: miền Bắc, đọc tự nhiên
+DEFAULT_VOICE = "Hải Đăng"
 MODELS = Path(os.environ.get("VOICED_MODELS", "/models"))
 VN = timezone(timedelta(hours=7))
-OFFLINE = "Không gọi được trợ lý trực tuyến nên tôi chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
-NOT_HEARD = "Tôi chưa nghe rõ, bạn nói lại nhé."
-FIXED_ONLY = "Chưa cài AI nên tôi chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
+# Câu cố định có xưng hô: {me}/{Me} = trợ lý tự xưng, {you} = cách gọi chủ nhà (Persona.fmt).
+OFFLINE = "Không gọi được trợ lý trực tuyến nên {me} chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
+NOT_HEARD = "{Me} chưa nghe rõ, {you} nói lại nhé."
+FIXED_ONLY = "Chưa cài AI nên {me} chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
 AI_KEY = "Khoá API của AI bị từ chối, hãy kiểm tra trong Cài đặt."
 AI_ERROR = "Trợ lý trực tuyến đang lỗi, bạn thử lại sau."
 ON_RE = re.compile(r"^\s*(on|1|true)\s*$", re.I)
+CLOCK = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 UNITS = {"%": "phần trăm", "W": "oát", "kW": "ki lô oát", "kWh": "ki lô oát giờ", "V": "vôn", "A": "am pe",
          "°C": "độ C", "ppm": "pi pi em", "µg/m³": "micrô gam trên mét khối", "lux": "lux"}
 
@@ -67,6 +75,35 @@ class Hub:
             return code, json.loads(raw) if raw else None
         except ValueError:
             return code, raw.decode(errors="replace").strip()
+
+
+class Persona:
+    """Giọng và xưng hô (nhóm cấu hình "voice" của hubd). owner = cách gọi chủ nhà ("anh Bình"): có thì trợ lý xưng "em"
+    và lễ phép; trống thì nói như cũ (tôi / bạn). quiet_from/quiet_to ("22:00"/"06:00") = giờ không tự đọc cảnh báo.
+    speed (tốc độ đọc) do dashboard áp khi phát, không cần ở đây."""
+    def __init__(self, s=None):
+        get = lambda k: str((s or {}).get(k) or "").strip()
+        self.voice = get("voice") if get("voice") in VOICES else DEFAULT_VOICE
+        self.owner, self.name = get("owner"), get("name")
+        self.me, self.you = ("em", self.owner) if self.owner else ("tôi", "bạn")
+        self.window = [CLOCK.fullmatch(get(k)) for k in ("quiet_from", "quiet_to")]
+
+    def fmt(self, template):
+        return template.format(me=self.me, Me=self.me.capitalize(), you=self.you)
+
+    def say(self, text):
+        """Câu trả lời cố định: có cách gọi chủ nhà thì mở đầu "Dạ anh Bình, ..." (giữ hoa từ viết tắt như CB)."""
+        if not self.owner:
+            return text
+        return f"Dạ {self.owner}, {text[0] if text[1:2].isupper() else text[0].lower()}{text[1:]}"
+
+    def greet(self):
+        out = f"{self.me} {'là ' + self.name + ' ' if self.name else ''}đây, {self.you} cần gì{' ạ' if self.owner else ''}?"
+        return "Dạ, " + out if self.owner else out[0].upper() + out[1:]
+
+    def quiet(self, now):
+        a, b = (int(m[1]) * 60 + int(m[2]) if m else None for m in self.window)
+        return a is not None and b is not None and a != b and (now.hour * 60 + now.minute - a) % 1440 < (b - a) % 1440
 
 
 # ---------- Lệnh cố định (cục bộ) ----------
@@ -144,6 +181,29 @@ def match(text, cfg):
     return ("ask_entity", ent, None) if ent else None
 
 
+GREET = {"xin", "chao", "alo", "oi", "a", "nhe"}
+
+
+def wake(text, p):
+    """Câu gọi trợ lý: tên (p.name, chưa đặt thì "trợ lý") ở đầu câu, cho một tiếng đệm phía trước ("à Mây ơi").
+    Khớp đúng dấu, hoặc sai dấu nhưng ngay sau là "ơi" (STT hay sai dấu; "máy lạnh" không gọi nhầm "Mây").
+    Trả phần lệnh sau tên ("" nếu chỉ gọi tên), không gọi → None."""
+    nfc = lambda x: unicodedata.normalize("NFC", x)
+    toks, name = re.findall(r"\w+", nfc(text)), re.findall(r"\w+", nfc((p.name or "trợ lý").lower()))
+    for i in (0, 1):
+        got, after = [t.lower() for t in toks[i:i + len(name)]], toks[i + len(name):]
+        oi = bool(after) and plain(after[0]) == "oi"
+        if len(got) == len(name) and (got == name or (oi and list(map(plain, got)) == list(map(plain, name)))):
+            return " ".join(after[1:] if oi else after)
+    return None
+
+
+def greeting(text, p):
+    """Chỉ gọi trợ lý ("chào", "alo", "Mây ơi"): trả lời lời chào."""
+    ws = set(words(text))
+    return bool(ws) and ws <= GREET | set(words(p.name))
+
+
 def num(v):
     try:
         return f"{round(float(v), 2):.2f}".rstrip("0").rstrip(".").replace(".", ",")
@@ -179,7 +239,11 @@ def status(x, v):
     return f"{x['name'].strip()}: " + ", ".join(f"{n} {s.removeprefix('đang ')}" for n, s in ss) + "."
 
 
-def run(intent, hub):
+def run(intent, hub, p=Persona()):
+    return summary(hub, p) if intent[0] == "brief" else p.say(reply(intent, hub))
+
+
+def reply(intent, hub):
     kind, x, to = intent
     name = x and x["name"].strip()
     if kind == "set":
@@ -190,8 +254,6 @@ def run(intent, hub):
     if kind == "ack":
         hub("POST", "/alarm/ack")
         return "Đã xác nhận cảnh báo."
-    if kind == "brief":
-        return summary(hub)
     v = hub("GET", "/state")[1]["values"]
     if kind == "ask_device":
         return status(x, v)
@@ -206,7 +268,7 @@ def watt(x):
     return f"{num(round(abs(x) / 1000, 1))} ki lô oát" if abs(x) >= 1000 else f"{round(abs(x))} oát"
 
 
-def brief(cfg, st):
+def brief(cfg, st, p=Persona()):
     v = st["values"]
     def val(i):
         try:
@@ -240,26 +302,26 @@ def brief(cfg, st):
         parts.append("Trong nhà " + ", ".join(air) + ".")
 
     soc, bat, pv, load, grid = (val(i) for i in ("jk.soc", "jk.power", "deye.pv", "deye.load", "deye.grid"))
-    p = []
+    pw = []
     if soc is not None:
         state = "" if bat is None or abs(bat) <= 5 else f", đang {'sạc' if bat > 0 else 'xả'} {watt(bat)}"
-        p.append(f"pin {num(soc)} phần trăm{state}")
-    p += [f"điện mặt trời {watt(pv)}"] if pv is not None else []
-    p += [f"nhà dùng {watt(load)}"] if load is not None else []
-    p += [f"đang {'mua' if grid > 0 else 'bán'} lưới {watt(grid)}"] if grid is not None and abs(grid) > 5 else []
-    if p:
-        e = "; ".join(p)
+        pw.append(f"pin {num(soc)} phần trăm{state}")
+    pw += [f"điện mặt trời {watt(pv)}"] if pv is not None else []
+    pw += [f"nhà dùng {watt(load)}"] if load is not None else []
+    pw += [f"đang {'mua' if grid > 0 else 'bán'} lưới {watt(grid)}"] if grid is not None and abs(grid) > 5 else []
+    if pw:
+        e = "; ".join(pw)
         parts.append(e[0].upper() + e[1:] + ".")
 
     if not parts:
         parts.append("Chưa có số đo thời tiết, không khí hay điện.")
     alerts = list(dict.fromkeys([a["text"] for a in st["alerts"]] + [x for k, x in v.items() if k.startswith("alert:") and x]))
     parts.append(f"Có {len(alerts)} cảnh báo: " + "; ".join(x.rstrip(". ") for x in alerts) + "." if alerts else "Không có cảnh báo nào.")
-    return " ".join(parts)
+    return " ".join(([f"Chào {p.owner}."] if p.owner else []) + parts)
 
 
-def summary(hub):
-    return brief(hub("GET", "/config")[1], hub("GET", "/state")[1])
+def summary(hub, p=Persona()):
+    return brief(hub("GET", "/config")[1], hub("GET", "/state")[1], p)
 
 
 # ---------- Câu tự do (AI qua API tương thích OpenAI, tool calling) ----------
@@ -281,7 +343,7 @@ TOOLS = [
 ]
 
 
-def system_prompt(cfg):
+def system_prompt(cfg, p=Persona()):
     cfg = grouped(cfg)
     zone = {z["id"]: z["name"] for z in cfg["zones"]}
     def lock(x):
@@ -290,7 +352,8 @@ def system_prompt(cfg):
     group = lambda d: f" (cả nhóm: {', '.join(m['name'].strip() for m in d['members'])})" if len(d.get("members") or []) > 1 else ""
     dev = {d["id"]: d["name"].strip() for d in cfg["devices"]}
     return "\n".join([
-        "Bạn là trợ lý giọng nói của iNIX Home, nhà 3 tầng kiêm quán cafe.",
+        f"Bạn là {p.name + ', ' if p.name else ''}trợ lý giọng nói của iNIX Home, nhà 3 tầng kiêm quán cafe.",
+        *([f'Người nói chuyện với bạn là chủ nhà: gọi họ là "{p.owner}", tự xưng "em", nói lễ phép (dạ, ạ).'] if p.owner else []),
         "Câu của người dùng do nhận dạng giọng nói chép ra nên có thể sai dấu hoặc sai chữ; hãy hiểu theo tên thiết bị gần nhất.",
         "Câu trả lời sẽ được đọc thành tiếng: tiếng Việt, một hai câu ngắn, không markdown, không liệt kê dài.",
         "Chỉ xem và điều khiển nhà bằng các tool. Tool báo cần PIN thì bảo người dùng bấm trên màn hình, không thử cách khác.",
@@ -416,8 +479,8 @@ class AI:
         return sorted(m["id"] for m in self.call("/models")["data"])
 
 
-def ask_ai(text, cfg, hub, ai):
-    msgs = [{"role": "system", "content": system_prompt(cfg)}, {"role": "user", "content": text}]
+def ask_ai(text, cfg, hub, ai, p=Persona()):
+    msgs = [{"role": "system", "content": system_prompt(cfg, p)}, {"role": "user", "content": text}]
     for _ in range(6):
         m = ai.chat(msgs, TOOLS)
         calls = [{"id": c["id"], "type": "function", "function": {"name": c["function"]["name"], "arguments": c["function"].get("arguments") or "{}"}}
@@ -433,27 +496,29 @@ def ask_ai(text, cfg, hub, ai):
     return "Việc này nhiều bước quá, bạn nói cụ thể hơn giúp tôi."
 
 
-def answer(text, hub, ai):
+def answer(text, hub, ai, p=Persona()):
     if not text.strip():
-        return NOT_HEARD
+        return p.fmt(NOT_HEARD)
     try:
         code, cfg = hub("GET", "/config")
         if code != 200:
             return "Trung tâm từ chối trợ lý, cần kiểm tra token trợ lý."
         intent = match(text, cfg)
         if intent:
-            return run(intent, hub)
+            return run(intent, hub, p)
     except OSError:
         return "Không kết nối được trung tâm."
+    if greeting(text, p):
+        return p.greet()
     if ai is None:
-        return FIXED_ONLY
+        return p.fmt(FIXED_ONLY)
     try:
-        return ask_ai(text, cfg, hub, ai)
+        return ask_ai(text, cfg, hub, ai, p)
     except urllib.error.HTTPError as e:
         print(f"AI lỗi HTTP {e.code} ({ai.url}, model {ai.model})", flush=True)  # không in thân lỗi: có hãng nhắc lại một phần khoá
         return AI_KEY if e.code in (401, 403) else AI_ERROR
     except OSError:
-        return OFFLINE
+        return p.fmt(OFFLINE)
     except (ValueError, KeyError, IndexError, TypeError) as e:  # endpoint trả dạng lạ
         print(f"AI trả về không hợp lệ: {e!r}", flush=True)
         return AI_ERROR
@@ -499,31 +564,71 @@ def check_ai(stored, draft):
 
 # ---------- Âm thanh ----------
 
+def sentences(text):
+    """Cắt câu trả lời để phát câu đầu trong lúc tổng hợp câu sau; mẩu ngắn (dưới 25 ký tự) gộp vào câu kế."""
+    out = []
+    for part in re.split(r"(?<=[.!?;])\s+", text.strip()):
+        if out and len(out[-1]) < 25:
+            out[-1] += " " + part
+        elif part:
+            out.append(part)
+    return out
+
+
 class TTS:
     """Đọc thành WAV, cache theo (giọng, câu): câu cảnh báo và câu lặp lại không phải tổng hợp lại.
     Giữ `keep` file dùng gần nhất (câu trả lời của AI hầu như không lặp lại)."""
     keep = 500  # ponytail: xoá theo mtime khi ghi file mới, ~0,5 MB/file → tối đa vài trăm MB
 
     def __init__(self, cache, synth):
-        self.cache, self.synth, self.lock = cache, synth, threading.Lock()
+        self.cache, self.synth, self.lock, self.pending = cache, synth, threading.Lock(), {}
         cache.mkdir(parents=True, exist_ok=True)
 
-    def key(self, text):
-        return hashlib.sha1(f"{VOICE}\n{text}".encode()).hexdigest()[:16]
+    def key(self, text, voice=DEFAULT_VOICE):
+        return hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest()[:16]  # cache tách theo giọng
 
-    def url(self, text):
-        k = self.key(text)
-        p = self.cache / f"{k}.wav"
+    def later(self, text, voice):
+        """Ghi nhận câu sẽ cần (tổng hợp khi make). Trả khoá."""
+        k = self.key(text, voice)
         with self.lock:
-            if p.exists():
-                os.utime(p)  # đánh dấu vừa dùng
-            else:
-                tmp = self.cache / f"{k}.part.wav"
-                self.synth(text, tmp)
-                tmp.replace(p)
-                for old in sorted(self.cache.glob("*.wav"), key=lambda f: f.stat().st_mtime_ns)[:-self.keep]:
-                    old.unlink(missing_ok=True)
+            self.pending[k] = (text, voice)
+            while len(self.pending) > 200:  # câu chờ mà không ai xin (trình phát đã đóng)
+                self.pending.pop(next(iter(self.pending)))
+        return k
+
+    def make(self, k):
+        """Tệp WAV của khoá k, tổng hợp nếu chưa có. Khoá chưa từng ghi nhận → None."""
+        p = self.cache / f"{k}.wav"
+        if p.exists():  # có sẵn: trả ngay, không chờ máy TTS đang đọc câu khác
+            os.utime(p)  # đánh dấu vừa dùng
+            return p
+        with self.lock:
+            if p.exists():  # vừa được luồng khác tổng hợp xong
+                return p
+            if k not in self.pending:
+                return None
+            text, voice = self.pending[k]
+            tmp = self.cache / f"{k}.part.wav"
+            self.synth(text, tmp, voice)
+            tmp.replace(p)
+            self.pending.pop(k, None)
+            for old in sorted(self.cache.glob("*.wav"), key=lambda f: f.stat().st_mtime_ns)[:-self.keep]:
+                old.unlink(missing_ok=True)
+        return p
+
+    def url(self, text, voice=DEFAULT_VOICE):
+        k = self.later(text, voice)
+        self.make(k)
         return f"/voice/tts/{k}.wav"
+
+    def urls(self, text, voice=DEFAULT_VOICE):
+        """URL từng câu: câu đầu tổng hợp ngay, câu sau tổng hợp nền theo thứ tự (hoặc khi trình phát xin tới trước)."""
+        first, *rest = sentences(text) or [text]
+        keys = [self.later(t, voice) for t in rest]
+        out = [self.url(first, voice)] + [f"/voice/tts/{k}.wav" for k in keys]
+        if keys:
+            threading.Thread(target=lambda: [self.make(k) for k in keys], daemon=True).start()
+        return out
 
 
 def vieneu_synth():
@@ -534,7 +639,7 @@ def vieneu_synth():
     orl.OnnxV3LiteEngine._fetch = staticmethod(
         lambda repo, files, sub: MODELS / "codec" if repo == orl._CODEC_REPO else orig(repo, files, sub))
     v = Vieneu(onnx_dir=str(MODELS / "vieneu" / "onnx_int8"))  # tải sẵn bởi fetch_models.py
-    return lambda text, path: v.save(v.infer(text, voice=VOICE), str(path))
+    return lambda text, path, voice: v.save(v.infer(text, voice=voice), str(path))
 
 
 def sherpa_stt():
@@ -567,6 +672,16 @@ class App:
     def __init__(self, hub, ai, stt, tts):
         self.hub, self.ai, self.stt, self.tts = hub, ai, stt, tts
         self.listeners, self.lock = set(), threading.Lock()
+        self.persona, self.phrases, self.warming = Persona(), [], None
+        self.now = lambda: datetime.now(VN)
+
+    def load_voice(self):
+        """Đọc nhóm "voice" (giọng, xưng hô, giờ yên lặng). Trả True khi giọng hay cách gọi đổi (cần tạo lại câu đọc sẵn)."""
+        code, s = self.hub("GET", "/settings/voice")
+        if code != 200:
+            return print(f"không đọc được cấu hình giọng: HTTP {code}", flush=True) or False
+        old, self.persona = self.persona, Persona(s)
+        return (old.voice, old.owner) != (self.persona.voice, self.persona.owner)
 
     def load_ai(self):
         """Đọc cấu hình AI (nhóm "ai" của hubd) bằng token trợ lý. Không in khoá."""
@@ -576,9 +691,10 @@ class App:
         self.ai = AI.from_settings(s)
         print(f"AI: model {self.ai.model} tại {self.ai.url}" if self.ai else "chưa cài AI: chỉ chạy lệnh cố định", flush=True)
 
-    def speak(self, text):
+    def speak(self, text, voice=None):
+        """Danh sách URL âm thanh theo câu (dashboard phát lần lượt), None nếu TTS lỗi."""
         try:
-            return self.tts.url(text)
+            return self.tts.urls(text, voice or self.persona.voice)
         except Exception as e:  # mất tiếng vẫn còn chữ
             print(f"TTS lỗi: {e}", flush=True)
             return None
@@ -594,9 +710,16 @@ class App:
                 return self.broadcast({"type": "ack"})
             if topic == "hubd/settings/ai":  # lưu trên trang Cài đặt; tin không kèm giá trị
                 return self.load_ai()
+            if topic == "hubd/settings/voice":
+                if self.load_voice():  # giọng hay cách gọi đổi: đọc sẵn lại câu cảnh báo, câu cố định (chạy nền)
+                    self.warming = threading.Thread(target=self.prerender, daemon=True)
+                    self.warming.start()
+                return
             a = json.loads(payload)
-            text = str(a["text"])
-            self.broadcast({"type": "alert", "level": str(a.get("level", "info")), "text": text, "audio": self.speak(text)})
+            text, level = str(a["text"]), str(a.get("level", "info"))
+            # Giờ yên lặng: vẫn hiện chữ, không đọc (trừ khẩn); không tổng hợp nên đêm cũng đỡ tốn CPU.
+            audio = None if level != "urgent" and self.persona.quiet(self.now()) else self.speak(text)
+            self.broadcast({"type": "alert", "level": level, "text": text, "audio": audio})
         except Exception as e:  # paho 1.6 ném lại lỗi và dừng luồng MQTT: một tin hỏng không được làm câm cảnh báo
             print(f"bỏ qua tin {topic}: {e!r}", flush=True)
 
@@ -604,14 +727,19 @@ class App:
         """Tạo sẵn âm thanh cho mọi câu cảnh báo cố định trong config (đọc được ngay, cả khi mất internet)."""
         while True:
             try:
-                phrases = self.hub("GET", "/config")[1]["phrases"]
+                self.phrases = self.hub("GET", "/config")[1]["phrases"]
                 self.load_ai()
+                self.load_voice()
                 break
             except (OSError, TypeError, KeyError):
                 time.sleep(10)
-        for p in phrases + [OFFLINE, FIXED_ONLY, NOT_HEARD]:  # câu cố định dài, đọc lần đầu mất vài giây
-            self.speak(p)
-        print(f"đã tạo sẵn {len(phrases)} câu cảnh báo", flush=True)
+        self.prerender()
+
+    def prerender(self):
+        p = self.persona
+        for t in self.phrases + [p.fmt(x) for x in (OFFLINE, FIXED_ONLY, NOT_HEARD)]:  # câu cố định dài, đọc lần đầu mất vài giây
+            self.speak(t, p.voice)
+        print(f"đã tạo sẵn {len(self.phrases)} câu cảnh báo, giọng {p.voice}", flush=True)
 
 
 def handler(app):
@@ -628,15 +756,23 @@ def handler(app):
             if not n.isdigit() or int(n) > 8_000_000:
                 return self.send(400, "Content-Length không hợp lệ (tối đa 8 MB)".encode(), "text/plain; charset=utf-8")
             body = self.rfile.read(int(n))
-            if self.path == "/voice/ask":
-                return self.ask(body)
+            u = urlsplit(self.path)
+            if u.path == "/voice/ask":
+                return self.ask(body, parse_qs(u.query).get("listen") == ["1"])
             if self.path == "/voice/brief":
                 try:
-                    reply = summary(app.hub)
+                    reply = summary(app.hub, app.persona)
                 except Exception as e:  # hubd mất kết nối hoặc trả dạng lạ
                     print(f"tóm tắt lỗi: {e!r}", flush=True)
                     reply = "Không lấy được số liệu từ trung tâm."
                 return self.json({"reply": reply, "audio": app.speak(reply)})
+            if self.path == "/voice/preview":  # nút Nghe thử: giá trị đang nhập, không đổi cấu hình đang chạy
+                try:
+                    draft = json.loads(body or b"{}")
+                except ValueError:
+                    draft = {}
+                p = Persona(draft if isinstance(draft, dict) else {})
+                return self.json({"reply": p.greet(), "audio": app.speak(p.greet(), p.voice)})
             if self.path == "/voice/ai/check":
                 try:
                     draft = json.loads(body)
@@ -649,7 +785,7 @@ def handler(app):
         def json(self, obj):
             self.send(200, json.dumps(obj, ensure_ascii=False).encode())
 
-        def ask(self, body):
+        def ask(self, body, listen=False):
             t0 = time.perf_counter()
             try:
                 if self.headers.get("Content-Type", "").startswith("application/json"):
@@ -660,9 +796,17 @@ def handler(app):
                     heard = app.stt(rate, a).strip().lower() if len(a) >= rate * 0.3 else ""
             except Exception:
                 return self.send(400, "cần WAV PCM 16-bit hoặc JSON {\"text\": ...}".encode(), "text/plain; charset=utf-8")
+            if listen:
+                rest = wake(heard, app.persona)
+                if rest is None:  # người trong nhà/quán nói chuyện, không gọi trợ lý: bỏ qua, không ghi log
+                    return self.json({"ignored": True})
+                if not rest:
+                    reply = app.persona.greet()
+                    return self.json({"heard": heard, "reply": reply, "audio": app.speak(reply), "awaiting": True})
+                heard = rest
             t1 = time.perf_counter()
             try:
-                reply = answer(heard, app.hub, app.ai)
+                reply = answer(heard, app.hub, app.ai, app.persona)
             except Exception as e:
                 print(f"lỗi khi trả lời {heard!r}: {e!r}", flush=True)
                 reply = "Có lỗi, bạn thử lại sau."
@@ -674,8 +818,12 @@ def handler(app):
 
         def do_GET(self):
             if m := re.fullmatch(r"/voice/tts/([0-9a-f]{16})\.wav", self.path):
-                p = app.tts.cache / f"{m[1]}.wav"
-                return self.send(200, p.read_bytes(), "audio/wav") if p.exists() else self.send_error(404)
+                try:
+                    p = app.tts.make(m[1])  # câu sau của câu trả lời dài: tổng hợp ngay nếu nền chưa tới
+                except Exception as e:
+                    print(f"TTS lỗi: {e}", flush=True)
+                    p = None
+                return self.send(200, p.read_bytes(), "audio/wav") if p else self.send_error(404)
             if self.path == "/voice/healthz":
                 return self.send(200, b"ok", "text/plain")
             if self.path != "/voice/events":
@@ -717,8 +865,9 @@ def main():
     c = mqtt.Client("voiced")
     c.username_pw_set(os.environ.get("MQTT_USER"), os.environ.get("MQTT_PASS"))
     def on_connect(c, u, f, rc):
-        c.subscribe([("hubd/alert", 1), ("hubd/alert/ack", 1), ("hubd/settings/ai", 1)])
+        c.subscribe([("hubd/alert", 1), ("hubd/alert/ack", 1), ("hubd/settings/ai", 1), ("hubd/settings/voice", 1)])
         app.on_mqtt("hubd/settings/ai", "changed")  # nối lại broker: có thể đã lỡ tin đổi cấu hình
+        app.on_mqtt("hubd/settings/voice", "changed")
     c.on_connect = on_connect
     c.on_message = lambda c, u, m: app.on_mqtt(m.topic, m.payload)
     c.connect_async(os.environ.get("MQTT_HOST", "mosquitto"), 1883)
