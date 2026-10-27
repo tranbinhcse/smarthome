@@ -552,3 +552,7 @@ button.sub { text-align: left; text-decoration: underline dotted; text-underline
 /* Nút nói của trợ lý giọng nói (voice.js) */
 #mic.rec { background: var(--alert); color: #fff; animation: pulse 1s infinite; }
 #mic:disabled { opacity: .5; }
+/* Nút đọc tình hình (voice.js), công tắc Đọc thông báo, các bước cài HTTPS (setup-ai.js, setup-https.js) */
+#brief:disabled { opacity: .5; }
+.setrow input[type=checkbox] { flex: none; width: 22px; height: 22px; accent-color: var(--amber); }
+[data-setup] ol.note { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
