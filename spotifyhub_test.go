@@ -37,14 +37,21 @@ func TestMain(m *testing.M) {
 	case "pulse":
 		fakePulse()
 		os.Exit(0)
+	case "pacat", "pactl", "btctl": // khu Loa nối vào hub (hubout_test.go)
+		fakeAudioTool(os.Getenv("HUBD_FAKE"))
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
 
 func fakePulse() {
-	for _, a := range os.Args {
-		if i := strings.Index(a, "socket="); i >= 0 {
-			if _, err := net.Listen("unix", strings.Fields(a[i+7:])[0]); err != nil {
+	for i, a := range os.Args { // hubd chạy PulseAudio với kịch bản riêng: -F <file>, socket ở dòng module-native-protocol-unix
+		if a != "-F" || i+1 >= len(os.Args) {
+			continue
+		}
+		script, _ := os.ReadFile(os.Args[i+1])
+		if j := strings.Index(string(script), "socket="); j >= 0 {
+			if _, err := net.Listen("unix", strings.Fields(string(script)[j+7:])[0]); err != nil {
 				os.Exit(3)
 			}
 		}
@@ -70,7 +77,8 @@ func fakeSoloist() {
 	if os.Getenv("HUBD_PIN") != "" || os.Getenv("HUBD_MQTT_PASS") != "" {
 		fail("Soloist không được thừa hưởng môi trường của hubd")
 	}
-	if arg["-n"] != "iNIX Smart" || arg["--ws"] != "127.0.0.1:0" || !strings.HasPrefix(os.Getenv("PULSE_SERVER"), "unix:") {
+	// PULSE_SINK=hub: luôn phát vào sink FIFO, kể cả khi PulseAudio có thêm sink jack/Bluetooth của khu Loa nối vào hub
+	if arg["-n"] != "iNIX Smart" || arg["--ws"] != "127.0.0.1:0" || !strings.HasPrefix(os.Getenv("PULSE_SERVER"), "unix:") || os.Getenv("PULSE_SINK") != "hub" {
 		fail("tham số sai: %v", os.Args)
 	}
 	fmt.Println("2026-10-27 10:46:15.929: soloist 1.3.10.19 build 1793080877 (20261027) (gtest) (linux/x86_64)")
@@ -218,6 +226,7 @@ func soloistHub(t *testing.T, secs string) (*http.ServeMux, *Hub, []*http.Cookie
 	os.WriteFile(pulse, []byte(fmt.Sprintf("#!/bin/sh\nHUBD_FAKE=pulse exec '%s' \"$@\"\n", os.Args[0])), 0o755)
 	t.Setenv("HUBD_SOLOIST_URL", srv.URL+"/soloist_release_x86_64.tar.gz")
 	t.Setenv("HUBD_SOLOIST_DIR", t.TempDir())
+	t.Setenv("HUBD_PULSE_DIR", t.TempDir())
 	t.Setenv("HUBD_PULSEAUDIO", pulse)
 	t.Setenv("HUBD_SOLOIST_PRELOAD", "")
 	t.Setenv("HUBD_FAKE_SECS", secs)
@@ -268,14 +277,20 @@ func putKey(t *testing.T, mux http.Handler, ck []*http.Cookie, v any) {
 // pids: tiến trình Soloist và PulseAudio hubd đang giữ (0 = không có).
 func pids(s *hubSpotify) (sol, pa int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.sol != nil {
 		sol = s.sol.Process.Pid
 	}
-	if s.pa != nil {
-		pa = s.pa.Process.Pid
+	s.mu.Unlock()
+	return sol, pulsePid(s.pulse)
+}
+
+func pulsePid(p *hubPulse) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cmd != nil {
+		return p.cmd.Process.Pid
 	}
-	return
+	return 0
 }
 
 type lockedBuf struct {

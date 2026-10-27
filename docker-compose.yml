@@ -52,6 +52,11 @@ services:
       - tuya-state:/gen   # tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh); hubd chỉ ghi camera.yaml
       - hubd-db:/db
       - ./tls:/tls:ro
+      # Loa Bluetooth của khu "Loa nối vào hub" (hubout.go): nói với bluetoothd của máy chủ qua D-Bus hệ thống, không chạy
+      # bluetoothd trong container. create_host_path: false: máy không có D-Bus thì báo lỗi thay vì tạo thư mục sai chỗ.
+      - { type: bind, source: /run/dbus/system_bus_socket, target: /run/dbus/system_bus_socket, bind: { create_host_path: false } }
+    devices:
+      - /dev/snd:/dev/snd   # khu "Loa nối vào hub": loa cắm jack 3,5 mm hoặc HDMI của hub
     ports:
       - "8080:8080"
       - "8443:8443"

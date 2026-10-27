@@ -57,6 +57,7 @@ type hubMusic struct {
 	src      *musicSource
 
 	spot     *hubSpotify // Spotify phát qua hub (spotifyhub.go)
+	out      *hubOut     // khu "Loa nối vào hub": jack, HDMI, Bluetooth (hubout.go)
 	spotHold bool        // người dùng chọn MP3 khi Spotify còn tiếng: bỏ tiếng Spotify tới khi nó ngừng hẳn
 }
 
@@ -71,7 +72,9 @@ func mountMusic(mux *http.ServeMux, h *Hub, a *Auth) *hubMusic {
 	}
 	m := &hubMusic{dirs: filepath.SplitList(dirs), db: h.db}
 	m.snap = newSnapServer(func(id string) (int, bool) { z := m.zone(id); return z.Volume, z.Muted })
-	m.spot = newHubSpotify(h.db)
+	pulse := newHubPulse() // dùng chung cho Soloist và khu Loa nối vào hub
+	m.spot = newHubSpotify(h.db, pulse)
+	m.out = newHubOut(m, pulse)
 	go m.run()
 	if addr := os.Getenv("HUBD_SNAP_LISTEN"); addr != "" {
 		if ln, err := net.Listen("tcp", addr); err != nil {
@@ -87,6 +90,8 @@ func mountMusic(mux *http.ServeMux, h *Hub, a *Auth) *hubMusic {
 	mux.HandleFunc("GET /api/spotify/hub", a.Require(m.spot.status))
 	mux.HandleFunc("POST /api/spotify/hub", a.Require(m.spot.action))
 	mux.HandleFunc("/zc", m.spot.zeroconf) // ghép đôi Spotify Connect từ app trong LAN: không PIN
+	mux.HandleFunc("GET /api/music/out", a.Require(m.out.outStatus))
+	mux.HandleFunc("POST /api/music/out", a.Require(m.out.outCmd))
 	return m
 }
 
@@ -196,7 +201,15 @@ func (m *hubMusic) zone(id string) musicZone {
 }
 
 func (m *hubMusic) zones() []musicZone {
-	out, seen := []musicZone{}, map[string]bool{}
+	out, seen := []musicZone{}, map[string]bool{outZone: true} // khu Loa nối vào hub chỉ hiện khi đã chọn ngõ ra
+	if m.out.configured() {
+		z := m.zone(outZone)
+		z.Connected = true
+		if z.Name == "" {
+			z.Name = "Loa nối vào hub"
+		}
+		out = append(out, z)
+	}
 	for _, c := range m.snap.clients() {
 		z := m.zone(c.ID)
 		z.Connected = true
@@ -314,7 +327,7 @@ func (m *hubMusic) cmd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *hubMusic) setZone(w http.ResponseWriter, id string, vol *int, muted *bool, name *string) {
-	known := m.snap.has(id)
+	known := m.snap.has(id) || id == outZone && m.out.configured()
 	if _, ok := m.db.Setting("music")["zone:"+id]; ok {
 		known = true
 	}
@@ -336,7 +349,11 @@ func (m *hubMusic) setZone(w http.ResponseWriter, id string, vol *int, muted *bo
 		http.Error(w, "không lưu được", 500)
 		return
 	}
-	m.snap.settings(id, z.Volume, z.Muted)
+	if id == outZone {
+		m.out.apply()
+	} else {
+		m.snap.settings(id, z.Volume, z.Muted)
+	}
 	w.WriteHeader(204)
 }
 
@@ -478,6 +495,7 @@ func (m *hubMusic) run() {
 				break
 			}
 			m.snap.write(pcm, next)
+			m.out.write(pcm, next)
 			next += 20 * time.Millisecond
 		}
 	}
