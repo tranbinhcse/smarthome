@@ -97,11 +97,11 @@ func (o *hubOut) load() (old, cur outCfg) {
 	return old, c
 }
 
-// apply: cấu hình vừa đổi (Cài đặt, tên/âm lượng/tắt tiếng của khu). Đổi ngõ ra hay bật/tắt tiếng thì dừng pacat ngay;
-// âm lượng, độ trễ áp từ đoạn sau.
+// apply: cấu hình vừa đổi (Cài đặt, tên/âm lượng/tắt tiếng của khu). Đổi ngõ ra, bật/tắt tiếng hay độ trễ thì dừng pacat
+// ngay (luồng vào pacat liên tục: độ trễ chỉ tính lúc pacat bắt đầu phát); âm lượng áp từ đoạn sau.
 func (o *hubOut) apply() {
 	old, cur := o.load()
-	if old.out != cur.out || old.muted != cur.muted {
+	if old.out != cur.out || old.muted != cur.muted || old.delay != cur.delay {
 		select {
 		case o.reload <- struct{}{}:
 		default:

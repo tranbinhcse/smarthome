@@ -317,6 +317,18 @@ func TestHubOutIdleStops(t *testing.T) {
 	}
 }
 
+// Đổi độ trễ lúc đang phát: luồng vào pacat liên tục, ghi sớm hơn chỉ làm dài hàng đợi chứ không dời tiếng ra loa, nên
+// phải chạy lại pacat để độ trễ mới tính từ đầu (từng lưu 200 ms mà loa Bluetooth vẫn lệch như cũ).
+func TestHubOutDelayChangeRestartsPacat(t *testing.T) {
+	mux, h, ck, _ := outHub(t, time.Minute)
+	postOut(t, mux, ck, `{"do":"set","out":"alsa:0,3"}`, 204)
+	cmd(t, mux, ck, `{"do":"play","files":["0/Album/tone44100.mp3"],"index":0}`, 204)
+	waitFor(t, "pacat chạy", func() bool { return alive(pacatPid(h.music.out)) })
+	pacat := pacatPid(h.music.out)
+	postOut(t, mux, ck, `{"do":"set","out":"alsa:0,3","delay_ms":200}`, 204)
+	waitFor(t, "đổi độ trễ thì chạy lại pacat", func() bool { p := pacatPid(h.music.out); return !alive(pacat) && alive(p) && p != pacat })
+}
+
 // Loa Bluetooth: quét → ghép đôi (ghép đôi, tin cậy, nối) → tự chọn làm ngõ ra → nhạc ra sink Bluetooth. Loa tắt rồi bật
 // lại (sink mất): khi có nhạc, hub tự nối lại.
 func TestHubOutBluetooth(t *testing.T) {
