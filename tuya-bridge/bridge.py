@@ -317,7 +317,11 @@ def main():
     c.will_set("tuya/bridge/status", "offline", qos=1, retain=True)
     b = Bridge(c, os.path.join(tdir, "devices.json"), os.path.join(tdir, "overrides.json"),
                energy=Energy(os.environ.get("TUYA_STATE", "/state/energy.json")))
-    c.on_message = b.on_message
+    from qrsetup import QRSetup
+    setup = QRSetup(c.publish, os.path.join(tdir, "devices.json"), os.path.join(tdir, "overrides.json"),
+                    os.environ.get("TUYA_GEN", "/state/tuya.yaml"))
+    # tuya/setup/cmd (quét QR từ dashboard) cũng khớp tuya/+/cmd; "setup" không phải id thiết bị nên tách riêng
+    c.on_message = lambda cl, u, msg: setup.handle(msg.payload) if msg.topic == "tuya/setup/cmd" else b.on_message(cl, u, msg)
     c.on_connect = lambda cl, *_: (cl.subscribe("tuya/+/cmd", 1),
                                    cl.publish("tuya/bridge/status", "online", 1, True),
                                    log.info("MQTT connected"))

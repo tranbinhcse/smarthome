@@ -10,29 +10,14 @@ Không in key ra màn hình. Không lưu token đăng nhập.
 """
 import json
 import os
-import socket
-import struct
 import sys
 import time
 
-# Client ID + schema công khai của tích hợp Tuya trong Home Assistant; app sẽ hiện "Home Assistant" khi quét.
-CLIENT_ID = "HA_3y9q4ak7g4ephrvke"
-SCHEMA = "haauthorize"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tuya-bridge"))
+from qrsetup import CLIENT_ID, SCHEMA, lan_broadcasts, mapping_of  # noqa: E402  dùng chung với quét QR trên dashboard
+
 OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tuya", "devices.json"))
 BRIDGE_UID = 65534  # user nobody trong container tuya-bridge
-
-
-def mapping_of(dev):
-    """local_strategy của tuya_sharing -> {"<dp>": {"code", "type", "values"}}; rỗng nếu thiết bị không hỗ trợ local."""
-    out = {}
-    for dp, s in (getattr(dev, "local_strategy", None) or {}).items():
-        c = s.get("config_item") or {}
-        try:
-            values = json.loads(c.get("valueDesc") or "{}")
-        except ValueError:
-            values = {}
-        out[str(dp)] = {"code": s.get("status_code"), "type": c.get("valueType"), "values": values}
-    return out
 
 
 def login(user_code):
@@ -53,36 +38,6 @@ def login(user_code):
         if ok:
             return info
     sys.exit("Hết thời gian chờ quét QR, chạy lại script.")
-
-
-def lan_broadcasts(seconds=20):
-    """{device_id: {ip, version}} từ gói broadcast UDP 6666/6667/7000.
-
-    Đọc qua raw socket nên vẫn thấy gói khi ufw chặn các cổng này.
-    """
-    import tinytuya
-    s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800))
-    s.settimeout(1)
-    found, end = {}, time.time() + seconds
-    while time.time() < end:
-        try:
-            b = s.recv(65535)
-        except socket.timeout:
-            continue
-        if len(b) < 28 or b[9] != 17:  # chỉ UDP
-            continue
-        ihl = (b[0] & 0x0F) * 4
-        if struct.unpack("!H", b[ihl + 2:ihl + 4])[0] not in (6666, 6667, 7000):
-            continue
-        try:
-            data = json.loads(tinytuya.decrypt_udp(b[ihl + 8:]))
-        except Exception:
-            continue
-        if data.get("gwId"):
-            found[data["gwId"]] = {"ip": data.get("ip") or socket.inet_ntoa(b[12:16]),
-                                   "version": str(data.get("version") or "")}
-    s.close()
-    return found
 
 
 def main():

@@ -34,6 +34,15 @@ func main() {
 	if pin == "" {
 		log.Println("CẢNH BÁO: HUBD_PIN trống — giao diện và lệnh KHÔNG có mật khẩu")
 	}
+	// config.yaml (git pull) hay cấu hình sinh (quét QR Tuya trên dashboard) đổi: thoát để Docker chạy lại và nạp mới.
+	watch := []string{path}
+	if dir := os.Getenv("HUBD_GEN_DIR"); dir != "" {
+		watch = append(watch, dir)
+	}
+	watchFiles(watch, 5*time.Second, func(f string) {
+		log.Printf("cấu hình đổi (%s): khởi động lại để nạp", f)
+		os.Exit(0)
+	})
 
 	var client mqtt.Client
 	hub := NewHub(cfg, db, func(topic, payload string) {
@@ -155,6 +164,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	}))
 	mountAssistant(mux, hub, auth)
 	mountSettings(mux, hub, auth)
+	mountTuyaSetup(mux, hub, auth)
 	return mux
 }
 

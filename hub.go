@@ -44,6 +44,7 @@ func NewHub(cfg Config, db *DB, publish func(topic, payload string)) *Hub {
 		add(d.StateTopic, route{id: "dev:" + d.ID, field: d.Field})
 		add(d.OnlineTopic, route{id: "online:" + d.ID})
 	}
+	add("tuya/setup/status", route{id: "setup:tuya"}) // tiến độ quét QR Tuya (tuya-bridge), hiện trên trang Cài đặt
 	return h
 }
 
@@ -109,7 +110,7 @@ func (h *Hub) Ingest(id, payload string, now time.Time) {
 	var v float64
 	var gap time.Duration
 	switch {
-	case strings.HasPrefix(id, "online:"), strings.HasPrefix(id, "x:"): // x: trạng thái giả định của hồng ngoại, không vào lịch sử
+	case strings.HasPrefix(id, "online:"), strings.HasPrefix(id, "x:"), strings.HasPrefix(id, "setup:"): // x: trạng thái giả định của hồng ngoại; setup: tiến độ cài đặt; không vào lịch sử
 		return
 	case strings.HasPrefix(id, "dev:"):
 		if onRe.MatchString(payload) {

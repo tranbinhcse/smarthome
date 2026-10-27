@@ -17,6 +17,7 @@ services:
     depends_on: [mosquitto]
     environment:
       HUBD_CONFIG: /data/config.yaml
+      HUBD_GEN_DIR: /gen   # thiết bị Tuya sinh sau khi quét QR, gộp vào config.yaml; file đổi thì hubd tự nạp lại
       HUBD_DB: /db/hubd.db
       HUBD_PIN: ${HUBD_PIN}
       HUBD_MQTT_USER: ${HUBD_MQTT_USER}
@@ -32,6 +33,7 @@ services:
       HUBD_TLS_KEY: ${HUBD_TLS_KEY:-}
     volumes:
       - ./config.yaml:/data/config.yaml:ro
+      - tuya-state:/gen:ro   # chỉ đọc tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh)
       - hubd-db:/db
       - ./tls:/tls:ro
     ports:
@@ -51,9 +53,10 @@ services:
       MQTT_PASS: ${TUYA_MQTT_PASS}
       TUYA_DIR: /tuya
       TUYA_STATE: /state/energy.json
+      TUYA_GEN: /state/tuya.yaml
     volumes:
-      - ./tuya:/tuya:ro   # devices.json (+ overrides.json) — chứa local key, KHÔNG commit
-      - tuya-state:/state # tổng kWh cộng dồn từ add_ele, giữ qua khởi động lại
+      - ./tuya:/tuya      # devices.json (+ overrides.json) — chứa local key, KHÔNG commit; quét QR trên dashboard ghi lại
+      - tuya-state:/state # tổng kWh cộng dồn từ add_ele; tuya.yaml = cấu hình Tuya sinh cho hubd sau khi quét QR
 
   # Camera Hikvision (mục 15.1). Chỉ chạy khi .env có COMPOSE_PROFILES=camera và NVR_HOST/NVR_USER/NVR_PASS
   # (tài khoản đầu ghi chỉ có quyền xem). Lõi không phụ thuộc hai dịch vụ này.

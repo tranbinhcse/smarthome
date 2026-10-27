@@ -241,7 +241,7 @@ function draw() {
   renderBg();
   renderRain();
   const key = `${pageType()}|${view.floor}|${view.room}|${sceneNow().src}|${editing}`;
-  const v = $('#view');
+  const v = $('#view'), sy = scrollY, same = key === shellKey;
   if (key !== shellKey) {
     shellKey = key;
     v.className = `view v-${pageType()}${DEBUG_ZONES ? ' debug' : ''}${editing ? ' editing' : ''}`;
@@ -261,6 +261,9 @@ function draw() {
   $('#bottom').classList.toggle('scroll', !!scroll);
   if (sheet && $('#modal').open) fillSheet($('#modal'));
   masonry();
+  // vẫn trang cũ (chuyển tab trong widget, số đo mới): giữ chỗ đang cuộn. Safari iPhone có lúc nhảy về đầu
+  // trang khi nút vừa chạm bị thay bằng nút mới. Sang trang khác thì để trình duyệt tự xử lý như thường.
+  if (same && scrollY !== sy) scrollTo(0, sy);
 }
 // Cột phải xếp kiểu gạch: lưới chia hàng 6px, mỗi widget chiếm số hàng đúng bằng chiều cao của nó (+ khoảng cách),
 // nên widget nhỏ kế tiếp nằm ngay dưới widget cùng cột thay vì chờ widget cao bên cạnh.
@@ -476,7 +479,7 @@ function devPanel(id) {
   } else if (grp.length > 1) {
     const on = grp.some(isOn);
     right = `<button class="sw${on ? ' on' : ''}" data-strip="${esc(grp[0].id)}" aria-pressed="${on}" aria-label="${on ? 'Tắt' : 'Bật'} cả ổ"></button>`;
-    body = row('Từng lỗ', `<div class="outs">${grp.map(o => `<button class="out${isOn(o) ? ' on' : ''}" data-dev="${esc(o.id)}" ${offline(o) ? 'disabled' : ''} aria-pressed="${isOn(o)}">${esc(o.name)}</button>`).join('')}</div>`);
+    body = row(k === 'socket' ? 'Từng lỗ' : 'Từng nút', `<div class="outs">${grp.map(o => `<button class="out${isOn(o) ? ' on' : ''}" data-dev="${esc(o.id)}" ${offline(o) ? 'disabled' : ''} aria-pressed="${isOn(o)}">${esc(o.name)}</button>`).join('')}</div>`);
   }
   const rs = grp.flatMap(readingsOf).filter(has);
   const chart = rs.length ? chartHtml('sheet', rs.map(e => chMetric(e, e.name, hist(e.id), num(e.id))), 24, 180) : '';
@@ -670,6 +673,19 @@ const W = {
 };
 
 /* ---------- Trang phòng ---------- */
+// Danh sách đèn của phòng: công tắc nhiều nút (cùng group) gộp một hàng mang tên thiết bị, mỗi nút bật tắt riêng.
+function lightRows(ls) {
+  const seen = new Set();
+  return ls.map(d => {
+    if (!d.group) return `<div class="lt${isOn(d) ? ' on' : ''}${offline(d) ? ' lost' : ''}">${icon('light')}<span title="${esc(d.name)}">${esc(d.name)}</span>${sw(d, 'amber')}</div>`;
+    if (seen.has(d.group)) return '';
+    seen.add(d.group);
+    const g = ls.filter(x => x.group === d.group);
+    return `<div class="lt grp${g.some(isOn) ? ' on' : ''}${g.every(offline) ? ' lost' : ''}">${icon('light')}<span title="${esc(d.group)}">${esc(d.group)}</span>
+      <span class="outs mini">${g.map(x => `<button class="out${isOn(x) ? ' on' : ''}" data-dev="${esc(x.id)}" ${offline(x) ? 'disabled' : ''} aria-pressed="${isOn(x)}"
+        aria-label="Bật/tắt ${esc(d.group)} ${esc(x.name)}">${esc(x.name.replace(/^(Nút|Lỗ) /, ''))}</button>`).join('')}</span></div>`;
+  }).join('');
+}
 function roomZones(z) {
   const ds = devsIn(z.id), ss = sensorsIn(z.id), aw = areaW(z.id), ls = ds.filter(d => kindOf(d) === 'light');
   const card = (i, c, t, meta, body) => `<section class="w"><header class="wh">${icon(i, 'wi ' + c)}<h3>${t}${meta ? `<small>${meta}</small>` : ''}</h3></header>${body}</section>`;
@@ -678,7 +694,7 @@ function roomZones(z) {
   const pm = ss.find(e => e.unit === 'µg/m³' && has(e)), a = pm ? aqi(num(pm.id)) : NaN, mcb = cfg.entities.find(e => e.zone === z.id && e.device && e.unit === 'W')?.device;
   const side = [
     card('light', 'amber', 'Chiếu sáng', ls.length ? `${ls.filter(isOn).length}/${ls.length} đang bật` : '', ls.length
-      ? `<div class="lights">${ls.map(d => `<div class="lt${isOn(d) ? ' on' : ''}${offline(d) ? ' lost' : ''}">${icon('light')}<span title="${esc(d.name)}">${esc(d.name)}</span>${sw(d, 'amber')}</div>`).join('')}</div>
+      ? `<div class="lights">${lightRows(ls)}</div>
       <div class="kv" style="gap:8px"><button class="pill amber" data-lights="r:${esc(z.id)}:on">Bật tất cả</button><button class="pill" data-lights="r:${esc(z.id)}:off">Tắt tất cả</button></div>` : none('đèn điều khiển được')),
     card('leaf', 'green', 'Khí hậu', isNaN(a) ? '' : `Không khí: ${aqiLabel(a)[0].toLowerCase()}`, climTiles(ss.filter(has), 'z.' + z.id)),
     card('bolt', 'amber', 'Điện', isNaN(aw) ? '' : 'Đo tại MCB của phòng', isNaN(aw) ? none('MCB đo điện') : `<button class="big" data-sheet="dev:${esc(mcb)}" aria-label="Xem biểu đồ công suất">${fw(aw)}<small>đang dùng</small></button>
@@ -705,10 +721,10 @@ const readingsFor = zid => {
 };
 const btn = (id, code, label, inner = label, cls = 'rb') =>
   `<button class="${cls}" data-act="${esc(id)}" data-code="${code}" data-label="${label}" aria-label="${label}">${inner}</button>`;
-// Ổ cắm nhiều lỗ: công tắc tổng + nút từng lỗ (mỗi lỗ là một thiết bị cùng group).
+// Một thiết bị nhiều kênh (ổ nhiều lỗ, công tắc nhiều nút...): công tắc tổng + nút từng kênh (mỗi kênh là một thiết bị cùng group).
 function stripCard(ds) {
-  const on = ds.some(isOn), name = ds[0].group, lost = ds.every(offline);
-  return `<div class="dv k-socket${on ? ' on' : ''}${lost ? ' lost' : ''}"><div class="dvh"><button class="dvo" data-sheet="dev:${esc(ds[0].id)}" aria-label="Mở ${esc(name)}"><span class="dvi">${icon('socket')}</span><div><b>${esc(name)}</b>${lost ? '<small>Mất kết nối</small>' : ''}</div></button>
+  const k = kindOf(ds[0]), on = ds.some(isOn), name = ds[0].group, lost = ds.every(offline);
+  return `<div class="dv k-${k}${on ? ' on' : ''}${lost ? ' lost' : ''}"><div class="dvh"><button class="dvo" data-sheet="dev:${esc(ds[0].id)}" aria-label="Mở ${esc(name)}"><span class="dvi">${icon(k)}</span><div><b>${esc(name)}</b>${lost ? '<small>Mất kết nối</small>' : ''}</div></button>
     <button class="sw${on ? ' on' : ''}" data-strip="${esc(ds[0].id)}" ${lost ? 'disabled' : ''} aria-pressed="${on}" aria-label="${on ? 'Tắt' : 'Bật'} cả ${esc(name)}"></button></div>
     <div class="outs">${ds.map(d => `<button class="out${isOn(d) ? ' on' : ''}${pending.has(d.id) ? ' pend' : ''}" data-dev="${esc(d.id)}" ${offline(d) ? 'disabled' : ''} aria-pressed="${isOn(d)}" aria-label="Bật/tắt ${esc(d.name)}">${esc(d.name)}</button>`).join('')}</div></div>`;
 }

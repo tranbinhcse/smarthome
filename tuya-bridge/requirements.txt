@@ -1,2 +1,4 @@
 tinytuya==1.17.4
 paho-mqtt==1.6.1
+tuya-device-sharing-sdk==0.2.15
+qrcode==8.2

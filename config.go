@@ -103,6 +103,9 @@ func LoadConfig(path string) (Config, string, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return cfg, "", err
 	}
+	if dir := os.Getenv("HUBD_GEN_DIR"); dir != "" {
+		mergeGenerated(&cfg, dir)
+	}
 	// Mục nào thiếu trong YAML thì slice là nil → JSON null làm dashboard vỡ; luôn trả [].
 	if cfg.Zones == nil {
 		cfg.Zones = []Zone{}

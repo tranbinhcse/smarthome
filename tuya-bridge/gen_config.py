@@ -110,6 +110,15 @@ def render(devs, over=None):
     return "\n".join(dl + [END]), "\n".join(el + [EEND])
 
 
+def render_file(devs, over=None):
+    """File cấu hình sinh cho hubd (HUBD_GEN_DIR): thiết bị + số đo Tuya, thay mục cùng id trong config.yaml."""
+    dl, el = render(devs, over)
+    items = lambda block: "\n".join(block.splitlines()[1:-1])  # bỏ dòng BEGIN/END
+    d, e = items(dl), items(el)
+    return ("# Sinh bởi tuya-bridge sau khi quét QR trên dashboard. Đừng sửa tay: quét lại sẽ ghi đè.\n"
+            f"devices:{chr(10) + d if d else ' []'}\nentities:{chr(10) + e if e else ' []'}\n")
+
+
 def _put(cfg, key, begin, end, block):
     pat = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.S)
     if pat.search(cfg):
