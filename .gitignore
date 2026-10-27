@@ -25,3 +25,6 @@ web/images/*.png
 
 # ESPHome: thư mục build khi dịch firmware/*.yaml
 .esphome/
+
+# Bản sao lưu tài khoản node của plugin dynamic security (firmware/README.md)
+dynamic-security.json
