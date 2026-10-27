@@ -52,9 +52,9 @@ services:
       - tuya-state:/gen   # tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh); hubd chỉ ghi camera.yaml
       - hubd-db:/db
       - ./tls:/tls:ro
-      # Loa Bluetooth của khu "Loa nối vào hub" (hubout.go): nói với bluetoothd của máy chủ qua D-Bus hệ thống, không chạy
-      # bluetoothd trong container. create_host_path: false: máy không có D-Bus thì báo lỗi thay vì tạo thư mục sai chỗ.
-      - { type: bind, source: /run/dbus/system_bus_socket, target: /run/dbus/system_bus_socket, bind: { create_host_path: false } }
+      # Loa Bluetooth (hubout.go) cần bluetoothd của máy chủ qua D-Bus hệ thống, nhưng CHƯA gắn socket ở đây: hubd chạy root,
+      # D-Bus hệ thống mà không giới hạn thì hubd bị chiếm = chiếm máy chủ (systemd1, login1). Chờ profile AppArmor chỉ cho
+      # tới org.bluez (mục 18.3 tài liệu thiết kế). Không bao giờ gắn socket này cùng apparmor=unconfined.
     devices:
       - /dev/snd:/dev/snd   # khu "Loa nối vào hub": loa cắm jack 3,5 mm hoặc HDMI của hub
     ports:

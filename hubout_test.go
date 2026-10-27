@@ -420,4 +420,14 @@ func TestHubOutBluetoothDenied(t *testing.T) {
 	if w := call(mux, "POST", "/api/music/out", `{"do":"scan"}`, "", ck...); w.Code != 502 || !strings.Contains(w.Body.String(), "AppArmor") {
 		t.Fatalf("tìm loa khi bị chặn: %d %s", w.Code, w.Body)
 	}
+	// compose chưa gắn socket D-Bus (mặc định hiện nay): báo đúng là chưa gắn, không chạy bluetoothctl
+	os.Remove(filepath.Join(dir, "dbus"))
+	os.Remove(filepath.Join(dir, "btctl.log"))
+	json.Unmarshal(call(mux, "GET", "/api/music/out", "", "", ck...).Body.Bytes(), &raw)
+	if !strings.Contains(raw.BT.Error, "chưa được gắn D-Bus") {
+		t.Fatalf("thiếu socket D-Bus: %q", raw.BT.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "btctl.log")); err == nil {
+		t.Fatal("thiếu socket D-Bus thì không gọi bluetoothctl")
+	}
 }

@@ -349,6 +349,9 @@ func (b *hubBT) run(timeout time.Duration, args ...string) (string, error) {
 
 // adapter: bluetoothd của máy chủ trả lời được không, adapter đã bật chưa; không được thì lý do (vd. AppArmor chặn D-Bus).
 func (b *hubBT) adapter() (ok, powered bool, err error) {
+	if _, err := os.Stat(b.dbus); err != nil {
+		return false, false, errors.New("container hubd chưa được gắn D-Bus hệ thống của máy (chờ profile AppArmor chỉ cho tới bluez, tài liệu mục 18.3)")
+	}
 	out, err := b.run(5*time.Second, "show")
 	if err == nil && !strings.Contains(out, "Controller ") {
 		err = errors.New("máy không có Bluetooth")
