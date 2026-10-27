@@ -494,3 +494,23 @@ func TestHubSpotifyAndFilesShareTheStream(t *testing.T) {
 		t.Fatalf("chọn MP3 thì MP3 phát dù Spotify còn tiếng: %+v", s)
 	}
 }
+
+// Máy Mac mất tiếng hẳn khi Spotify vẫn phát (2026-10-27): bấm phát ở trình phát của hub lúc Spotify đang phát qua hub mà
+// lệnh không phát được MP3 (chưa chọn bài → 409) vẫn đặt cờ "MP3 thắng", nên tiếng Spotify bị bỏ trong khi MP3 không chạy:
+// mọi khu im tới khi Spotify ngừng. "MP3 thắng" chỉ có tác dụng khi MP3 thật sự đang phát; MP3 hết bài thì Spotify ra lại.
+func TestSpotifyNotSilencedWhenFilesAreNotPlaying(t *testing.T) {
+	mux, h, ck, addr, _ := soloistHub(t, "3")
+	f := dialSnap(t, addr, "loa")
+	f.read()
+	f.read()
+	putKey(t, mux, ck, testKey)
+	waitFor(t, "có tiếng Spotify", func() bool { return h.music.spot.active() })
+	cmd(t, mux, ck, `{"do":"play"}`, 409) // chưa chọn bài
+	time.Sleep(300 * time.Millisecond)
+	if s := getState(t, mux, ck); s.Source != "spotify" {
+		t.Fatalf("lệnh phát hỏng không được làm im tiếng Spotify: %+v", s)
+	}
+	cmd(t, mux, ck, `{"do":"play","files":["0/tone48000.mp3"],"index":0}`, 204)
+	waitFor(t, "MP3 thắng khi đang phát", func() bool { return getState(t, mux, ck).Source == "file" })
+	waitFor(t, "MP3 hết bài thì Spotify ra lại", func() bool { return getState(t, mux, ck).Source == "spotify" })
+}

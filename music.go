@@ -220,7 +220,7 @@ func (m *hubMusic) state(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	out := map[string]any{"playing": m.playing, "index": m.index, "queue": len(m.queue), "file": nil, "pos_ms": 0, "dur_ms": 0, "source": ""}
 	switch { // nguồn đang ra loa
-	case m.spot.active() && !m.spotHold:
+	case m.spot.active() && !(m.spotHold && m.playing):
 		out["source"] = "spotify"
 	case m.playing:
 		out["source"] = "file"
@@ -432,8 +432,10 @@ func (m *hubMusic) chunk() ([]byte, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
-	case sp != nil && !m.spotHold: // Spotify phát trên "iNIX Smart": ra mọi khu, nhạc MP3 dừng
-		m.playing = false
+	// Spotify phát trên "iNIX Smart": ra mọi khu, nhạc MP3 dừng. "MP3 thắng" (spotHold) chỉ khi MP3 thật sự đang phát:
+	// lệnh phát hỏng hay MP3 đã hết bài thì không được làm im tiếng Spotify.
+	case sp != nil && !(m.spotHold && m.playing):
+		m.playing, m.spotHold = false, false
 		return sp, true
 	case sp == nil && m.spotHold && !m.spot.active():
 		m.spotHold = false
