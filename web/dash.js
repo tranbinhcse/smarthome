@@ -145,15 +145,17 @@ function aqi(pm) {
 }
 const aqiLabel = a => a <= 50 ? ['Tốt', 'good'] : a <= 100 ? ['Trung bình', 'mid'] : a <= 150 ? ['Kém', 'bad'] : ['Xấu', 'bad'];
 
-/* ---------- Ngày / đêm: cảm biến ánh sáng ngoài trời nếu có, không thì theo giờ ---------- */
+/* ---------- Ngày / đêm: tự động theo giờ (chủ nhà chọn), hoặc chọn tay ---------- */
 const SKY = ['auto', 'day', 'night'];
 let skyMode = 'auto';
-try { skyMode = SKY.includes(localStorage.getItem('hubd.sky')) ? localStorage.getItem('hubd.sky') : 'auto'; } catch (_) { /* bộ nhớ bị chặn */ }
+try {
+  // Bản cũ có lỗi lưu cứng ngày/đêm mỗi lần chạm: đưa mọi trình duyệt về Tự động một lần.
+  if (localStorage.getItem('hubd.sky.v') !== '2') { localStorage.setItem('hubd.sky', 'auto'); localStorage.setItem('hubd.sky.v', '2'); }
+  skyMode = SKY.includes(localStorage.getItem('hubd.sky')) ? localStorage.getItem('hubd.sky') : 'auto';
+} catch (_) { /* bộ nhớ bị chặn */ }
 function sky() {
-  const lux = cfg.entities.find(e => e.unit === 'lx' && zone(e.zone)?.type === 'outdoor' && has(e));
-  const now = new Date(), h = now.getHours() + now.getMinutes() / 60;
-  const a = lux ? {day: num(lux.id) > 400, by: 'cảm biến ánh sáng'} : {day: h >= 5.75 && h < 18, by: 'giờ trong ngày'};   // ponytail: giờ cố định 5:45–18:00
-  return {day: skyMode === 'auto' ? a.day : skyMode === 'day', by: skyMode === 'auto' ? a.by : 'chọn tay'};
+  const now = new Date(), h = now.getHours() + now.getMinutes() / 60, day = h >= 5.75 && h < 18;   // ponytail: giờ cố định 5:45–18:00
+  return {day: skyMode === 'auto' ? day : skyMode === 'day', by: skyMode === 'auto' ? 'giờ trong ngày' : 'chọn tay'};
 }
 
 /* ---------- Thanh trên ---------- */
