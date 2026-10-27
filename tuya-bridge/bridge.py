@@ -1,13 +1,17 @@
 """Cầu nối Tuya (giao thức local, tinytuya) <-> MQTT.
 
-Đọc /tuya/devices.json (đầu ra `tinytuya wizard`: id, name, key, ip, version) và tuỳ chọn
-/tuya/overrides.json ({"<id>": {"ip": "...", "version": "3.4", "dp": "1"}}) để đặt IP tĩnh.
+Đọc /tuya/devices.json (scripts/tuya_qr_login.py hoặc `tinytuya wizard`: id, name, key, ip, version,
+mapping) và tuỳ chọn /tuya/overrides.json ({"<id>": {"ip": "...", "version": "3.4", "dp": "1"}}) để đặt IP tĩnh.
 Không có file / file rỗng -> log rõ ràng và chờ, tự nạp lại khi file đổi (không crash loop).
+
+CB/ổ đo điện không tự báo W/V/A, còn status() trả ảnh chụp cũ: bridge gửi updatedps mỗi REFRESH giây.
+Không nhận được gì (kể cả trả lời heartbeat) quá STALE giây -> coi là mất kết nối, báo offline, nối lại.
 
 Topic:
   tuya/<id>/state   ON|OFF  (công tắc chính, retained)
   tuya/<id>/dps     JSON toàn bộ DP (retained)
   tuya/<id>/online  online|offline (retained)
+  tuya/<id>/energy  JSON {dp: tổng} cộng dồn các lần báo add_ele (retained, lưu ở TUYA_STATE)
   tuya/<id>/cmd     ON|OFF|TOGGLE hoặc JSON {"2": true}
   tuya/bridge/status online|offline (LWT)
 """
@@ -25,6 +29,10 @@ RETRY_MAX = 60     # trần thời gian chờ giữa các lần kết nối lạ
 RECV_TIMEOUT = 0.5  # giây chờ tin từ thiết bị mỗi vòng: lệnh mới không phải đợi lâu hơn mức này
 CONN_TIMEOUT = 5    # timeout mặc định của tinytuya, giữ cho gửi lệnh / heartbeat / kết nối lại
 RELOAD = 15        # giây giữa các lần kiểm tra file cấu hình đổi
+REFRESH = 10       # giây giữa các lần yêu cầu thiết bị đo điện báo lại W/V/A
+STALE = 30         # giây không nhận được gì từ thiết bị (heartbeat 9s/lần) thì coi là mất kết nối
+METER = ("cur_current", "cur_power", "cur_voltage")
+STD_METER = ("18", "19", "20")  # dp chuẩn Tuya khi devices.json chưa có mapping
 
 
 def _load_json(path):
@@ -63,7 +71,8 @@ def load_devices(devices_path, overrides_path=None):
             continue
         ver = o.get("version") or d.get("version") or "3.3"
         out.append({"id": d["id"], "name": d.get("name") or d["id"], "key": d["key"],
-                    "ip": ip, "version": float(ver), "dp": str(o.get("dp") or "1")})
+                    "ip": ip, "version": float(ver), "dp": str(o.get("dp") or "1"),
+                    "mapping": d.get("mapping") or {}})
     return out, warns
 
 
@@ -94,12 +103,43 @@ def state_of(dps, dp="1"):
     return None
 
 
+def meter_dps(mapping, dps):
+    """Các dp W/V/A cần updatedps: theo mapping nếu có, không thì dp chuẩn 18/19/20 mà thiết bị đang báo."""
+    ids = [k for k, v in mapping.items() if v.get("code") in METER] if mapping else STD_METER
+    return sorted(int(k) for k in ids if k in dps)
+
+
+class Energy:
+    """Tổng điện năng cộng dồn từ các lần thiết bị báo add_ele (mỗi lần là lượng tăng thêm), lưu file JSON."""
+
+    def __init__(self, path):
+        self.path, self.lock = path, threading.Lock()
+        t = _load_json(path)
+        self.tot = t if isinstance(t, dict) else {}
+
+    def get(self, dev_id):
+        with self.lock:
+            return dict(self.tot.get(dev_id, {}))
+
+    def add(self, dev_id, dp, v):
+        with self.lock:
+            d = self.tot.setdefault(dev_id, {})
+            d[dp] = round(d.get(dp, 0) + v, 6)
+            try:
+                with open(self.path + ".tmp", "w") as f:
+                    json.dump(self.tot, f)
+                os.replace(self.path + ".tmp", self.path)
+            except OSError as e:
+                log.error("không ghi được %s: %s", self.path, e)
+            return dict(d)
+
+
 class DeviceWorker(threading.Thread):
     """Một luồng cho mỗi thiết bị: kết nối bền, heartbeat, nhận cập nhật, chạy lệnh."""
 
-    def __init__(self, dev, publish, factory):
+    def __init__(self, dev, publish, factory, energy=None):
         super().__init__(daemon=True, name="tuya-" + dev["id"])
-        self.dev, self.publish, self.factory = dev, publish, factory
+        self.dev, self.publish, self.factory, self.energy = dev, publish, factory, energy
         self.cmds = queue.Queue()
         self.stop_evt = threading.Event()
         self.dps = {}
@@ -123,6 +163,14 @@ class DeviceWorker(threading.Thread):
         if s:
             self.publish(f"tuya/{i}/state", s)
 
+    def _count(self, dps, sums):
+        # ponytail: tin add_ele đẩy về được coi là lượng tăng thêm (report_type "sum" của Tuya); đối chiếu với app sau vài ngày
+        for k in sums:
+            v = dps.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                tot = self.energy.add(self.dev["id"], k, v)
+                self.publish(f"tuya/{self.dev['id']}/energy", json.dumps(tot))
+
     def _apply(self, d, payload):
         c = parse_cmd(payload, self.dev["dp"])
         if c is None:
@@ -141,8 +189,14 @@ class DeviceWorker(threading.Thread):
         if not isinstance(r, dict) or "dps" not in r:
             raise ConnectionError(f"status lỗi: {r.get('Error') if isinstance(r, dict) else r}")
         self._set_online(True)
-        self._update(r["dps"])
-        last_hb = time.time()
+        self._update(r["dps"])  # số đo trong status() có thể cũ: không cộng add_ele, updatedps ngay sau đây
+        mapping = self.dev.get("mapping") or {}
+        meter = meter_dps(mapping, self.dps)
+        sums = [k for k, v in mapping.items() if v.get("code") == "add_ele"] if self.energy else []
+        if sums and self.energy.get(self.dev["id"]):
+            self.publish(f"tuya/{self.dev['id']}/energy", json.dumps(self.energy.get(self.dev["id"])))
+        last_hb = last_rx = time.time()
+        last_ref = 0
         while not self.stop_evt.is_set():
             try:
                 self._apply(d, self.cmds.get_nowait())
@@ -152,15 +206,24 @@ class DeviceWorker(threading.Thread):
             if time.time() - last_hb >= HEARTBEAT:
                 d.heartbeat(nowait=True)  # không chờ phản hồi: vòng receive() đọc nó, lệnh mới không bị kẹt
                 last_hb = time.time()
+            if meter and time.time() - last_ref >= REFRESH:
+                d.updatedps(meter, nowait=True)  # thiết bị trả số mới qua receive()
+                last_ref = time.time()
             d.set_socketTimeout(RECV_TIMEOUT)
             try:
                 r = d.receive()
             finally:
                 d.set_socketTimeout(CONN_TIMEOUT)
+            # trả lời heartbeat là tin rỗng: receive() trả None nhưng raw_recv có tin
+            if r or getattr(d, "raw_recv", None):
+                last_rx = time.time()
+            elif time.time() - last_rx > STALE:
+                raise ConnectionError(f"không phản hồi {STALE}s")
             if isinstance(r, dict):
                 if r.get("Error"):
                     raise ConnectionError(r["Error"])
                 if "dps" in r:
+                    self._count(r["dps"], sums)
                     self._update(r["dps"])
 
     def run(self):
@@ -200,8 +263,8 @@ def tinytuya_factory(dev):
 
 
 class Bridge:
-    def __init__(self, client, devices_path, overrides_path, factory=tinytuya_factory):
-        self.client, self.dp, self.op, self.factory = client, devices_path, overrides_path, factory
+    def __init__(self, client, devices_path, overrides_path, factory=tinytuya_factory, energy=None):
+        self.client, self.dp, self.op, self.factory, self.energy = client, devices_path, overrides_path, factory, energy
         self.workers = {}
         self.sig = None
         self.warned = set()
@@ -231,7 +294,7 @@ class Bridge:
                 del self.workers[i]
         for i, d in want.items():
             if i not in self.workers:
-                w = DeviceWorker(d, self.publish, self.factory)
+                w = DeviceWorker(d, self.publish, self.factory, self.energy)
                 self.workers[i] = w
                 w.start()
         log.info("đang giữ %d thiết bị Tuya", len(self.workers))
@@ -252,7 +315,8 @@ def main():
     if os.environ.get("MQTT_USER"):
         c.username_pw_set(os.environ["MQTT_USER"], os.environ.get("MQTT_PASS", ""))
     c.will_set("tuya/bridge/status", "offline", qos=1, retain=True)
-    b = Bridge(c, os.path.join(tdir, "devices.json"), os.path.join(tdir, "overrides.json"))
+    b = Bridge(c, os.path.join(tdir, "devices.json"), os.path.join(tdir, "overrides.json"),
+               energy=Energy(os.environ.get("TUYA_STATE", "/state/energy.json")))
     c.on_message = b.on_message
     c.on_connect = lambda cl, *_: (cl.subscribe("tuya/+/cmd", 1),
                                    cl.publish("tuya/bridge/status", "online", 1, True),
