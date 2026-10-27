@@ -229,7 +229,7 @@ function chipsHtml() {
     .map(([id, [x, y]]) => chip(`${view.floor}/${id}`, zone(id).name, roomIcon(id), roomDot(id), x, y, view.room === id)).join('');
 }
 function stageHtml() {
-  if (view.page === 'settings') return settingsPage();
+  if (view.page === 'settings') return typeof settingsPage === 'function' ? settingsPage() : '';   // settings.js nạp sau; 'load' vẽ lại
   if (view.page === 'camera') return camWall();
   if (view.page === 'energy') { const fm = flowMap(); return (fm ? `<div class="ebox"><div class="wh">${icon('bolt', 'wi amber')}<h3>Dòng điện lúc này</h3></div>${fm}</div>` : '') + energyChart(); }
   const sc = sceneNow(), pos = sc.pos || [50, 50];
