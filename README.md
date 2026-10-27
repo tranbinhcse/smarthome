@@ -52,9 +52,9 @@ Giả lập node chưa lắp (trỏ vào broker thử, không phải trung tâm 
 
 Ba phần, bật bằng profile `camera` (lõi chạy đủ khi tắt):
 
-- `go2rtc` (`go2rtc/go2rtc.yaml`): RTSP luồng phụ H.264 của đầu ghi (`/Streaming/Channels/<kênh>02`) sang WebRTC/MSE, không chuyển mã. API chỉ nằm trong mạng Docker; cổng mở duy nhất là `8555` (media WebRTC).
-- `hikbridge`: đọc `/ISAPI/Event/notification/alertStream` của đầu ghi, gửi MQTT (bảng dưới); hỏi trạng thái kênh 30 giây một lần.
-- `hubd`: `/api/cam/<id>/snapshot` (ảnh ISAPI `/ISAPI/Streaming/channels/<kênh>01/picture`) và `/api/cam/<id>/ws` (WebSocket của go2rtc), đều sau PIN. Trình duyệt không thấy IP hay tài khoản đầu ghi.
+- `go2rtc` (`go2rtc/go2rtc.yaml`): RTSP luồng phụ H.264 của đầu ghi (`/Streaming/Channels/<kênh>02`) sang WebRTC/MSE, không chuyển mã. Không giữ tài khoản: mỗi lần mở luồng hubd gửi nguồn RTSP kèm tên `ch<kênh>`. API chỉ nằm trong mạng Docker; cổng mở duy nhất là `8555` (media WebRTC).
+- `hikbridge`: đọc `/ISAPI/Event/notification/alertStream` của đầu ghi, gửi MQTT (bảng dưới); hỏi trạng thái kênh 30 giây một lần. Lấy cấu hình đầu ghi từ hubd (`/api/service/nvr`, token `HUBD_CAMERA_TOKEN`); nhận `hubd/settings/nvr` = `changed` thì thoát để Docker chạy lại và nạp.
+- `hubd`: `/api/cam/<id>/snapshot` (ảnh ISAPI `/ISAPI/Streaming/channels/<kênh>01/picture`) và `/api/cam/<id>/ws` (WebSocket của go2rtc), đều sau PIN. Trình duyệt không thấy IP hay tài khoản đầu ghi; mật khẩu lưu trên trang Cài đặt chỉ hiện là "đã lưu".
 
 Bật lần đầu:
 
@@ -66,9 +66,11 @@ Bật lần đầu:
    printf 'HIK_MQTT_USER=hik\nHIK_MQTT_PASS=%s\n' "$HIK" >> .env
    docker compose kill -s SIGHUP mosquitto   # nạp lại file mật khẩu, không ngắt kết nối
    ```
-3. Điền `NVR_HOST` (chỉ IP), `NVR_USER`, `NVR_PASS` vào `.env`, thêm dòng `COMPOSE_PROFILES=camera`.
-4. `config.yaml`: sửa khối camera (kênh → camera → khu) cho đúng rồi bỏ `#`; thêm entity sự kiện nếu cần cho luật.
-5. `docker compose up -d --build`, xem `docker compose logs -f hikbridge` có dòng `đã nối alertStream`.
+3. `.env`: thêm dòng `COMPOSE_PROFILES=camera`; `.env` cũ chưa có `HUBD_CAMERA_TOKEN` thì chạy lại `scripts/init-secrets.sh` (chỉ thêm token, không đổi khoá cũ). `docker compose up -d --build`.
+4. Dashboard → Cài đặt → **Camera (đầu ghi Hikvision)**: nhập IP đầu ghi, tài khoản chỉ xem, mật khẩu; bấm **Thử kết nối** để xem các kênh đầu ghi trả về; chọn khu cho từng kênh (để "Không dùng" nếu bỏ qua), sửa tên hiển thị nếu muốn; **Lưu**. hubd ghi thiết bị `cam_ch<kênh>` vào `HUBD_GEN_DIR/camera.yaml` rồi tự khởi động lại; tải lại trang để thấy camera. Nút gạt **Bật camera** tắt/bật cả tích hợp.
+5. Xem `docker compose logs -f hikbridge` có dòng `đã nối alertStream`. Thêm entity sự kiện trong `config.yaml` nếu cần cho luật (thiết bị camera sinh ra có id `cam_ch<kênh>`).
+
+Cách cũ vẫn chạy: trang Cài đặt chưa có IP đầu ghi thì hubd dùng `NVR_HOST`/`NVR_USER`/`NVR_PASS` trong `.env`; `HUBD_CAMERA_TOKEN` trống thì hikbridge đọc thẳng `NVR_*`. Khối camera để `#` trong `config.yaml` cũng vẫn bỏ `#` dùng được, nhưng đừng gán cùng kênh ở cả hai nơi (sẽ ra hai thẻ).
 
 | Topic | Giá trị |
 |---|---|
@@ -81,7 +83,7 @@ Theo mô tả của cộng đồng (chưa kiểm với đầu ghi của nhà), �
 
 Tải đo được (đầu ghi giả, luồng H.264 704×576 ~510 kbit/s): 10 kênh, mỗi kênh 1 người xem qua hubd tốn go2rtc 2,2% + hubd 1,4% của một luồng CPU; chi tiết ở mục 15.1 tài liệu thiết kế.
 
-Đầu ghi từ chối mật khẩu thì hubd và hikbridge tạm ngừng gửi mật khẩu 15 phút để đầu ghi không khoá IP của trung tâm; sửa `.env` rồi `docker compose up -d` để thử lại ngay. Không mở cổng đầu ghi ra internet; xem từ xa qua WireGuard (MSE đi qua hubd nên chạy được; WebRTC cần tới cổng 8555).
+Đầu ghi từ chối mật khẩu thì hubd và hikbridge tạm ngừng gửi tài khoản đó 15 phút để đầu ghi không khoá IP của trung tâm (nút Thử kết nối cũng vậy); nhập mật khẩu khác trên trang Cài đặt là thử lại được ngay. Không mở cổng đầu ghi ra internet; xem từ xa qua WireGuard (MSE đi qua hubd nên chạy được; WebRTC cần tới cổng 8555).
 
 ## Luật tự động
 

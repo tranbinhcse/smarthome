@@ -404,7 +404,7 @@ Chủ nhà bổ sung ngày 2026-10-26. Cả hai phần **làm sau lõi** (Giai �
 | Ảnh kèm cảnh báo | Lấy ảnh chụp từ `/ISAPI/Streaming/channels/<id>/picture`, gửi kèm tin Telegram |
 
 **Bảo mật camera:**
-- Tạo tài khoản NVR riêng, chỉ có quyền xem. Mật khẩu để trong secrets.
+- Tạo tài khoản NVR riêng, chỉ có quyền xem. IP, tài khoản, mật khẩu nhập trên dashboard (Cài đặt → Camera), lưu ở nhóm cấu hình `nvr` của `hubd`: trình duyệt chỉ biết mật khẩu "đã lưu"; `hikbridge` đọc qua `hubd` bằng token camera riêng (không phải token trợ lý); `go2rtc` không giữ tài khoản, `hubd` đưa nguồn RTSP mỗi lần mở luồng. `NVR_*` trong `.env` là cách cũ, vẫn dùng được.
 - Không mở port NVR ra internet. Xem từ xa qua Tailscale.
 
 **Tải khi chuyển tiếp (đo 2026-10-27, đầu ghi giả):** máy Ubuntu Ryzen 7 5700G (16 luồng), go2rtc 1.9.14 và hubd chạy trong Docker như bản thật, đầu ghi giả phát RTSP một clip H.264 704×576, 15 fps, ~510 kbit/s cho mỗi kênh. Người xem kéo MSE qua WebSocket của hubd (đường iPad đi khi không dùng WebRTC); CPU đọc từ bộ đếm cgroup trong 60 giây; mọi người xem nhận đủ 528 kbit/s, không phải nối lại. Đơn vị: % của **một** luồng CPU.
