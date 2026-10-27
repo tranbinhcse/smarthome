@@ -10,6 +10,9 @@ const CH_COLOR = {'°C': '#ff9f5a', '%': '#4cc9f0', 'ppm': '#34d17a', 'µg/m³':
 const chLimit = e => e.unit === 'µg/m³' ? {v: 35, label: 'Ngưỡng 24 giờ (EPA) 35 µg/m³'} : /co₂|co2/i.test(e.name) ? {v: 1000, label: 'Nên thông gió từ 1.000 ppm'} : undefined;
 const chMetric = (e, label, pts, now) => ({label, unit: e.unit, color: CH_COLOR[e.unit] || '#4cc9f0', pts, now, limit: chLimit(e), zero: ['W', 'lx', 'L'].includes(e.unit)});
 const chEsc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+// Lịch sử một số đo cho biểu đồ. API lịch sử trả t theo giây (voiced cũng đọc như vậy), biểu đồ vẽ theo mili giây:
+// mọi trang lấy lịch sử qua hàm này (web_selectors_test.go kiểm).
+function chHistory(id, hours) { return api(`/api/history?id=${encodeURIComponent(id)}&hours=${hours}`).then(r => r.json()).then(ps => (ps || []).map(p => ({t: p.t * 1e3, v: p.v}))); }
 const CW = 640, PL = 52, PR = 12, PT = 18, PB = 26;   // chiều cao vùng vẽ (CH) tuỳ từng biểu đồ
 
 // Mốc tròn cho trục: bước 1 / 2 / 2,5 / 5 × 10^n, khoảng 4 khoảng.
