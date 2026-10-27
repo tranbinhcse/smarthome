@@ -22,9 +22,13 @@ type Rule struct {
 }
 
 type Action struct {
-	Set   string `yaml:"set"`
-	To    string `yaml:"to"` // on | off
-	Alert string `yaml:"-"`  // engine tự tạo cho luật có alert: id luật; Text rỗng = nhả cảnh báo
+	Set string `yaml:"set"`
+	To  string `yaml:"to"` // on | off
+
+	Notify string `yaml:"notify"` // câu cảnh báo, publish lên hubd/alert
+	Level  string `yaml:"level"`  // urgent | warn | info (rỗng = info)
+
+	Alert string `yaml:"-"` // engine tự tạo cho luật có alert: id luật; Text rỗng = nhả cảnh báo
 	Text  string `yaml:"-"`
 }
 

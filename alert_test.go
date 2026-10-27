@@ -9,7 +9,11 @@ import (
 // Luật có `alert`: kích hoạt thì state "alert:<id>" = lời cảnh báo (đẩy qua SSE), nhả thì "".
 func TestRuleAlertState(t *testing.T) {
 	cfg := Config{Rules: []Rule{{ID: "pin_yeu", Entity: "jk.soc", Below: f(20), ClearAbove: f(25), Alert: "Pin dưới 20%"}}}
-	h := NewHub(cfg, newDB(t), func(string, string) { t.Fatal("luật chỉ cảnh báo không được gửi lệnh") })
+	h := NewHub(cfg, newDB(t), func(topic, _ string) {
+		if topic != "hubd/alert" { // lời cảnh báo cho trợ lý giọng nói thì được, lệnh tới thiết bị thì không
+			t.Fatalf("luật chỉ cảnh báo không được gửi lệnh (topic %s)", topic)
+		}
+	})
 	ch := h.Sub()
 	defer h.Unsub(ch)
 
@@ -56,5 +60,17 @@ func TestNaNPayloadIgnoredByHistoryAndRules(t *testing.T) {
 	}
 	if p, _ := h.db.Query("jk.temp", t0, t0.Add(time.Hour), 3600); len(p) != 1 || p[0].V != 47 {
 		t.Fatalf("lịch sử chỉ được có mẫu 47: %v", p)
+	}
+}
+
+// Cảnh báo của luật cũng lên hubd/alert để trợ lý giọng nói đọc thành tiếng; nhả cảnh báo thì không đọc gì.
+func TestRuleAlertPublishedForVoice(t *testing.T) {
+	cfg := Config{Rules: []Rule{{ID: "pin_yeu", Entity: "jk.soc", Below: f(20), ClearAbove: f(25), Alert: "Pin dưới 20%"}}}
+	var got []string
+	h := NewHub(cfg, newDB(t), func(topic, payload string) { got = append(got, topic+" "+payload) })
+	h.Ingest("jk.soc", "18", t0)
+	h.Ingest("jk.soc", "26", t0.Add(time.Second))
+	if len(got) != 1 || !strings.HasPrefix(got[0], "hubd/alert ") || !strings.Contains(got[0], `"text":"Pin dưới 20%"`) {
+		t.Fatalf("cần đúng một tin hubd/alert lúc bật cảnh báo, được %q", got)
 	}
 }

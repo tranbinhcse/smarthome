@@ -23,6 +23,8 @@ type Hub struct {
 	mu   sync.RWMutex
 	val  map[string]string
 	subs map[chan []byte]struct{}
+
+	alerts []Alert // cảnh báo chưa ai xác nhận (assistant.go), khoá bằng mu
 }
 
 func NewHub(cfg Config, db *DB, publish func(topic, payload string)) *Hub {
@@ -151,9 +153,18 @@ func (h *Hub) Tick(now time.Time) { h.run(h.engine.Tick(now)) }
 
 func (h *Hub) run(acts []Action) {
 	for _, a := range acts {
-		if a.Alert != "" {
+		if a.Alert != "" { // luật có alert: giữ trên chuông dashboard tới khi điều kiện hết
 			log.Printf("cảnh báo %s: %q", a.Alert, a.Text)
 			h.set("alert:"+a.Alert, a.Text)
+			if a.Text != "" { // bật cảnh báo: cũng lên hubd/alert để trợ lý giọng nói đọc; nhả thì thôi
+				h.alert("warn", a.Text)
+			}
+			continue
+		}
+		if a.Notify != "" {
+			h.alert(a.Level, a.Notify)
+		}
+		if a.Set == "" {
 			continue
 		}
 		d, ok := h.devByID[a.Set]

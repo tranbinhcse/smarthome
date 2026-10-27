@@ -3,10 +3,24 @@
 # Không in bí mật ra màn hình — đọc từ .env khi cần.
 set -eu
 cd "$(dirname "$0")/.."
-[ -f .env ] && { echo ".env đã có, giữ nguyên (xoá đi nếu muốn sinh lại)"; exit 0; }
 rnd() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20; }
+mqtt_user() { docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2 mosquitto_passwd -b /m/passwd "$1" "$2"; }
+if [ -f .env ]; then
+  # .env có từ trước khi có trợ lý giọng nói: chỉ thêm khoá còn thiếu, không đổi khoá cũ.
+  grep -q '^VOICED_MQTT_PASS=.' .env && { echo ".env đã có, giữ nguyên (xoá đi nếu muốn sinh lại)"; exit 0; }
+  VOICED_PASS=$(rnd)
+  mqtt_user voiced "$VOICED_PASS"   # tạo tài khoản trước: lỗi thì .env chưa đổi, chạy lại được
+  chmod 644 mosquitto/passwd
+  umask 077
+  # bỏ dòng cũ/trống (vd chép từ .env.example) rồi ghi lại một lần
+  { grep -v -E '^(HUBD_ASSISTANT_TOKEN|VOICED_MQTT_USER|VOICED_MQTT_PASS)=' .env || true; } > .env.tmp && mv .env.tmp .env
+  printf 'HUBD_ASSISTANT_TOKEN=%s\nVOICED_MQTT_USER=voiced\nVOICED_MQTT_PASS=%s\n' "$(rnd)$(rnd)" "$VOICED_PASS" >> .env
+  grep -q '^ANTHROPIC_API_KEY=' .env || printf '# Khoá Claude cho câu tự do (trống = chỉ lệnh cố định):\nANTHROPIC_API_KEY=\n' >> .env
+  echo "Đã thêm token trợ lý và tài khoản MQTT voiced vào .env. Nạp tài khoản mới: docker compose restart mosquitto"
+  exit 0
+fi
 PIN=$(head -c 4 /dev/urandom | od -An -tu4 | tr -dc 0-9 | head -c 6)
-HUBD_PASS=$(rnd); TUYA_PASS=$(rnd); NODE_PASS=$(rnd); HIK_PASS=$(rnd)
+HUBD_PASS=$(rnd); TUYA_PASS=$(rnd); NODE_PASS=$(rnd); HIK_PASS=$(rnd); VOICED_PASS=$(rnd)
 umask 077
 cat > .env <<ENV
 HUBD_PIN=$PIN
@@ -24,10 +38,16 @@ NVR_USER=
 NVR_PASS=
 HIK_MQTT_USER=hik
 HIK_MQTT_PASS=$HIK_PASS
+# Trợ lý giọng nói (voiced):
+HUBD_ASSISTANT_TOKEN=$(rnd)$(rnd)
+VOICED_MQTT_USER=voiced
+VOICED_MQTT_PASS=$VOICED_PASS
+# Khoá Claude cho câu tự do (trống = chỉ lệnh cố định):
+ANTHROPIC_API_KEY=
 ENV
 : > mosquitto/passwd
-for u in hubd:$HUBD_PASS tuya:$TUYA_PASS node:$NODE_PASS hik:$HIK_PASS; do
-  docker run --rm -v "$PWD/mosquitto:/m" eclipse-mosquitto:2 mosquitto_passwd -b /m/passwd "${u%%:*}" "${u#*:}"
+for u in hubd:$HUBD_PASS tuya:$TUYA_PASS node:$NODE_PASS hik:$HIK_PASS voiced:$VOICED_PASS; do
+  mqtt_user "${u%%:*}" "${u#*:}"
 done
 chmod 644 mosquitto/passwd   # container mosquitto đọc bằng user khác
 echo "Đã tạo .env và mosquitto/passwd. Xem PIN: grep HUBD_PIN .env"

@@ -193,14 +193,20 @@ devices:
   # - { id: cam_kythuat,  name: "Camera tum",            zone: kythuat,    kind: camera, channel: 9,  online_topic: hik/9/online }
   # - { id: cam_giengtroi, name: "Camera giếng trời",    zone: gieng_troi, kind: camera, channel: 10, online_topic: hik/10/online }
 
+# Kịch bản một chạm (dashboard + trợ lý giọng nói khớp theo tên, vd "ra khỏi nhà"). Bước: { d: <id thiết bị>, to: on|off }.
+# pin: true = cần PIN; kịch bản có bước đụng thiết bị protected/pin cũng cần PIN (trợ lý không chạy được).
+# scenes:
+#   - { id: ra_khoi_nha, name: "Ra khỏi nhà", icon: spark, steps: [ { d: tuya_eba30c56ca208baad0y43a, to: off } ] }
+
 # Luật tự động hoá (ví dụ, bỏ # để bật). Thiết bị protected không bao giờ bị luật tắt.
+# notify: câu cảnh báo publish lên MQTT hubd/alert (level urgent|warn|info), trợ lý đọc thành tiếng.
 # rules:
 #   - id: co2_cao
 #     entity: demo.co2
 #     above: 1000
 #     clear_below: 900
 #     for: 2m
-#     then:     [ { set: tuya_xxx, to: on } ]
+#     then:     [ { set: tuya_xxx, to: on }, { notify: "CO2 cao ở khu cafe", level: warn } ]
 #     on_clear: [ { set: tuya_xxx, to: off } ]
 
 # Cảnh báo pin 3 pack JK (ngưỡng khởi điểm cho LiFePO4, chỉnh lại sau 2 tuần chạy thật — thiết kế mục 10).

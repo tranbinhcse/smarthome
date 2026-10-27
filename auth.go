@@ -19,6 +19,9 @@ type Auth struct {
 	fail int
 	lock time.Time
 	now  func() time.Time
+
+	// token Bearer của trợ lý giọng nói (HUBD_ASSISTANT_TOKEN), rỗng = tắt. Xem assistant.go.
+	assistant string
 }
 
 const cookieName = "hub_token"

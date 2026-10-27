@@ -534,3 +534,6 @@ button.sub { text-align: left; text-decoration: underline dotted; text-underline
 @keyframes fall { from { transform: translate(0, 0) rotate(14deg); } to { transform: translate(-32vh, 135vh) rotate(14deg); } }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+/* Nút nói của trợ lý giọng nói (voice.js) */
+#mic.rec { background: var(--alert); color: #fff; animation: pulse 1s infinite; }
+#mic:disabled { opacity: .5; }

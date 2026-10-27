@@ -1,0 +1,4 @@
+anthropic==2.3.0
+paho-mqtt==1.6.1
+sherpa-onnx==2.0.1
+vieneu==3.8.3

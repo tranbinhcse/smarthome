@@ -7,3 +7,6 @@ mosquitto
 *.md
 web/images/*.png
 firmware
+voiced
+tls
+tls-ca
