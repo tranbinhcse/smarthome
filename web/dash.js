@@ -513,7 +513,8 @@ function openSheet(key) {
   m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); };   // đóng bảng thì ngắt luồng camera
   m.showModal();
 }
-function fillSheet(m) { liveFill(m, sheetHtml(sheet)); }
+// bảng trình phát Spotify (music.js) tự vẽ phần của nó: vẽ lại cả bảng sẽ mất chữ đang gõ và chỗ cuộn danh sách
+function fillSheet(m) { if (sheet.startsWith('music:') && m.querySelector('[data-music]')) return musicLive(m); liveFill(m, sheetHtml(sheet)); }
 // Vẽ lại một vùng có khung xem camera ([data-live] = WebSocket go2rtc qua hub): khung đang phát được giữ nguyên khi vẽ lại
 // (mỗi tin SSE), không thì luồng bị ngắt rồi nối lại liên tục. Trình phát là video-rtc.js của go2rtc: thử WebRTC, không được
 // thì MSE; khung bị khuất (ô khác đang phóng to) thì tự ngắt sau 5 giây, hiện lại thì nối lại.
@@ -889,7 +890,7 @@ function spControls(f, zid, sps) {
   const list = !spDevOpen ? '' : `<span class="devpop">${spDevs === null ? '<small>Đang tìm thiết bị…</small>' : !spDevs.length
     ? '<small>Không thấy thiết bị nào. Bật đầu thu Spotify, hoặc mở app Spotify trên điện thoại cùng tài khoản.</small>'
     : [...spDevs].sort((a, c) => inScope(c) - inScope(a)).map(x => `<button class="rb${x.is_active ? ' sel' : ''}" data-sp="transfer:${esc(x.id)}">${icon('cast')}<span>${esc(x.name)}<small>${esc(spZone(x)?.name || x.type)}</small></span></button>`).join('')}</span>`;
-  return `<span class="pt"><b>${esc(SP.track || 'Spotify')}</b><small>${esc(sub)}</small></span>${pp}${d ? b('next', 'Bài sau', icon('next')) : ''}
+  return `<button class="pt" data-mfull aria-label="Mở trình phát đầy đủ"><b>${esc(SP.track || 'Spotify')}</b><small>${esc(sub)}</small></button>${pp}${d ? b('next', 'Bài sau', icon('next')) : ''}
     ${d?.supports_volume ? volw('spotify', d.name, d.volume_percent ?? 50) : ''}
     <span class="spdw"><button class="rb" data-spdev aria-expanded="${spDevOpen}" aria-label="Chọn thiết bị phát" title="Chọn thiết bị phát">${icon('cast')}</button>${list}</span>
     ${ir ? `<button class="rb" data-sheet="dev:${esc(ir.id)}" aria-label="${esc(ir.name)}: nguồn, âm lượng (hồng ngoại)" title="${esc(ir.name)} (hồng ngoại)">${icon('speaker')}</button>` : ''}`;
@@ -1311,6 +1312,7 @@ document.addEventListener('click', async e => {
   if (spDevOpen && !pick('.spdw')) { spDevOpen = false; draw(); }
   if ((el = pick('[data-pl]'))) {
     if (!playerOpen) { playerOpen = playerSlide = true; if (SP.connected) spLoadDevs(); return draw(); }
+    if (SP.connected) return openMusic();   // đang mở: chạm đĩa (hoặc tên bài) mở trình phát đầy đủ (music.js)
     el.parentElement.classList.add('closing');
     return setTimeout(() => { playerOpen = false; volOpen = ''; spDevOpen = false; draw(); }, 260);
   }
