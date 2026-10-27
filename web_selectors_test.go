@@ -148,3 +148,20 @@ func TestHistoryFetchedOnlyThroughChHistory(t *testing.T) {
 	}
 	t.Logf("đã quét %d file .js/.html trong web/", n)
 }
+
+// Trang Cài đặt trắng khi mở thẳng #/caidat (2026-10-27): dash.js vẽ ngay khi nạp, lúc settings.js chưa nạp, gọi
+// settingsPage() thì ném lỗi và dừng luôn phần khởi động. Mọi file nạp sau dash.js (settings.js, setup-*.js, music.js...)
+// đều gặp chuyện này, nên dash.js chỉ khởi động sau DOMContentLoaded (mọi script cuối trang đã chạy).
+func TestDashJSStartsAfterAllScripts(t *testing.T) {
+	b, err := os.ReadFile("web/dash.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "addEventListener('DOMContentLoaded', init)") || regexp.MustCompile(`(?m)^init\(\);`).Match(b) {
+		t.Fatal("dash.js phải gọi init() sau DOMContentLoaded, không gọi ngay khi nạp")
+	}
+	html, _ := os.ReadFile("web/index.html")
+	if i, j := strings.Index(string(html), `src="/dash.js`), strings.Index(string(html), `src="/settings.js`); i < 0 || j < i {
+		t.Fatal("index.html phải nạp settings.js sau dash.js")
+	}
+}

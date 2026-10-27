@@ -229,7 +229,7 @@ function chipsHtml() {
     .map(([id, [x, y]]) => chip(`${view.floor}/${id}`, zone(id).name, roomIcon(id), roomDot(id), x, y, view.room === id)).join('');
 }
 function stageHtml() {
-  if (view.page === 'settings') return typeof settingsPage === 'function' ? settingsPage() : '';   // settings.js nạp sau; 'load' vẽ lại
+  if (view.page === 'settings') return settingsPage();
   if (view.page === 'camera') return camWall();
   if (view.page === 'energy') { const fm = flowMap(); return (fm ? `<div class="ebox"><div class="wh">${icon('bolt', 'wi amber')}<h3>Dòng điện lúc này</h3></div>${fm}</div>` : '') + energyChart(); }
   const sc = sceneNow(), pos = sc.pos || [50, 50];
@@ -1379,4 +1379,5 @@ async function init() {
   for (const u of Object.values(SCENE.rooms)) new Image().src = u;
   setInterval(draw, 30000);   // đồng hồ, chuyển ngày/đêm
 }
-init();
+// Chạy sau khi mọi script cuối trang đã nạp (settings.js, setup-*.js...): lần vẽ đầu có thể gọi hàm của các file đó.
+if (document.readyState === 'loading') addEventListener('DOMContentLoaded', init); else init();
