@@ -31,6 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("mở SQLite %s: %v", cfg.DB, err)
 	}
+	applyDeviceOverrides(&cfg, db.Setting("devices")) // phòng / tên thiết bị sắp xếp trên trang Cài đặt
 	if pin == "" {
 		log.Println("CẢNH BÁO: HUBD_PIN trống — giao diện và lệnh KHÔNG có mật khẩu")
 	}

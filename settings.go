@@ -85,6 +85,9 @@ func mountSettings(mux *http.ServeMux, h *Hub, a *Auth) {
 			return
 		}
 		h.publish("hubd/settings/"+n, "changed") // dịch vụ đọc lại qua API; tin này không kèm giá trị
+		if n == "devices" {                      // sắp xếp thiết bị vào phòng: áp lúc khởi động (main.go), nên nạp lại
+			go restartHub()
+		}
 		w.WriteHeader(204)
 	}))
 	mux.HandleFunc("GET /api/assistant/settings/{ns}", a.Assistant(func(w http.ResponseWriter, r *http.Request) {

@@ -152,10 +152,12 @@ class QRSetup:
                             "version": l.get("version") or o.get("version", ""), "category": d.category,
                             "product_name": getattr(d, "product_name", ""), "sub": getattr(d, "sub", False),
                             "mapping": mapping_of(d)})
+            over = _load(self.op) or {}
             self._write_devices(out)
-            self._write_gen(out, _load(self.op) or {})
+            self._write_gen(out, over)
             self._status("done", message=f"Đã cập nhật {len(out)} thiết bị Tuya.",
-                         devices=[{"id": d["id"], "name": d["name"], "category": d["category"], "ip": d["ip"],
+                         devices=[{"id": d["id"], "name": d["name"], "category": d["category"],
+                                   "ip": d["ip"] or (over.get(d["id"]) or {}).get("ip", ""),   # IP đặt tay trong overrides
                                    "channels": sum(1 for v in d["mapping"].values() if str(v.get("code", "")).startswith("switch")),
                                    "new": d["id"] not in old} for d in out])
         except Exception as e:  # không đưa nội dung lỗi lên MQTT: có thể chứa token

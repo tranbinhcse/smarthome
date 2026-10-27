@@ -62,7 +62,7 @@ class QRSetupTest(unittest.TestCase):
         self.gen = os.path.join(self.dir, "gen", "tuya.yaml")
         os.makedirs(os.path.dirname(self.gen))
         put(self.dp, [{"id": "cu", "name": "Đèn cũ", "key": "k-cu", "ip": "192.168.1.15", "version": "3.3"}])
-        put(self.op, {"cu": {"zone": "kho"}})
+        put(self.op, {"cu": {"zone": "kho"}, "cb": {"ip": "192.168.1.12"}})   # CB v3.5 không phát broadcast: IP đặt tay
         self.sent, self.done = [], threading.Event()
 
     def publish(self, topic, payload, qos=0, retain=False):
@@ -78,7 +78,7 @@ class QRSetupTest(unittest.TestCase):
         return [p["state"] for _, p, _ in self.sent]
 
     def test_full_flow_writes_devices_and_generated_config(self):
-        FakeManager.devices = [dev("cu", "Đèn kho"), dev("moi", "Công tắc 2 nút")]
+        FakeManager.devices = [dev("cu", "Đèn kho"), dev("moi", "Công tắc 2 nút"), dev("cb", "CB Bếp", "dlq")]
         s = self.make(FakeLogin(ok_after=2))
         s.handle(b'{"action":"start","user_code":"abc"}')
         self.assertTrue(self.done.wait(5))
@@ -101,7 +101,8 @@ class QRSetupTest(unittest.TestCase):
         self.assertTrue(all(d.get("zone") == "kho" for d in g["devices"] if d["id"].startswith("tuya_cu")))
         # danh sách báo về dashboard: có thiết bị mới, không bao giờ có key hay token đăng nhập
         done = self.sent[-1][1]
-        self.assertEqual({d["id"]: d["new"] for d in done["devices"]}, {"cu": False, "moi": True})
+        self.assertEqual({d["id"]: d["new"] for d in done["devices"]}, {"cu": False, "moi": True, "cb": True})
+        self.assertEqual({d["id"]: d["ip"] for d in done["devices"]}["cb"], "192.168.1.12")   # IP đặt tay vẫn hiện
         blob = json.dumps([p for _, p, _ in self.sent])
         self.assertNotIn(KEY, blob)
         self.assertNotIn("tk-dang-nhap", blob)

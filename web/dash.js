@@ -253,7 +253,7 @@ function draw() {
   if (!volDrag) $('#greet').innerHTML = greetHtml();   // đang kéo âm lượng thì không vẽ đè
   const c = $('#chips');
   if (c) c.innerHTML = chipsHtml();
-  if (view.page) $('#stage').innerHTML = stageHtml();
+  if (view.page && !document.activeElement?.matches?.('#stage input, #stage select')) $('#stage').innerHTML = stageHtml();
   const [side, bottom, scroll] = zonesHtml(), keep = {};
   for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w] = [e.scrollLeft, e.scrollTop];
   // trang Cài đặt: đang gõ trong một ô thì không vẽ đè cột phải (mất con trỏ, bàn phím iPad đóng lại)
@@ -917,12 +917,60 @@ function energyZones() {
 
 /* ---------- Cài đặt ---------- */
 // Chỉnh được ngay: ngày/đêm, bố cục widget. Phòng, thiết bị, ngữ cảnh: xem tại đây, sửa trong config.yaml trên hub.
+// Sắp xếp thiết bị vào phòng (nhóm cấu hình "devices", hubd áp lúc khởi động rồi tự nạp lại khi lưu).
+// Thiết bị nhiều nút: mỗi kênh một dòng (đổi phòng, đổi tên "Nút 1"...), có ô đổi phòng cho cả thiết bị.
+// CB: chọn khu được cấp điện để số đo hiện đúng phòng (bản thân CB vẫn ở tủ điện).
+let devEdit = false;
+const DEVD = {};   // bản nháp: id -> {zone, name, area}
+const devVal = (d, k) => DEVD[d.id]?.[k] ?? (k === 'area' ? cfg.entities.find(e => e.device === d.id)?.zone || '' : d[k] || '');
+const zoneOpts = (cur, panel = true) => [['', 'Chưa gán phòng'], ...cfg.zones.filter(z => panel || z.type !== 'panel').map(z => [z.id, `${floorName(z.floor)} · ${z.name}`])]
+  .map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
+function devEditor() {
+  const rows = [], seen = new Set(), canArea = d => kindOf(d) === 'breaker' && cfg.entities.some(e => e.device === d.id);
+  const row = d => `<div class="devrow">${icon(kindOf(d))}<input data-dset="${esc(d.id)}:name" value="${esc(devVal(d, 'name'))}" aria-label="Tên ${esc(d.name)}">
+    ${canArea(d) ? `<select data-dset="${esc(d.id)}:area" aria-label="Khu được cấp điện">${zoneOpts(devVal(d, 'area'), false)}</select>`
+      : `<select data-dset="${esc(d.id)}:zone" aria-label="Phòng của ${esc(d.name)}">${zoneOpts(devVal(d, 'zone'))}</select>`}</div>`;
+  for (const d of cfg.devices) {
+    if (!d.group) { rows.push(row(d)); continue; }
+    if (seen.has(d.group)) continue;
+    seen.add(d.group);
+    const g = cfg.devices.filter(x => x.group === d.group);
+    rows.push(`<div class="devgrp"><div class="devrow head">${icon(kindOf(d))}<b>${esc(d.group)}</b><select data-dgset="${esc(g.map(x => x.id).join(','))}" aria-label="Phòng cho cả ${esc(d.group)}">
+      <option value="">Đổi phòng cả thiết bị...</option>${zoneOpts(null)}</select></div>${g.map(row).join('')}</div>`);
+  }
+  const n = Object.keys(DEVD).length;
+  return `<div class="devedit">${rows.join('')}</div><div class="kv"><button class="pill" data-devedit>Huỷ</button>
+    <button class="pill amber" data-devsave${n ? '' : ' disabled'}>Lưu${n ? ` (${n} thiết bị)` : ''}</button></div>
+    <p class="note">Lưu xong hub tự nạp lại trong vài giây, dashboard tự cập nhật.</p>`;
+}
 function settingsBox() {
   const byFloor = floors().map(f => [f, cfg.zones.filter(z => z.floor === f)]);
-  return `<div class="ebox set"><div class="wh">${icon('layers', 'wi amber')}<h3>Phòng và thiết bị<small>${cfg.zones.length} khu vực, ${cfg.devices.length} thiết bị, ${cfg.entities.length} số đo</small></h3></div>
-    <div class="setlist">${byFloor.map(([f, zs]) => `<h4>${esc(floorName(f))}</h4>${zs.map(z => { const ds = devsIn(z.id), ks = [...new Set(ds.map(kindOf))];
-      return `<button class="setrow" data-go="${f}/${esc(z.id)}"><span>${esc(z.name)}</span><span class="ks">${ks.map(k => `<i title="${k}">${icon(k)}<b>${ds.filter(d => kindOf(d) === k).length}</b></i>`).join('')}</span>${icon('more')}</button>`; }).join('')}`).join('')}</div>
-    <p class="note">Thêm, đổi tên, gán phòng cho thiết bị: sửa config.yaml trên hub rồi khởi động lại hubd.</p></div>`;
+  return `<div class="ebox set"><div class="wh">${icon('layers', 'wi amber')}<h3>Phòng và thiết bị<small>${cfg.zones.length} khu vực, ${cfg.devices.length} thiết bị, ${cfg.entities.length} số đo</small></h3>
+    ${devEdit ? '' : '<button class="pill" data-devedit>Sắp xếp thiết bị</button>'}</div>
+    ${devEdit ? devEditor() : `<div class="setlist">${byFloor.map(([f, zs]) => `<h4>${esc(floorName(f))}</h4>${zs.map(z => { const ds = devsIn(z.id), ks = [...new Set(ds.map(kindOf))];
+      return `<button class="setrow" data-go="${f}/${esc(z.id)}"><span>${esc(z.name)}</span><span class="ks">${ks.map(k => `<i title="${k}">${icon(k)}<b>${ds.filter(d => kindOf(d) === k).length}</b></i>`).join('')}</span>${icon('more')}</button>`; }).join('')}`).join('')}</div>`}</div>`;
+}
+document.addEventListener('input', e => {
+  const f = e.target.closest?.('[data-dset]');
+  if (!f) return;
+  const i = f.dataset.dset.lastIndexOf(':');
+  (DEVD[f.dataset.dset.slice(0, i)] ||= {})[f.dataset.dset.slice(i + 1)] = f.value;
+});
+document.addEventListener('change', e => {
+  if (e.target.matches?.('select[data-dset]')) { e.target.dispatchEvent(new Event('input', {bubbles: true})); e.target.blur(); soon(); }
+  if (e.target.matches?.('select[data-dgset]') && e.target.value) {
+    for (const id of e.target.dataset.dgset.split(',')) (DEVD[id] ||= {}).zone = e.target.value;
+    e.target.blur(); soon();
+  }
+});
+async function saveDevices() {
+  if (DEMO) return toast('Chế độ dữ liệu mẫu không lưu sắp xếp');
+  const r = await api('/api/settings/devices', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(DEVD)});
+  if (!r.ok) return toast(`Chưa lưu được: ${await r.text()}`);
+  for (const k of Object.keys(DEVD)) delete DEVD[k];
+  devEdit = false;
+  toast('Đã lưu, hub đang nạp lại...');
+  draw();
 }
 function settingsZones() {
   const card = (i, c, t, meta, body) => `<section class="w"><header class="wh">${icon(i, 'wi ' + c)}<h3>${t}${meta ? `<small>${meta}</small>` : ''}</h3></header>${body}</section>`;
@@ -1232,6 +1280,8 @@ document.addEventListener('click', async e => {
   }
   if ((el = pick('[data-airtab]'))) { airTab = el.dataset.airtab; return draw(); }
   if ((el = pick('[data-ssave]'))) return saveSetting(el.dataset.ssave);
+  if (pick('[data-devedit]')) { devEdit = !devEdit; for (const k of Object.keys(DEVD)) delete DEVD[k]; return draw(); }
+  if (pick('[data-devsave]')) return saveDevices();
   if ((el = pick('[data-sact]'))) {
     const v = el.dataset.sact, m = SETUP.find(x => x.id === v.slice(0, v.indexOf(':')));
     return m?.act?.(v.slice(v.indexOf(':') + 1), el);
@@ -1262,7 +1312,10 @@ function connect() {
   es = new EventSource('/events');
   es.onopen = async () => {   // nạp lại để bù tin lỡ khi mất mạng
     retry = 1000; setConn('ok');
-    state = await (await api('/api/state')).json(); soon();
+    const [c, st] = await Promise.all([api('/api/config'), api('/api/state')]);
+    const nc = await c.json();
+    if (JSON.stringify(nc) !== JSON.stringify(cfg)) { cfg = nc; shellKey = ''; }   // hubd vừa nạp cấu hình mới: vẽ lại cả trang
+    state = await st.json(); soon();
   };
   es.onmessage = ev => {
     const m = JSON.parse(ev.data);
