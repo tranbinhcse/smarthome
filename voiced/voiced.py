@@ -2,19 +2,24 @@
 
 Âm thanh WAV (nút nói trên iPad; sau này loa vệ tinh ESP32-S3) → STT cục bộ (sherpa-onnx Zipformer tiếng Việt)
 → lệnh cố định khớp cục bộ theo tên thiết bị/kịch bản/số đo trong config (chạy cả khi mất internet)
-→ câu tự do gửi Claude (tool use) → mọi thao tác đi qua API trợ lý của hubd bằng token riêng; hubd tự chặn
-thiết bị/kịch bản cần PIN → câu trả lời đọc bằng VieNeu-TTS (giọng Hải Đăng), cache theo nội dung câu.
+→ câu tự do gửi AI qua API chat completions tương thích OpenAI (tool calling; URL, khoá, model nhập ở trang Cài đặt,
+lưu trong hubd nhóm "ai") → mọi thao tác đi qua API trợ lý của hubd bằng token riêng; hubd tự chặn thiết bị/kịch bản
+cần PIN → câu trả lời đọc bằng VieNeu-TTS (giọng Hải Đăng), cache theo nội dung câu.
 Cảnh báo nghe từ MQTT hubd/alert, đẩy tới loa (iPad) qua SSE; câu cảnh báo cố định tạo sẵn âm thanh lúc khởi động.
+Cấu hình AI đọc qua GET /api/assistant/settings/ai, đọc lại khi MQTT hubd/settings/ai = changed.
 
 HTTP (chỉ trong mạng docker; dashboard đi qua hubd /voice/*, không mở cổng ra LAN):
   POST /voice/ask       body audio/wav (PCM 16-bit, tần số bất kỳ) hoặc JSON {"text": "..."}
                         → {"heard", "reply", "audio": "/voice/tts/<key>.wav"}
+  POST /voice/brief     tóm tắt tình hình (thời tiết, không khí, điện/pin, cảnh báo) → {"reply", "audio"}
+  POST /voice/ai/check  JSON {url, api_key, model} (ô trống = giá trị đã lưu) → {"ok", "models", "message"}
   GET  /voice/tts/<key>.wav
   GET  /voice/events    SSE: {"type": "alert", "level", "text", "audio"} | {"type": "ack"}
 """
 import hashlib
 import io
 import json
+import math
 import os
 import queue
 import re
@@ -29,16 +34,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-import anthropic
 import numpy as np
 
-MODEL = "claude-opus-5-5"
 VOICE = os.environ.get("VOICED_VOICE", "Hải Đăng")
 MODELS = Path(os.environ.get("VOICED_MODELS", "/models"))
 VN = timezone(timedelta(hours=7))
 OFFLINE = "Không gọi được trợ lý trực tuyến nên tôi chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
 NOT_HEARD = "Tôi chưa nghe rõ, bạn nói lại nhé."
-FIXED_ONLY = "Chưa có khoá Claude nên tôi chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
+FIXED_ONLY = "Chưa cài AI nên tôi chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
+AI_KEY = "Khoá API của AI bị từ chối, hãy kiểm tra trong Cài đặt."
+AI_ERROR = "Trợ lý trực tuyến đang lỗi, bạn thử lại sau."
 ON_RE = re.compile(r"^\s*(on|1|true)\s*$", re.I)
 UNITS = {"%": "phần trăm", "W": "oát", "kW": "ki lô oát", "kWh": "ki lô oát giờ", "V": "vôn", "A": "am pe",
          "°C": "độ C", "ppm": "pi pi em", "µg/m³": "micrô gam trên mét khối", "lux": "lux"}
@@ -100,13 +105,15 @@ def measured(cfg, ws):
 
 
 def match(text, cfg):
-    """Hiểu câu bằng luật cố định. Trả (việc, đối tượng, on/off) hoặc None để Claude xử lý."""
+    """Hiểu câu bằng luật cố định. Trả (việc, đối tượng, on/off) hoặc None để AI xử lý."""
     w = words(text)
     ws = set(w)
     verb = next((i for i, x in enumerate(w) if x in ON | OFF), None)
     to = None if verb is None else ("on" if w[verb] in ON else "off")
     if (to == "off" or {"xac", "nhan"} <= ws) and ("coi" in ws or {"bao", "dong"} <= ws or {"canh", "bao"} <= ws):
         return ("ack", None, None)
+    if {"tinh", "hinh"} <= ws or {"tom", "tat"} <= ws:
+        return ("brief", None, None)
     dev = named(cfg["devices"], ws)
     if dev:
         first = min(w.index(x) for x in words(dev["name"]))
@@ -138,6 +145,8 @@ def run(intent, hub):
     if kind == "ack":
         hub("POST", "/alarm/ack")
         return "Đã xác nhận cảnh báo."
+    if kind == "brief":
+        return summary(hub)
     v = hub("GET", "/state")[1]["values"]
     if kind == "ask_device":
         if v.get("online:" + x["id"]) == "offline":
@@ -149,11 +158,73 @@ def run(intent, hub):
     return f"{name} {num(v[x['id']])} {UNITS.get(x.get('unit', ''), x.get('unit', ''))}".rstrip() + "."
 
 
-# ---------- Câu tự do (Claude, tool use) ----------
+# ---------- Tóm tắt tình hình (nút đọc trên dashboard, "tình hình thế nào"): tính cục bộ, không cần AI ----------
+
+def watt(x):
+    return f"{num(round(abs(x) / 1000, 1))} ki lô oát" if abs(x) >= 1000 else f"{round(abs(x))} oát"
+
+
+def brief(cfg, st):
+    v = st["values"]
+    def val(i):
+        try:
+            x = float(v[i])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return None if math.isnan(x) else x
+    zone = {z["id"]: z for z in cfg["zones"]}
+    outdoor = lambda e: zone.get(e.get("zone"), {}).get("type") == "outdoor"
+    sensors = [(e, val(e["id"])) for e in cfg["entities"] if not e.get("device") and val(e["id"]) is not None]
+    def top(pick):  # số đo lớn nhất trong nhà (cùng cách dashboard lấy phòng tệ nhất)
+        xs = [(x, e) for e, x in sensors if not outdoor(e) and pick(e)]
+        return max(xs, key=lambda p: p[0]) if xs else (None, None)
+    parts = []
+
+    out = [(e, x) for e, x in sensors if outdoor(e)]
+    first = lambda pick: next((x for e, x in out if pick(e)), None)
+    t, h, rain = first(lambda e: e.get("unit") == "°C"), first(lambda e: e.get("unit") == "%"), first(lambda e: "mua" in words(e["name"]))
+    w = [f"{num(t)} độ"] if t is not None else []
+    w += [f"độ ẩm {num(h)} phần trăm"] if h is not None else []
+    w += ["đang mưa" if rain >= 0.5 else "không mưa"] if rain is not None else []
+    if w:
+        parts.append("Ngoài trời " + ", ".join(w) + ".")
+
+    name = lambda e: zone.get(e.get("zone"), {}).get("name", "")
+    co2, ce = top(lambda e: re.search(r"co[2₂]", e["name"], re.I))
+    pm, pe = top(lambda e: e.get("unit") == "µg/m³")
+    air = [f"CO2 cao nhất {num(co2)} pi pi em ở {name(ce)}"] if ce else []
+    air += [f"bụi mịn cao nhất {num(pm)} micrô gam ở {name(pe)}"] if pe else []
+    if air:
+        parts.append("Trong nhà " + ", ".join(air) + ".")
+
+    soc, bat, pv, load, grid = (val(i) for i in ("jk.soc", "jk.power", "deye.pv", "deye.load", "deye.grid"))
+    p = []
+    if soc is not None:
+        state = "" if bat is None or abs(bat) <= 5 else f", đang {'sạc' if bat > 0 else 'xả'} {watt(bat)}"
+        p.append(f"pin {num(soc)} phần trăm{state}")
+    p += [f"điện mặt trời {watt(pv)}"] if pv is not None else []
+    p += [f"nhà dùng {watt(load)}"] if load is not None else []
+    p += [f"đang {'mua' if grid > 0 else 'bán'} lưới {watt(grid)}"] if grid is not None and abs(grid) > 5 else []
+    if p:
+        e = "; ".join(p)
+        parts.append(e[0].upper() + e[1:] + ".")
+
+    if not parts:
+        parts.append("Chưa có số đo thời tiết, không khí hay điện.")
+    alerts = list(dict.fromkeys([a["text"] for a in st["alerts"]] + [x for k, x in v.items() if k.startswith("alert:") and x]))
+    parts.append(f"Có {len(alerts)} cảnh báo: " + "; ".join(x.rstrip(". ") for x in alerts) + "." if alerts else "Không có cảnh báo nào.")
+    return " ".join(parts)
+
+
+def summary(hub):
+    return brief(hub("GET", "/config")[1], hub("GET", "/state")[1])
+
+
+# ---------- Câu tự do (AI qua API tương thích OpenAI, tool calling) ----------
 
 def tool(name, desc, props=None, required=()):
-    return {"name": name, "description": desc, "strict": True,
-            "input_schema": {"type": "object", "properties": props or {}, "required": list(required), "additionalProperties": False}}
+    return {"type": "function", "function": {"name": name, "description": desc,
+            "parameters": {"type": "object", "properties": props or {}, "required": list(required), "additionalProperties": False}}}
 
 
 TOOLS = [
@@ -212,53 +283,82 @@ def history_text(entity, hours, pts):
 
 def verdict(code, msg):
     if code == 204:
-        return "đã gửi lệnh", False
+        return "đã gửi lệnh"
     if code == 403:
-        return "hubd từ chối: cần PIN. Bảo người dùng bấm trên màn hình, không thử cách khác.", True
-    return f"lỗi {code}: {msg}", True
+        return "LỖI: hubd từ chối, cần PIN. Bảo người dùng bấm trên màn hình, không thử cách khác."
+    return f"LỖI {code}: {msg}"
 
 
-def call_tool(b, hub, cfg):
-    a = b.input
+def call_tool(name, args, hub, cfg):
+    """Chạy một lời gọi tool, trả chữ cho message role=tool. Lỗi bắt đầu bằng "LỖI" (API OpenAI không có cờ lỗi)."""
     try:
-        if b.name == "get_state":
+        a = json.loads(args or "{}")
+        if name == "get_state":
             code, data = hub("GET", "/state")
-            out, err = (state_text(cfg, data), False) if code == 200 else (f"lỗi {code}", True)
-        elif b.name == "query_history":
+            return state_text(cfg, data) if code == 200 else f"LỖI {code}"
+        if name == "query_history":
             hours = min(max(int(a["hours"]), 1), 4320)
             code, pts = hub("GET", "/history?" + urlencode({"id": a["entity"], "hours": hours}))
-            out, err = (history_text(a["entity"], hours, pts), False) if code == 200 else (f"lỗi {code}", True)
-        elif b.name == "set_device":
-            out, err = verdict(*hub("POST", "/cmd", {"device": a["device"], "to": a["to"]}))
-        elif b.name == "run_scene":
-            out, err = verdict(*hub("POST", "/scene/" + quote(a["scene"], safe="")))
-        elif b.name == "ack_alarm":
-            out, err = verdict(*hub("POST", "/alarm/ack"))
-        else:
-            out, err = f"không có tool {b.name}", True
-    except Exception as e:  # hubd mất kết nối, input lạ: báo Claude thay vì làm hỏng cả lượt
-        out, err = f"lỗi: {e}", True
-    return {"type": "tool_result", "tool_use_id": b.id, "content": out, "is_error": err}
+            return history_text(a["entity"], hours, pts) if code == 200 else f"LỖI {code}"
+        if name == "set_device":
+            return verdict(*hub("POST", "/cmd", {"device": a["device"], "to": a["to"]}))
+        if name == "run_scene":
+            return verdict(*hub("POST", "/scene/" + quote(a["scene"], safe="")))
+        if name == "ack_alarm":
+            return verdict(*hub("POST", "/alarm/ack"))
+        return f"LỖI: không có tool {name}"
+    except Exception as e:  # hubd mất kết nối, tham số hỏng: báo model thay vì làm hỏng cả lượt
+        return f"LỖI: {e!r}"
 
 
-def ask_claude(text, cfg, hub, client):
-    msgs = [{"role": "user", "content": text}]
+def base_url(url):
+    return url.strip().rstrip("/").removesuffix("/chat/completions")
+
+
+class AI:
+    """API chat completions tương thích OpenAI (OpenAI, OpenRouter, Groq, Gemini, Ollama/LM Studio trong LAN...),
+    chỉ dùng thư viện chuẩn. Lỗi mạng → OSError; HTTP lỗi → urllib.error.HTTPError (cũng là OSError)."""
+    def __init__(self, url, key, model, timeout=20):
+        self.url, self.key, self.model, self.timeout = base_url(url), key or "", model, timeout
+
+    @classmethod
+    def from_settings(cls, s):
+        """Nhóm cấu hình "ai" của hubd. Chưa có URL hoặc model → None (chỉ lệnh cố định); khoá được trống (Ollama)."""
+        return cls(s["url"], s.get("api_key"), s["model"]) if s.get("url") and s.get("model") else None
+
+    def call(self, path, body=None):
+        if not self.url.startswith(("http://", "https://")):  # urllib còn mở được file://
+            raise ValueError("địa chỉ API phải bắt đầu bằng http:// hoặc https://")
+        headers = {"Content-Type": "application/json"} | ({"Authorization": "Bearer " + self.key} if self.key else {})
+        req = urllib.request.Request(self.url + path, data=None if body is None else json.dumps(body).encode(), headers=headers)
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            return json.load(r)
+
+    def chat(self, messages, tools):
+        return self.call("/chat/completions", {"model": self.model, "messages": messages, "tools": tools})["choices"][0]["message"]
+
+    def models(self):
+        return sorted(m["id"] for m in self.call("/models")["data"])
+
+
+def ask_ai(text, cfg, hub, ai):
+    msgs = [{"role": "system", "content": system_prompt(cfg)}, {"role": "user", "content": text}]
     for _ in range(6):
-        r = client.beta.messages.create(
-            model=MODEL, max_tokens=4096, system=system_prompt(cfg), tools=TOOLS, messages=msgs,
-            output_config={"effort": "low"},
-            betas=["server-side-fallback-2026-07-01"], fallbacks="default")  # bị từ chối thì máy chủ tự thử model dự phòng
-        if r.stop_reason == "refusal":
-            return "Xin lỗi, việc này tôi không làm được."
-        msgs.append({"role": "assistant", "content": r.content})  # giữ nguyên cả khối thinking
-        calls = [b for b in r.content if b.type == "tool_use"]
-        if r.stop_reason != "tool_use" or not calls:
-            return " ".join(b.text for b in r.content if b.type == "text").strip() or "Tôi chưa có câu trả lời."
-        msgs.append({"role": "user", "content": [call_tool(b, hub, cfg) for b in calls]})
+        m = ai.chat(msgs, TOOLS)
+        calls = [{"id": c["id"], "type": "function", "function": {"name": c["function"]["name"], "arguments": c["function"].get("arguments") or "{}"}}
+                 for c in m.get("tool_calls") or []]
+        if not calls:
+            if m.get("refusal") and not m.get("content"):
+                return "Xin lỗi, việc này tôi không làm được."
+            return (m.get("content") or "").strip() or "Tôi chưa có câu trả lời."
+        # Gửi lại đúng lời gọi tool; bỏ trường riêng của từng hãng (reasoning_content...) mà hãng khác không nhận.
+        msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": calls})
+        msgs += [{"role": "tool", "tool_call_id": c["id"], "content": call_tool(c["function"]["name"], c["function"]["arguments"], hub, cfg)}
+                 for c in calls]
     return "Việc này nhiều bước quá, bạn nói cụ thể hơn giúp tôi."
 
 
-def answer(text, hub, claude):
+def answer(text, hub, ai):
     if not text.strip():
         return NOT_HEARD
     try:
@@ -270,22 +370,61 @@ def answer(text, hub, claude):
             return run(intent, hub)
     except OSError:
         return "Không kết nối được trung tâm."
-    if claude is None:
+    if ai is None:
         return FIXED_ONLY
     try:
-        return ask_claude(text, cfg, hub, claude)
-    except anthropic.APIConnectionError:
+        return ask_ai(text, cfg, hub, ai)
+    except urllib.error.HTTPError as e:
+        print(f"AI lỗi HTTP {e.code} ({ai.url}, model {ai.model})", flush=True)  # không in thân lỗi: có hãng nhắc lại một phần khoá
+        return AI_KEY if e.code in (401, 403) else AI_ERROR
+    except OSError:
         return OFFLINE
-    except anthropic.APIStatusError as e:
-        print(f"Claude lỗi {e.status_code} request_id={e.request_id}", flush=True)
-        return "Trợ lý trực tuyến đang lỗi, bạn thử lại sau."
+    except (ValueError, KeyError, IndexError, TypeError) as e:  # endpoint trả dạng lạ
+        print(f"AI trả về không hợp lệ: {e!r}", flush=True)
+        return AI_ERROR
+
+
+def check_ai(stored, draft):
+    """Nút "Thử kết nối": ô để trống dùng giá trị đã lưu. Lấy danh sách model; có model thì hỏi thử một câu kèm tool
+    (đúng kiểu gọi thật). Kết quả không chứa khoá."""
+    s = {**stored, **{k: str(draft[k]).strip() for k in ("url", "api_key", "model") if str(draft.get(k) or "").strip()}}
+    def done(ok, models, *notes):
+        return {"ok": ok, "models": models, "message": " ".join(notes)}
+    if not s.get("url"):
+        return done(False, [], "Nhập địa chỉ API trước.")
+    ai = AI(s["url"], s.get("api_key"), s.get("model", ""), timeout=10)
+    if not ai.url.startswith(("http://", "https://")):
+        return done(False, [], "Địa chỉ API phải bắt đầu bằng http:// hoặc https://")
+    models, notes = [], []
+    try:
+        models = ai.models()
+        notes.append(f"Kết nối được, có {len(models)} model.")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return done(False, [], f"Khoá API bị từ chối (HTTP {e.code}).")
+        notes.append(f"Endpoint không trả danh sách model (HTTP {e.code}), hãy gõ tên model.")
+    except OSError as e:
+        return done(False, [], f"Không kết nối được {ai.url}: {getattr(e, 'reason', e)}")
+    except (ValueError, KeyError, TypeError):
+        notes.append("Endpoint không trả danh sách model, hãy gõ tên model.")
+    if not ai.model:
+        return done(True, models, *notes, "Chọn model rồi bấm Thử kết nối lần nữa.")
+    t0 = time.perf_counter()
+    try:
+        ai.chat([{"role": "user", "content": "Trả lời đúng một chữ: OK"}], TOOLS)
+    except urllib.error.HTTPError as e:
+        why = "" if e.code in (401, 403) else ": " + e.read()[:200].decode(errors="replace")
+        return done(False, models, *notes, f"Model {ai.model} lỗi HTTP {e.code}{why}")
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
+        return done(False, models, *notes, f"Model {ai.model} chưa trả lời được: {e}")
+    return done(True, models, *notes, f"Model {ai.model} trả lời được trong {num(round(time.perf_counter() - t0, 1))} giây.")
 
 
 # ---------- Âm thanh ----------
 
 class TTS:
     """Đọc thành WAV, cache theo (giọng, câu): câu cảnh báo và câu lặp lại không phải tổng hợp lại.
-    Giữ `keep` file dùng gần nhất (câu trả lời của Claude hầu như không lặp lại)."""
+    Giữ `keep` file dùng gần nhất (câu trả lời của AI hầu như không lặp lại)."""
     keep = 500  # ponytail: xoá theo mtime khi ghi file mới, ~0,5 MB/file → tối đa vài trăm MB
 
     def __init__(self, cache, synth):
@@ -348,9 +487,17 @@ def read_wav(b):
 # ---------- Dịch vụ ----------
 
 class App:
-    def __init__(self, hub, claude, stt, tts):
-        self.hub, self.claude, self.stt, self.tts = hub, claude, stt, tts
+    def __init__(self, hub, ai, stt, tts):
+        self.hub, self.ai, self.stt, self.tts = hub, ai, stt, tts
         self.listeners, self.lock = set(), threading.Lock()
+
+    def load_ai(self):
+        """Đọc cấu hình AI (nhóm "ai" của hubd) bằng token trợ lý. Không in khoá."""
+        code, s = self.hub("GET", "/settings/ai")
+        if code != 200:
+            return print(f"không đọc được cấu hình AI: HTTP {code}", flush=True)
+        self.ai = AI.from_settings(s)
+        print(f"AI: model {self.ai.model} tại {self.ai.url}" if self.ai else "chưa cài AI: chỉ chạy lệnh cố định", flush=True)
 
     def speak(self, text):
         try:
@@ -368,6 +515,8 @@ class App:
         try:
             if topic == "hubd/alert/ack":
                 return self.broadcast({"type": "ack"})
+            if topic == "hubd/settings/ai":  # lưu trên trang Cài đặt; tin không kèm giá trị
+                return self.load_ai()
             a = json.loads(payload)
             text = str(a["text"])
             self.broadcast({"type": "alert", "level": str(a.get("level", "info")), "text": text, "audio": self.speak(text)})
@@ -379,6 +528,7 @@ class App:
         while True:
             try:
                 phrases = self.hub("GET", "/config")[1]["phrases"]
+                self.load_ai()
                 break
             except (OSError, TypeError, KeyError):
                 time.sleep(10)
@@ -397,13 +547,32 @@ def handler(app):
             self.wfile.write(body)
 
         def do_POST(self):
-            if self.path != "/voice/ask":
-                return self.send_error(404)
             n = self.headers.get("Content-Length", "0")
             if not n.isdigit() or int(n) > 8_000_000:
                 return self.send(400, "Content-Length không hợp lệ (tối đa 8 MB)".encode(), "text/plain; charset=utf-8")
-            n = int(n)
-            body = self.rfile.read(n)
+            body = self.rfile.read(int(n))
+            if self.path == "/voice/ask":
+                return self.ask(body)
+            if self.path == "/voice/brief":
+                try:
+                    reply = summary(app.hub)
+                except Exception as e:  # hubd mất kết nối hoặc trả dạng lạ
+                    print(f"tóm tắt lỗi: {e!r}", flush=True)
+                    reply = "Không lấy được số liệu từ trung tâm."
+                return self.json({"reply": reply, "audio": app.speak(reply)})
+            if self.path == "/voice/ai/check":
+                try:
+                    draft = json.loads(body)
+                    code, stored = app.hub("GET", "/settings/ai")
+                    return self.json(check_ai(stored if code == 200 else {}, draft if isinstance(draft, dict) else {}))
+                except (ValueError, OSError) as e:
+                    return self.json({"ok": False, "models": [], "message": f"Lỗi: {e}"})
+            self.send_error(404)
+
+        def json(self, obj):
+            self.send(200, json.dumps(obj, ensure_ascii=False).encode())
+
+        def ask(self, body):
             t0 = time.perf_counter()
             try:
                 if self.headers.get("Content-Type", "").startswith("application/json"):
@@ -416,7 +585,7 @@ def handler(app):
                 return self.send(400, "cần WAV PCM 16-bit hoặc JSON {\"text\": ...}".encode(), "text/plain; charset=utf-8")
             t1 = time.perf_counter()
             try:
-                reply = answer(heard, app.hub, app.claude)
+                reply = answer(heard, app.hub, app.ai)
             except Exception as e:
                 print(f"lỗi khi trả lời {heard!r}: {e!r}", flush=True)
                 reply = "Có lỗi, bạn thử lại sau."
@@ -424,7 +593,7 @@ def handler(app):
             audio = app.speak(reply)
             ms = lambda a, b: f"{(b - a) * 1000:.0f} ms"
             print(f"nghe: {heard!r} → {reply!r} (STT {ms(t0, t1)}, xử lý {ms(t1, t2)}, TTS {ms(t2, time.perf_counter())})", flush=True)
-            self.send(200, json.dumps({"heard": heard, "reply": reply, "audio": audio}, ensure_ascii=False).encode())
+            self.json({"heard": heard, "reply": reply, "audio": audio})
 
         def do_GET(self):
             if m := re.fullmatch(r"/voice/tts/([0-9a-f]{16})\.wav", self.path):
@@ -465,15 +634,15 @@ def handler(app):
 def main():
     import paho.mqtt.client as mqtt
     hub = Hub(os.environ.get("HUBD_URL", "http://hubd:8080"), os.environ["HUBD_ASSISTANT_TOKEN"])
-    claude = anthropic.Anthropic(timeout=20.0, max_retries=1) if os.environ.get("ANTHROPIC_API_KEY") else None
-    if claude is None:
-        print("chưa có ANTHROPIC_API_KEY: chỉ chạy lệnh cố định", flush=True)
-    app = App(hub, claude, sherpa_stt(), TTS(Path(os.environ.get("VOICED_CACHE", "/cache")), vieneu_synth()))
+    app = App(hub, None, sherpa_stt(), TTS(Path(os.environ.get("VOICED_CACHE", "/cache")), vieneu_synth()))
     threading.Thread(target=app.warm, daemon=True).start()
 
     c = mqtt.Client("voiced")
     c.username_pw_set(os.environ.get("MQTT_USER"), os.environ.get("MQTT_PASS"))
-    c.on_connect = lambda c, u, f, rc: c.subscribe([("hubd/alert", 1), ("hubd/alert/ack", 1)])
+    def on_connect(c, u, f, rc):
+        c.subscribe([("hubd/alert", 1), ("hubd/alert/ack", 1), ("hubd/settings/ai", 1)])
+        app.on_mqtt("hubd/settings/ai", "changed")  # nối lại broker: có thể đã lỡ tin đổi cấu hình
+    c.on_connect = on_connect
     c.on_message = lambda c, u, m: app.on_mqtt(m.topic, m.payload)
     c.connect_async(os.environ.get("MQTT_HOST", "mosquitto"), 1883)
     c.loop_start()  # tự nối lại khi broker khởi động lại
