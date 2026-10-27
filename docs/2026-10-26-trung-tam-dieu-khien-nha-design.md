@@ -216,7 +216,7 @@ scenes:
 - `hubd` chỉ lắng nghe trên LAN và Tailscale. **Không mở port ra internet.**
 - Ghép thiết bị một lần: mở `/pair`, nhập PIN quản trị. Server lưu token ngẫu nhiên vào cookie HttpOnly. Mọi API đều đòi token này.
 - **Cắt CB cần nhập PIN.** Tắt còi thì không cần PIN.
-- MQTT bắt buộc username/password, mỗi node một tài khoản.
+- MQTT bắt buộc username/password, mỗi node một tài khoản. Tài khoản node tạo trên dashboard chỉ đi được topic của chính nó (mục 8).
 
 **Kiểm thử**
 
@@ -232,6 +232,7 @@ scenes:
 - Một gói chung `common.yaml` qua `packages:`. Mỗi node một file, chỉ bật module của khu đó.
 - Mã nguồn: `firmware/` ([README](../firmware/README.md)). Topic `node-<khu>/sensor/<tên>/state`, mỗi node một tài khoản MQTT.
 - Hồng ngoại (bổ sung 2026-10-27): node không khí gắn mắt thu + LED phát. Máy lạnh dùng `climate_ir`, thiết bị khác dùng mã học được lưu trong `config.yaml`; `hubd` giữ trạng thái giả định.
+- Cấu hình node trên dashboard (bổ sung 2026-10-27, Cài đặt → Node ESP32): danh sách node, tài khoản MQTT từng node do `hubd` tạo/khoá/xoá qua plugin dynamic security của Mosquitto (tài khoản quản trị riêng; tài khoản dịch vụ vẫn ở `passwd`), hãng máy lạnh, gán mã hồng ngoại vừa học (lưu trong kho cấu hình của `hubd`, đè lên `config.yaml`). Lý do và cách chuyển: [firmware/README.md](../firmware/README.md).
 
 **Xử lý số đo**
 

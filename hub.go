@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,12 +26,15 @@ type Hub struct {
 	subs map[chan []byte]struct{}
 
 	alerts []Alert // cảnh báo chưa ai xác nhận (assistant.go), khoá bằng mu
+
+	nodes  map[string]*nodeSeen                   // node ESP32 đã gửi tin (nodes.go), khoá bằng mu
+	dynsec func(cmds []dynCmd) ([]dynResp, error) // quản lý tài khoản MQTT của node (nodes.go); nil = chưa cấu hình
 }
 
 func NewHub(cfg Config, db *DB, publish func(topic, payload string)) *Hub {
 	h := &Hub{cfg: cfg, db: db, engine: NewEngine(cfg.Rules), publish: publish,
 		devByID: map[string]Device{}, routes: map[string][]route{},
-		val: map[string]string{}, subs: map[chan []byte]struct{}{}}
+		val: map[string]string{}, subs: map[chan []byte]struct{}{}, nodes: map[string]*nodeSeen{}}
 	add := func(topic string, r route) {
 		if topic != "" {
 			h.routes[topic] = append(h.routes[topic], r)
@@ -54,18 +58,25 @@ type route struct {
 	scale float64
 }
 
-// Topics: các topic cần đăng ký, mỗi topic một lần dù nhiều mục cùng đọc.
+// Topics: các topic cần đăng ký, mỗi topic một lần dù nhiều mục cùng đọc. Topic đã nằm trong wildcard chung của node
+// (nodeSubs) thì không đăng ký riêng: hai đăng ký trùng nhau làm mỗi tin đến hai lần.
 func (h *Hub) Topics() []string {
-	out := make([]string, 0, len(h.routes))
+	out := slices.Clone(nodeSubs)
 	for t := range h.routes {
-		out = append(out, t)
+		if !slices.ContainsFunc(nodeSubs, func(f string) bool { return topicMatch(f, t) }) {
+			out = append(out, t)
+		}
 	}
 	return out
 }
 
 // Handle nhận tin MQTT thô và phân cho mọi mục đọc topic đó.
 // Mục có field lấy một khoá của payload JSON; payload hỏng hoặc thiếu khoá thì giữ giá trị cũ.
-func (h *Hub) Handle(topic, payload string, now time.Time) {
+func (h *Hub) Handle(topic, payload string, now time.Time) { h.handle(topic, payload, now, false) }
+
+// handle: retained = tin broker giữ lại và gửi lại khi hubd (nối lại), không phải thiết bị vừa gửi (nodes.go).
+func (h *Hub) handle(topic, payload string, now time.Time, retained bool) {
+	h.nodeMsg(topic, payload, now, retained)
 	var obj map[string]any
 	parsed := false
 	for _, r := range h.routes[topic] {

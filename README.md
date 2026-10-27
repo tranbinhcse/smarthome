@@ -45,6 +45,8 @@ CB/ổ đo điện không tự báo W/V/A và `status()` trả số cũ, nên br
 ## Node ESP32 (cảm biến + hồng ngoại)
 
 Firmware ESPHome trong `firmware/`, cách nạp, tài khoản MQTT riêng từng node, học mã hồng ngoại: [firmware/README.md](firmware/README.md).
+Trang Cài đặt → Node ESP32: danh sách node, tạo/khoá/xoá tài khoản MQTT của node (cần bật một lần: `scripts/init-secrets.sh`
+rồi `docker compose up -d mosquitto hubd`, xem mục Tài khoản MQTT của node), chọn hãng máy lạnh, gán mã hồng ngoại vừa học.
 `POST /api/cmd` nhận thêm mã nút hồng ngoại (`{"device":"cafe_ml","to":"temp_24"}`) cho thiết bị `kind` `tv`/`speaker`/`fan`/`ac`; hub giữ trạng thái giả định vì hồng ngoại một chiều.
 Giả lập node chưa lắp (trỏ vào broker thử, không phải trung tâm thật): `PUB="mosquitto_pub -h <broker> -u <user> -P <mật khẩu>" scripts/sim-nodes.sh`.
 

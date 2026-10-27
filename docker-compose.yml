@@ -5,10 +5,16 @@ services:
     restart: unless-stopped
     ports:
       - "1883:1883"
+    # .env có HUBD_MQTT_ADMIN_PASS thì bật thêm plugin quản lý tài khoản node ESP32; trống = chạy như cũ (start.sh).
+    command: sh /start.sh
+    environment:
+      MQTT_ADMIN_USER: ${HUBD_MQTT_ADMIN_USER:-hubd-admin}
+      MQTT_ADMIN_PASS: ${HUBD_MQTT_ADMIN_PASS:-}
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/passwd:/mosquitto/config/passwd:ro
-      - mosquitto-data:/mosquitto/data
+      - ./mosquitto/start.sh:/start.sh:ro
+      - mosquitto-data:/mosquitto/data   # có cả dynamic-security.json (tài khoản node): đừng xoá volume này
 
   hubd:
     build: .
@@ -22,6 +28,9 @@ services:
       HUBD_PIN: ${HUBD_PIN}
       HUBD_MQTT_USER: ${HUBD_MQTT_USER}
       HUBD_MQTT_PASS: ${HUBD_MQTT_PASS}
+      # Tài khoản quản trị plugin của Mosquitto: tạo/khoá tài khoản node ESP32 từ dashboard (nodes.go); trống = tắt.
+      HUBD_MQTT_ADMIN_USER: ${HUBD_MQTT_ADMIN_USER:-hubd-admin}
+      HUBD_MQTT_ADMIN_PASS: ${HUBD_MQTT_ADMIN_PASS:-}
       NVR_HOST: ${NVR_HOST:-}   # camera: cách cũ, trang Cài đặt → Camera có IP đầu ghi thì thắng (camera.go)
       NVR_USER: ${NVR_USER:-}
       NVR_PASS: ${NVR_PASS:-}
