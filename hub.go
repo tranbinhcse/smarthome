@@ -173,7 +173,7 @@ func (h *Hub) run(acts []Action) {
 			}
 			continue
 		}
-		if a.Notify != "" {
+		if a.Notify != "" && !h.muted(a.Kind) { // loại thông báo bị tắt trong Cài đặt: không đọc (notify.go)
 			h.alert(a.Level, a.Notify)
 		}
 		if a.Set == "" {

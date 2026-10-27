@@ -1,6 +1,7 @@
 // Trợ lý giọng nói (voiced, thiết kế mục 15.2). Cần dash.js (DEMO, toast) và app.js (api).
 // Nút nói: chạm để nghe, chạm lần nữa (hoặc sau 8 giây) để gửi WAV lên /voice/ask; đọc câu trả lời.
-// Cảnh báo từ /voice/events được đọc thành tiếng. Safari chỉ cho dùng micro trên HTTPS (cổng 8443).
+// Nút loa: đọc tóm tắt tình hình (/voice/brief). Cảnh báo từ /voice/events được đọc thành tiếng.
+// Đọc (phát âm thanh) chạy cả trên HTTP; chỉ micro cần HTTPS (cổng 8443, bật trong Cài đặt → HTTPS).
 (async () => {
   if (DEMO) return;
   if (!(await fetch('/voice/enabled').then(r => r.ok, () => false))) return;   // trợ lý chưa bật: không hiện nút, không nghe
@@ -9,16 +10,32 @@
   btn.setAttribute('aria-label', 'Nói với trợ lý');
   btn.innerHTML = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
   document.getElementById('bell').before(btn);
+  const say = document.createElement('button');
+  Object.assign(say, {className: 'rbtn', id: 'brief', type: 'button', title: 'Đọc tình hình'});
+  say.setAttribute('aria-label', 'Đọc tóm tắt tình hình: thời tiết, không khí, điện, cảnh báo');
+  say.innerHTML = icon('vol');
+  btn.before(say);
 
   // iOS chỉ cho phát tiếng sau một lần chạm: mở khoá loa ở lần chạm đầu để cảnh báo tự đọc được về sau.
   const player = new Audio();
   const play = url => { if (url) { player.src = url; player.play().catch(() => {}); } };
   addEventListener('pointerup', () => play('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='), {once: true});
 
+  say.onclick = async () => {
+    say.disabled = true; toast('Đang tóm tắt…');
+    try {
+      const r = await api('/voice/brief', {method: 'POST'});
+      if (!r.ok) throw r.status;
+      const j = await r.json();
+      toast(j.reply); play(j.audio);
+    } catch { toast('Trợ lý chưa sẵn sàng'); }
+    say.disabled = false;
+  };
+
   let rec = null;
   btn.onclick = async () => {
     if (rec) return rec.stop();
-    if (!navigator.mediaDevices) return toast(`Micro cần trang HTTPS: https://${location.hostname}:8443`);
+    if (!navigator.mediaDevices) return toast(`Micro cần trang HTTPS: bật trong Cài đặt → HTTPS rồi mở https://${location.hostname}:8443`);
     const ctx = new AudioContext();   // tạo ngay trong cú chạm, iOS mới cho chạy
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }

@@ -434,7 +434,7 @@ Kết luận: chuyển tiếp không chuyển mã gần như không tốn CPU (1
 ```
 Mic ─► nút nói (iPad) / wake word (loa vệ tinh, sau) ─► chuyển giọng nói thành chữ (cục bộ) ─► hiểu ý
                                                           ├─ lệnh cố định ─► khớp cục bộ ─► API hubd
-                                                          └─ câu tự do ───► Claude (tool use) ─► API hubd
+                                                          └─ câu tự do ───► AI tương thích OpenAI (tool calling) ─► API hubd
 Loa ◄─ đọc câu trả lời / cảnh báo bằng TTS tiếng Việt ◄──────────────────────┘
 ```
 
@@ -442,14 +442,14 @@ Loa ◄─ đọc câu trả lời / cảnh báo bằng TTS tiếng Việt ◄�
 |---|---|---|
 | Đọc cảnh báo | Câu cảnh báo cố định (`notify` trong `rules:` của `config.yaml`) được `voiced` tạo sẵn âm thanh lúc khởi động bằng VieNeu-TTS (giọng Hải Đăng) | Đọc được cả khi mất internet |
 | Lệnh cố định | Khớp cục bộ theo tên thiết bị/kịch bản trong `config.yaml`: "bật quạt phòng khách", "ra khỏi nhà", "pin còn bao nhiêu" | Chạy được khi mất internet |
-| Câu tự do | Claude API, model `claude-opus-5-5`, effort thấp để trả lời nhanh. Các tool: `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`, đều gọi API của `hubd` | Cần internet. Câu hỏi dạng chữ và trạng thái thiết bị được gửi lên Anthropic |
+| Câu tự do | API chat completions **tương thích OpenAI** (chủ nhà chọn ngày 2026-10-27, thay Claude API): URL, khoá, model nhập ở trang Cài đặt, lưu trong `hubd` nhóm `ai`. Các tool: `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`, đều gọi API của `hubd` | Cần internet (hoặc máy AI trong LAN). Câu hỏi dạng chữ và trạng thái thiết bị được gửi tới địa chỉ đã nhập |
 | Câu trả lời động | TTS lúc chạy bằng VieNeu-TTS cục bộ (bản int8), cache theo câu. Không cần TTS cloud | Đã đo trên máy Ubuntu: 0,4 s cho câu ngắn, 1,2–1,4 s cho câu ~3,7 s (mục 15.2.1) |
 | Thiết bị nghe/nói | Phòng khách: iPad (có mic + loa, nhưng Safari hạn chế nghe nền) hoặc loa vệ tinh ESP32-S3. Các phòng khác: loa vệ tinh ESP32-S3 có mic (tuỳ chọn) | Chờ chủ nhà quyết |
 
 **Còn chờ chủ nhà quyết:**
 1. Nghe/nói ở đâu: chỉ phòng khách (iPad hoặc 1 loa vệ tinh), hay mỗi phòng một loa vệ tinh? Trong lúc chờ, bản đầu dùng iPad: nút nói trên dashboard, cảnh báo đọc trên iPad đang mở dashboard.
 2. Chuyển giọng nói thành chữ chạy cục bộ hay gửi âm thanh lên cloud? Đề xuất **cục bộ** và bản đầu đã làm cục bộ: trung tâm giờ là máy Ubuntu Ryzen 7 5700G (không còn m3), đo được ~27 ms mỗi câu (mục 15.2.1), âm thanh không rời khỏi nhà. Cloud chỉ còn là dự phòng nếu dùng thật thấy nhận sai nhiều.
-3. Cách có HTTPS cho iPad (Safari chỉ cho dùng micro trên trang HTTPS): CA tự ký cài lên iPad (đã có `scripts/tls-selfsigned.sh`), hay chứng chỉ thật cho một tên miền trỏ về IP nội bộ.
+3. ~~Cách có HTTPS cho iPad~~ Đã làm (15.2.2): `hubd` tự tạo CA riêng của nhà từ trang Cài đặt, iPad cài CA một lần; chứng chỉ tên miền thật vẫn dùng được qua `HUBD_TLS_CERT`.
 
 #### 15.2.1 Bản đầu đã làm và số đo (2026-10-27)
 
@@ -475,7 +475,21 @@ Cả vòng qua `hubd` (nhận WAV → STT → khớp lệnh → gửi lệnh →
 
 **Dự phòng:** STT cục bộ nhận sai nhiều với giọng thật thì (1) thêm tên gọi khác cho thiết bị trong `config.yaml`, (2) thử bản Zipformer 2025-04-20 hoặc mô hình lớn hơn của sherpa-onnx, (3) cuối cùng mới gửi âm thanh lên STT cloud (âm thanh rời khỏi nhà, cần chủ nhà đồng ý). TTS cục bộ đủ nhanh, không cần dự phòng cloud; lỗi TTS thì vẫn trả câu trả lời dạng chữ.
 
-**Chưa làm:** loa vệ tinh ESP32-S3 + wake word (chờ quyết định 1); `voiced` đã nhận WAV qua `POST /voice/ask` nên loa vệ tinh chỉ cần gửi WAV sau wake word và phát file trả về. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận. Gọi Claude thật chưa chạy (chờ khoá API).
+**Chưa làm:** loa vệ tinh ESP32-S3 + wake word (chờ quyết định 1); `voiced` đã nhận WAV qua `POST /voice/ask` nên loa vệ tinh chỉ cần gửi WAV sau wake word và phát file trả về. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận.
+
+#### 15.2.2 Bản 2: AI tương thích OpenAI, HTTPS dùng chung, đọc thông báo (2026-10-27)
+
+**Chủ nhà yêu cầu:** (1) AI dùng API tương thích OpenAI, cài trên trang Cài đặt; (2) bật HTTPS dễ từ trang Cài đặt, dùng chung với Spotify; (3) đọc nhanh tình hình và tự đọc cảnh báo môi trường, thời tiết.
+
+| Phần | Cách làm |
+|---|---|
+| AI | `voiced` gọi `{url}/chat/completions` kèm tool (thư viện chuẩn, bỏ Anthropic SDK). Cấu hình đọc qua `GET /api/assistant/settings/ai` bằng token trợ lý, đọc lại khi MQTT `hubd/settings/ai` = `changed` hoặc khi nối lại broker. Nút **Thử kết nối**: trình duyệt → `hubd` `/voice/ai/check` (PIN) → `voiced` lấy `{url}/models` và hỏi thử một câu kèm tool. Khoá gắn với URL: đổi URL mà không nhập lại khoá thì `hubd` xoá khoá cũ. Nút Thử chỉ gọi được `/models` và `/chat/completions` (URL không có `?`/`#`, không theo chuyển hướng), để không thành đường gọi dịch vụ nội bộ (go2rtc, hubd) |
+| HTTPS | `hubd` luôn mở cổng 8443 với cùng mux. Bấm **Bật HTTPS**: tạo CA riêng (ECDSA P-256, 10 năm, giới hạn tên: IP nội bộ + `home.arpa`) và chứng chỉ 825 ngày cho IP đang mở dashboard; đổi chứng chỉ không cần khởi động lại. `GET /api/tls/ca.crt` (không cần PIN, DER) để iPad cài thành hồ sơ. `HUBD_TLS_CERT/KEY` vẫn ưu tiên. Spotify dùng `https://<IP hub>:8443/api/spotify/callback` |
+| Đọc tình hình | Nút loa trên dashboard và câu "tình hình thế nào": `voiced` tự tính từ trạng thái (ngoài trời, CO₂/bụi mịn cao nhất trong nhà, pin/điện mặt trời/lưới, cảnh báo đang mở), không cần AI hay internet |
+| Tự đọc cảnh báo | 9 luật `notify` mặc định trong `config.yaml`: CO₂ > 1200 ppm (3 phòng), PM2.5 > 50 µg/m³ (3 phòng), trời bắt đầu mưa, ngoài trời > 38 °C, khu cafe > 32 °C. Mỗi notify có `kind`; tắt từng loại ở Cài đặt → Đọc thông báo (nhóm `notify`), loại bị tắt không lên `hubd/alert`, lệnh tới thiết bị của luật vẫn chạy |
+| Phát âm thanh | Không cần HTTPS: đọc trả lời, tóm tắt, cảnh báo chạy trên HTTP; chỉ micro cần HTTPS |
+
+**Chưa kiểm:** cài và tin cậy CA trên iPad thật (iOS hỗ trợ giới hạn tên của CA, nhưng chưa thử trên máy của nhà); gọi AI thật (chờ chủ nhà nhập URL/khoá; đã thử với endpoint giả tương thích OpenAI).
 
 ## 16. Chất lượng nước uống (máy lọc RO)
 

@@ -60,3 +60,26 @@ func TestSettingsNamespaceAndPersistence(t *testing.T) {
 		t.Fatal("cấu hình không còn sau khi khởi động lại")
 	}
 }
+
+// Bí mật gắn với url lưu cùng nó: người có PIN đổi url sang máy chủ khác mà không nhập lại khoá thì khoá cũ bị xoá,
+// không để voiced gửi khoá của chủ nhà tới địa chỉ lạ. Giữ url (hoặc nhập khoá mới cùng url mới) thì giữ/đổi bình thường.
+func TestSettingsSecretBoundToURL(t *testing.T) {
+	mux, h, _ := assistantMux(t, Config{})
+	ck := call(mux, "POST", "/api/login", `{"pin":"1234"}`, "").Result().Cookies()
+	put := func(body string) map[string]any {
+		if w := call(mux, "PUT", "/api/settings/ai", body, "", ck...); w.Code != 204 {
+			t.Fatalf("lưu %s: %d", body, w.Code)
+		}
+		return h.db.Setting("ai")
+	}
+	put(`{"url":"https://api.openai.com/v1","api_key":"sk-chu-nha","model":"m"}`)
+	if s := put(`{"url":"https://api.openai.com/v1","api_key":"","model":"m2"}`); s["api_key"] != "sk-chu-nha" {
+		t.Fatalf("cùng url mà mất khoá: %v", s)
+	}
+	if s := put(`{"url":"https://may-la.example/v1","api_key":""}`); s["api_key"] != nil || s["model"] != "m2" {
+		t.Fatalf("đổi url mà khoá cũ vẫn còn: %v", s)
+	}
+	if s := put(`{"url":"http://192.168.1.20:11434/v1","api_key":"sk-moi"}`); s["api_key"] != "sk-moi" {
+		t.Fatalf("đổi url kèm khoá mới: %v", s)
+	}
+}

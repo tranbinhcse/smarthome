@@ -92,12 +92,7 @@ func main() {
 	auth := NewAuth(pin, db)
 	auth.assistant = os.Getenv("HUBD_ASSISTANT_TOKEN")
 	mux := newMux(hub, auth)
-	if cert := os.Getenv("HUBD_TLS_CERT"); cert != "" {
-		// Safari chỉ cho dùng micro (nút nói của trợ lý) trên trang HTTPS.
-		go func() {
-			log.Printf("HTTPS :8443 dừng: %v", http.ListenAndServeTLS(":8443", cert, os.Getenv("HUBD_TLS_KEY"), mux))
-		}()
-	}
+	go serveTLS(mux, db) // HTTPS :8443 cho micro và OAuth (tls.go); chưa bật trong Cài đặt thì bắt tay TLS báo lỗi
 	log.Printf("hubd nghe tại %s", cfg.HTTP.Listen)
 	log.Fatal(http.ListenAndServe(cfg.HTTP.Listen, mux))
 }
@@ -175,6 +170,8 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mountTuyaSetup(mux, hub, auth)
 	mountSpotify(mux, hub, auth)
 	mountNodes(mux, hub, auth)
+	mountNotify(mux, hub, auth)
+	mountTLS(mux, hub.db, auth)
 	return mux
 }
 

@@ -220,6 +220,18 @@ rules:
   - { id: pin_qua_nhiet,   entity: jk.temp,       above: 45,   clear_below: 40,   for: 1m,  alert: "Pin hoặc BMS nóng trên 45°C" }
   - { id: pin_bms_loi,     entity: jk.alarms,     above: 0,                       for: 30s, alert: "BMS pin đang báo lỗi" }
   - { id: pin_mat_ket_noi, entity: jk.online,     below: 3,                       for: 2m,  alert: "Mất kết nối với pack pin" }
+  # Môi trường, thời tiết: trợ lý đọc thành tiếng (notify → hubd/alert). kind = loại thông báo, bật/tắt từng loại trong
+  # Cài đặt → Đọc thông báo. Ngưỡng khởi điểm, chỉnh sau khi chạy thật: CO2 theo dashboard (đỏ từ 1200 ppm), bụi mịn
+  # theo QCVN 05:2023 (PM2.5 trung bình 24 giờ 50 µg/m³), mưa từ tấm cảm biến giếng trời (firmware đã lọc 30 s).
+  - { id: co2_cafe,    entity: cafe.co2, above: 1200, clear_below: 1000, for: 5m,  then: [ { notify: "CO2 ở khu cafe đang cao, nên mở cửa cho thoáng.", level: warn, kind: co2 } ] }
+  - { id: co2_lamviec, entity: lv.co2,   above: 1200, clear_below: 1000, for: 5m,  then: [ { notify: "CO2 ở phòng làm việc đang cao, nên mở cửa cho thoáng.", level: warn, kind: co2 } ] }
+  - { id: co2_ngu1,    entity: n1.co2,   above: 1200, clear_below: 1000, for: 5m,  then: [ { notify: "CO2 ở phòng ngủ 1 đang cao, nên mở cửa cho thoáng.", level: warn, kind: co2 } ] }
+  - { id: bui_cafe,    entity: cafe.pm,  above: 50,   clear_below: 35,   for: 10m, then: [ { notify: "Bụi mịn ở khu cafe vượt ngưỡng, nên đóng cửa hoặc bật máy lọc không khí.", level: warn, kind: bui } ] }
+  - { id: bui_lamviec, entity: lv.pm,    above: 50,   clear_below: 35,   for: 10m, then: [ { notify: "Bụi mịn ở phòng làm việc vượt ngưỡng, nên đóng cửa hoặc bật máy lọc không khí.", level: warn, kind: bui } ] }
+  - { id: bui_ngu1,    entity: n1.pm,    above: 50,   clear_below: 35,   for: 10m, then: [ { notify: "Bụi mịn ở phòng ngủ 1 vượt ngưỡng, nên đóng cửa hoặc bật máy lọc không khí.", level: warn, kind: bui } ] }
+  - { id: mua,         entity: gt.mua,   above: 0.5,  clear_below: 0.5,           then: [ { notify: "Trời bắt đầu mưa, nhớ cất đồ phơi ngoài sân.", level: info, kind: mua } ] }
+  - { id: nong_ngoai,  entity: gt.t,     above: 38,   clear_below: 36,   for: 15m, then: [ { notify: "Ngoài trời nóng bất thường, trên 38 độ.", level: info, kind: nong } ] }
+  - { id: nong_cafe,   entity: cafe.t,   above: 32,   clear_below: 30,   for: 15m, then: [ { notify: "Khu cafe đang nóng trên 32 độ, nên bật điều hoà.", level: info, kind: nong } ] }
 #   - id: nguoi_san_truoc          # camera sân trước thấy người -> bật đèn sân
 #     entity: cam_santruoc.human
 #     above: 0.5

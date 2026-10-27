@@ -38,7 +38,8 @@ services:
       # Trợ lý giọng nói (mục 15.2): token riêng, quyền bằng người chưa nhập PIN; trống = tắt.
       HUBD_ASSISTANT_TOKEN: ${HUBD_ASSISTANT_TOKEN:-}
       HUBD_VOICED_URL: http://voiced:8090
-      # HTTPS cổng 8443 cho nút nói trên iPad (scripts/tls-selfsigned.sh); trống = chỉ HTTP.
+      # HTTPS cổng 8443 (micro, Spotify): trống = hub tự cấp chứng chỉ khi bấm Bật HTTPS trong Cài đặt (tls.go);
+      # điền để dùng chứng chỉ riêng (scripts/tls-selfsigned.sh, tên miền thật).
       HUBD_TLS_CERT: ${HUBD_TLS_CERT:-}
       HUBD_TLS_KEY: ${HUBD_TLS_KEY:-}
     volumes:
@@ -97,7 +98,8 @@ services:
       MQTT_USER: ${HIK_MQTT_USER:-hik}
       MQTT_PASS: ${HIK_MQTT_PASS:-}
 
-  # Trợ lý giọng nói: STT/TTS cục bộ, Claude cho câu tự do. Không mở cổng: dashboard đi qua hubd /voice/*.
+  # Trợ lý giọng nói: STT/TTS cục bộ; câu tự do qua AI tương thích OpenAI (URL/khoá/model nhập ở trang Cài đặt,
+  # đọc từ hubd bằng token trợ lý). Không mở cổng: dashboard đi qua hubd /voice/*.
   # Tắt service này thì lõi (luật, cảnh báo, điều khiển) vẫn chạy đủ.
   voiced:
     build: ./voiced
@@ -111,7 +113,6 @@ services:
       MQTT_HOST: mosquitto
       MQTT_USER: ${VOICED_MQTT_USER:-}
       MQTT_PASS: ${VOICED_MQTT_PASS:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - voiced-cache:/cache   # âm thanh đã đọc (cache theo câu)
 

@@ -91,14 +91,15 @@ Tải đo được (đầu ghi giả, luồng H.264 704×576 ~510 kbit/s): 10 k�
 
 Khai báo trong `config.yaml` mục `rules:` (xem ví dụ trong file): `above`/`below`, `clear_below`/`clear_above` (chống dao động), `for` (giữ liên tục). Thiết bị `protected: true` không bao giờ bị luật tắt.
 Luật có `alert: "lời cảnh báo"` (không cần `then`) hiện ở chuông dashboard khi bật, tự nhả khi qua ngưỡng `clear_*`; đang dùng cho pin JK (`pin_*`, xem `firmware/jk-bms/README.md`).
+Hành động `{ notify: "câu", level: info|warn|urgent, kind: co2 }` gửi câu lên MQTT `hubd/alert` để trợ lý đọc thành tiếng. Có sẵn luật đọc CO₂ cao (`kind: co2`), bụi mịn (`bui`), trời bắt đầu mưa (`mua`), nóng bất thường (`nong`); bật/tắt từng `kind` ở Cài đặt → Đọc thông báo (loại bị tắt không đọc, lệnh tới thiết bị của luật vẫn chạy). `notify` không có `kind` luôn đọc.
 
 ## Trợ lý giọng nói (`voiced`)
 
 Thiết kế: mục 15.2 của `docs/2026-10-26-trung-tam-dieu-khien-nha-design.md`. Container thứ 4, tắt đi thì lõi vẫn chạy đủ.
 
 - **Nói:** nút micro trên thanh trên của dashboard. Chạm để nghe, chạm lần nữa (hoặc sau 8 giây) để gửi. Âm thanh đi qua hubd `/voice/*` (cần đăng nhập PIN) tới `voiced`, không mở cổng nào khác.
-- **Hiểu:** chuyển giọng nói thành chữ ngay trên máy Ubuntu (sherpa-onnx, Zipformer tiếng Việt). Lệnh cố định khớp theo tên trong `config.yaml`, chạy cả khi mất internet: "bật đèn kho", "tắt đèn phòng lạnh", "ra khỏi nhà" (tên kịch bản), "pin còn bao nhiêu", "đèn kho đang bật không", "tắt báo động". Câu khác gửi Claude (`claude-opus-5-5`, effort thấp) kèm tool `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`.
-- **Đọc:** VieNeu-TTS giọng Hải Đăng, chạy cục bộ. Cảnh báo `notify` của luật được publish lên MQTT `hubd/alert`; `voiced` đọc lên iPad đang mở dashboard. Câu cảnh báo cố định được tạo sẵn âm thanh lúc khởi động.
+- **Hiểu:** chuyển giọng nói thành chữ ngay trên máy Ubuntu (sherpa-onnx, Zipformer tiếng Việt). Lệnh cố định khớp theo tên trong `config.yaml`, chạy cả khi mất internet: "bật đèn kho", "tắt đèn phòng lạnh", "ra khỏi nhà" (tên kịch bản), "pin còn bao nhiêu", "đèn kho đang bật không", "tắt báo động", "tình hình thế nào". Câu khác gửi AI qua API chat completions **tương thích OpenAI** (OpenAI, OpenRouter, Groq, Gemini, Ollama/LM Studio trong LAN...) kèm tool `get_state`, `query_history`, `set_device`, `run_scene`, `ack_alarm`. Chưa cài AI thì chỉ chạy lệnh cố định.
+- **Đọc:** VieNeu-TTS giọng Hải Đăng, chạy cục bộ. Nút loa trên thanh trên đọc tóm tắt tình hình: thời tiết (cảm biến ngoài trời), không khí trong nhà (CO₂, bụi mịn cao nhất ở đâu), pin/điện mặt trời/lưới, cảnh báo đang mở; tính ngay trong nhà, không cần AI. Cảnh báo `notify` của luật được publish lên MQTT `hubd/alert`; `voiced` đọc lên mọi màn hình đang mở dashboard. Câu cảnh báo cố định được tạo sẵn âm thanh lúc khởi động. **Đọc chạy cả trên HTTP**; chỉ micro cần HTTPS.
 - **Quyền:** `voiced` gọi hubd bằng `HUBD_ASSISTANT_TOKEN`, chỉ qua `/api/assistant/*`, quyền như người chưa nhập PIN. hubd từ chối (403) lệnh tới thiết bị `pin: true`/`protected: true` và kịch bản `pin: true` hoặc có bước đụng các thiết bị đó. PIN của iPad không truyền sang trợ lý.
 
 Bật lần đầu (máy đã có `.env`):
@@ -106,12 +107,15 @@ Bật lần đầu (máy đã có `.env`):
 ```bash
 scripts/init-secrets.sh            # thêm HUBD_ASSISTANT_TOKEN + tài khoản MQTT voiced, không đổi khoá cũ
 docker compose restart mosquitto   # nạp tài khoản MQTT mới
-scripts/tls-selfsigned.sh          # Safari chỉ cho dùng micro trên HTTPS; tạo tls/ + tls-ca/ (không commit)
 ```
 
-Thêm vào `.env`: `HUBD_TLS_CERT=/tls/hub.crt`, `HUBD_TLS_KEY=/tls/hub.key`, và `ANTHROPIC_API_KEY=...` nếu muốn hỏi câu tự do (trống = chỉ lệnh cố định). Mở `ufw` cho LAN vào cổng `8443`. Bật dịch vụ bằng profile `voice`: thêm `voice` vào `COMPOSE_PROFILES` trong `.env` (vd. `COMPOSE_PROFILES=voice` hoặc `camera,voice`). Sau đó `docker compose up -d --build`. Build `voiced` lần đầu tải mô hình (~250 MB) vào image, sau đó chạy không cần internet.
+Bật dịch vụ bằng profile `voice`: thêm `voice` vào `COMPOSE_PROFILES` trong `.env` (vd. `COMPOSE_PROFILES=voice` hoặc `camera,voice`), rồi `docker compose up -d --build`. Build `voiced` lần đầu tải mô hình (~250 MB) vào image, sau đó chạy không cần internet. Rồi trên dashboard:
 
-iPad: cài `tls-ca/ca.crt` (AirDrop → Cài đặt → Đã tải về hồ sơ; rồi Cài đặt chung → Giới thiệu → Cài đặt tin cậy chứng nhận → bật "iNIX Home CA"), mở `https://192.168.1.254:8443`, đăng nhập PIN. Chạm màn hình một lần sau khi mở để iOS cho phép tự đọc cảnh báo.
+1. **Cài đặt → Trợ lý AI:** nhập địa chỉ API (base URL, vd `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, `http://192.168.1.x:11434/v1` cho Ollama), API key (trống nếu máy AI trong nhà không cần), bấm **Thử kết nối** để lấy danh sách model (endpoint không trả danh sách thì gõ tên model), chọn model, **Lưu**. Khoá lưu trong hubd (nhóm `ai`), trình duyệt chỉ thấy "đã lưu"; nút Thử đi qua hubd → `voiced`, trình duyệt không gọi thẳng endpoint. Đổi địa chỉ thì phải nhập lại khoá (khoá cũ không gửi sang máy khác). `voiced` đọc lại cấu hình ngay khi lưu (MQTT `hubd/settings/ai`).
+2. **Cài đặt → HTTPS:** bấm **Bật HTTPS** rồi cài chứng chỉ lên iPad theo các bước hiện ngay trong mục đó (mục HTTPS bên dưới). Chạm màn hình một lần sau khi mở dashboard để iOS cho phép tự đọc cảnh báo.
+3. **Cài đặt → Đọc thông báo:** tắt loại không muốn nghe.
+
+Câu hỏi tự do và trạng thái thiết bị dạng chữ được gửi tới địa chỉ AI đã nhập; âm thanh không rời khỏi nhà.
 
 Kịch bản khai báo ở mục `scenes:` của `config.yaml`, câu cảnh báo ở `notify:` của luật (xem ví dụ trong file).
 
@@ -123,6 +127,24 @@ Kịch bản khai báo ở mục `scenes:` của `config.yaml`, câu cảnh báo
 | `POST /api/assistant/cmd` `{device, to}` | 204; 403 khi cần PIN |
 | `POST /api/assistant/scene/{id}` | 204; 403 khi cần PIN; 502 khi có bước không gửi được |
 | `POST /api/assistant/alarm/ack` | xác nhận cảnh báo, publish `hubd/alert/ack` |
+| `GET /api/assistant/settings/ai` | `{url, api_key, model}` đầy đủ cho `voiced` (token trợ lý chỉ đọc được nhóm `ai`) |
+
+| `voiced` qua hubd `/voice/*` (cần PIN) | |
+|---|---|
+| `POST /voice/ask` | WAV hoặc `{text}` → `{heard, reply, audio}` |
+| `POST /voice/brief` | tóm tắt tình hình → `{reply, audio}` |
+| `POST /voice/ai/check` `{url, api_key, model}` | ô trống = giá trị đã lưu → `{ok, models, message}`; chỉ gọi `{url}/models`, `{url}/chat/completions`, không theo chuyển hướng |
+| `GET /voice/events` | SSE cảnh báo `{type: alert, level, text, audio}` / `{type: ack}` |
+
+## HTTPS (dùng chung: micro của trợ lý, đăng nhập Spotify)
+
+hubd luôn phục vụ **cùng mọi trang và API** ở cổng 8443 (HTTPS) như cổng 8080, nên tính năng nào cần HTTPS chỉ việc dùng `https://<IP hub>:8443/<đường dẫn>`; không thêm cổng, không thêm chứng chỉ. Ví dụ redirect URI OAuth của Spotify: `https://192.168.1.254:8443/api/spotify/callback`. Cookie đăng nhập dùng chung giữa 8080 và 8443 (cookie không phân biệt cổng).
+
+- **Bật:** Cài đặt → HTTPS → **Bật HTTPS**, mở dashboard bằng IP (vd `http://192.168.1.254:8080`). hubd tạo CA riêng của nhà ("iNIX Home CA <ngày>") và chứng chỉ 825 ngày (giới hạn của iOS) cho IP đó; có hiệu lực ngay, không khởi động lại. **Cấp lại** khi đổi IP hoặc sắp hết hạn: giữ nguyên CA, iPad không phải cài lại.
+- **Cài lên iPad (một lần):** Safari (không mở từ biểu tượng màn hình chính) → `http://192.168.1.254:8080/api/tls/ca.crt` → Cho phép; Cài đặt → Đã tải về hồ sơ → Cài đặt (nhập mật mã) → Xong; Cài đặt chung → Giới thiệu → Cài đặt tin cậy chứng nhận → bật "iNIX Home CA ...". Mở `https://192.168.1.254:8443`, nhập PIN, Chia sẻ → Thêm vào MH chính. Mục HTTPS trên trang Cài đặt có đủ các bước và mã SHA-256 để so.
+- **An toàn:** khoá CA nằm trong SQLite của hubd (nhóm `sys:tls`, API cấu hình không đọc được). CA bị giới hạn tên (chỉ `10/8`, `172.16/12`, `192.168/16` và `*.home.arpa`) nên lộ khoá cũng không giả được trang web ngoài internet. `/api/tls/ca.crt` không cần PIN (chứng chỉ công khai).
+- **Chứng chỉ riêng:** đặt `HUBD_TLS_CERT`/`HUBD_TLS_KEY` trong `.env` (vd từ `scripts/tls-selfsigned.sh`, giữ khoá CA ngoài container, hoặc chứng chỉ tên miền thật) thì hubd dùng tệp đó, trang Cài đặt chỉ hiện trạng thái.
+- Cổng 8443 do Docker publish nên vào được từ LAN dù `ufw` chỉ mở 22. Không mở 8080/8443 ra internet.
 
 ## Nhạc (Spotify)
 
@@ -167,7 +189,7 @@ Thử MQTT: `mosquitto_pub -h 192.168.1.254 -u node -P <NODE_MQTT_PASS trong .en
 go test ./...                                   # rules, lịch sử, PIN, API, firmware, camera, hikbridge, trợ lý, Spotify (Spotify giả)
 cd tuya-bridge && python3 -m unittest discover  # bridge + gen_config với thiết bị giả
 python3 -m unittest discover -s scripts         # đăng nhập QR Tuya, giả lập node năng lượng
-cd voiced && python3 -m unittest                # trợ lý: khớp lệnh, chặn PIN, vòng tool use (Claude giả); cần pip install anthropic numpy
+cd voiced && python3 -m unittest                # trợ lý: khớp lệnh, chặn PIN, tool calling với endpoint OpenAI giả, tóm tắt; cần pip install numpy (Python ≥ 3.9)
 ```
 
 Inverter (Deye, LuxPower, Lumentree) đọc qua RS485 bằng node ESPHome: xem [firmware/inverter/README.md](firmware/inverter/README.md).

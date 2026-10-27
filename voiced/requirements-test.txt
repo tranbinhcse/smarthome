@@ -1,3 +1,2 @@
 # Thư viện tối thiểu để chạy test_voiced.py (không kéo mô hình STT/TTS nặng). scripts/test-on-hub.sh dùng file này.
-anthropic==2.3.0
 numpy
