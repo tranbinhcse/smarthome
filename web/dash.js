@@ -1206,16 +1206,19 @@ function toast(msg) {
 // Modal thay cho confirm()/alert() của trình duyệt. Trả về true khi chọn nút hành động.
 function ask({title, text, ok, danger = false, html = ''}) {
   return new Promise(res => {
-    const m = $('#modal');
+    // hỏi từ trong một bảng: thôi vẽ lại bảng (không thì tin SSE kế tiếp vẽ bảng đè lên hộp hỏi), hỏi xong mở lại bảng
+    const m = $('#modal'), back = sheet;
+    let nav = false;
+    sheet = '';
     m.innerHTML = `<div class="m-box"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ''}${html}
       <div class="m-act">${ok ? '<button value="0" class="m-btn">Huỷ</button>' : ''}<button value="1" class="m-btn ${danger ? 'danger' : 'ok'}">${esc(ok || 'Đóng')}</button></div></div>`;
     m.onclick = e => {
       const g = e.target.closest('[data-go]');
-      if (g) { m.close('0'); return; }   // điều hướng do trình xử lý chung làm
+      if (g) { nav = true; m.close('0'); return; }   // điều hướng do trình xử lý chung làm
       const b = e.target.closest('.m-act button');
       if (b) m.close(b.value); else if (e.target === m) m.close('0');
     };
-    m.onclose = () => res(m.returnValue === '1');
+    m.onclose = () => { res(m.returnValue === '1'); if (back && !nav) openSheet(back); };
     m.returnValue = '';
     m.showModal();
     m.querySelector('.m-btn').focus();   // mặc định vào nút đầu (Huỷ) để Enter không bấm nhầm
