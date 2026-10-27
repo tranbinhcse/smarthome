@@ -154,6 +154,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 		w.WriteHeader(204)
 	}))
 	mountAssistant(mux, hub, auth)
+	mountSettings(mux, hub, auth)
 	return mux
 }
 

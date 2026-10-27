@@ -8,7 +8,7 @@ import (
 	_ "modernc.org/sqlite" // thuần Go, không CGO
 )
 
-// DB: một file SQLite (WAL) dùng chung cho lịch sử và token đăng nhập.
+// DB: một file SQLite (WAL) dùng chung cho lịch sử, token đăng nhập và cấu hình nhập từ Cài đặt.
 type DB struct {
 	sql *sql.DB
 	mu  sync.Mutex
@@ -24,7 +24,8 @@ func OpenDB(path string) (*DB, error) {
 	_, err = d.Exec(`
 CREATE TABLE IF NOT EXISTS samples(ts INTEGER NOT NULL, id TEXT NOT NULL, v REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS samples_id_ts ON samples(id, ts);
-CREATE TABLE IF NOT EXISTS tokens(token TEXT PRIMARY KEY, created INTEGER NOT NULL);`)
+CREATE TABLE IF NOT EXISTS tokens(token TEXT PRIMARY KEY, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS settings(ns TEXT PRIMARY KEY, json TEXT NOT NULL);`)
 	if err != nil {
 		return nil, err
 	}

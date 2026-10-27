@@ -254,7 +254,8 @@ function draw() {
   if (view.page) $('#stage').innerHTML = stageHtml();
   const [side, bottom, scroll] = zonesHtml(), keep = {};
   for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w] = [e.scrollLeft, e.scrollTop];
-  $('#side').innerHTML = side;
+  // trang Cài đặt: đang gõ trong một ô thì không vẽ đè cột phải (mất con trỏ, bàn phím iPad đóng lại)
+  if (!(view.page === 'settings' && document.activeElement?.matches?.('#side input, #side select, #side textarea'))) $('#side').innerHTML = side;
   $('#bottom').innerHTML = bottom;
   for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) { const k = keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w]; if (k) [e.scrollLeft, e.scrollTop] = k; }
   $('#bottom').classList.toggle('scroll', !!scroll);
@@ -911,9 +912,46 @@ function settingsZones() {
   return [card('auto', 'amber', 'Ngày và đêm', skyMode === 'auto' ? `Tự động theo ${s.by}` : 'Chọn tay', `<div class="seg">${[['auto', 'Tự động'], ['day', 'Ban ngày'], ['night', 'Ban đêm']]
       .map(([v, l]) => `<button class="rb${skyMode === v ? ' sel' : ''}" data-skyset="${v}">${l}</button>`).join('')}</div>`) +
     card('grip', '', 'Bố cục widget', 'Lưu trên thiết bị này', `<div class="kv" style="gap:8px"><button class="pill" data-go="" data-editgo>Sắp xếp trang chủ</button><button class="pill" data-wreset>Về mặc định</button></div>`) +
-    card('spark', 'amber', 'Ngữ cảnh', `${(cfg.scenes || []).length} ngữ cảnh`, `<div class="list">${(cfg.scenes || []).map(sc => `<div class="setrow"><span>${icon(sc.icon || 'spark')}${esc(sc.name)}</span><small>${(sc.steps || []).length} bước</small></div>`).join('')}</div>`),
+    card('spark', 'amber', 'Ngữ cảnh', `${(cfg.scenes || []).length} ngữ cảnh`, `<div class="list">${(cfg.scenes || []).map(sc => `<div class="setrow"><span>${icon(sc.icon || 'spark')}${esc(sc.name)}</span><small>${(sc.steps || []).length} bước</small></div>`).join('')}</div>`) +
+    SETUP.map(m => { if (m.ns && !(m.ns in SAVED)) loadSetting(m.ns); return `<section class="w" data-setup="${esc(m.id)}"><header class="wh">${icon(m.icon || 'gear', 'wi ' + (m.c || ''))}<h3>${m.title}${m.meta ? `<small>${m.meta()}</small>` : ''}</h3></header>${m.body()}</section>`; }).join(''),
     ''];
 }
+
+/* ---------- Mục cài đặt của từng tích hợp ----------
+   Mỗi tích hợp có file web/setup-<tên>.js (nạp sau dash.js) tự đăng ký: SETUP.push({id, ns, icon, c, title, meta?(), body(), act?(action, el)}).
+   ns = nhóm cấu hình trong hubd (/api/settings/<ns>); bí mật chỉ trả "<khoá>_set". Ô nhập dùng data-sfield="<ns>.<khoá>";
+   chữ đang gõ giữ trong DRAFT nên màn hình vẽ lại không mất. Nút data-ssave="<ns>" lưu; data-sact="<id>:<việc>" gọi act(). */
+const SETUP = window.SETUP = window.SETUP || [], DRAFT = {}, SAVED = {};
+async function loadSetting(ns) {
+  SAVED[ns] = SAVED[ns] || {};   // đánh dấu đang nạp, khỏi gọi lặp
+  if (DEMO) return;
+  const r = await api(`/api/settings/${ns}`);
+  if (r.ok) { SAVED[ns] = await r.json(); soon(); }
+}
+async function saveSetting(ns) {
+  if (DEMO) return toast('Chế độ dữ liệu mẫu không lưu cấu hình');
+  const r = await api(`/api/settings/${ns}`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(DRAFT[ns] || {})});
+  if (!r.ok) return toast(`Chưa lưu được: ${await r.text()}`);
+  delete DRAFT[ns];
+  await loadSetting(ns);
+  toast('Đã lưu');
+}
+const sval = (ns, k) => DRAFT[ns]?.[k] ?? SAVED[ns]?.[k] ?? '';
+const sinput = (ns, k, label, {type = 'text', ph = '', secret = false} = {}) => `<label class="sf"><span>${label}</span><input data-sfield="${ns}.${k}"
+  type="${secret ? 'password' : type}" autocomplete="off" placeholder="${esc(secret && SAVED[ns]?.[k + '_set'] ? 'Đã lưu, để trống nếu giữ nguyên' : ph)}"
+  value="${esc(secret ? DRAFT[ns]?.[k] ?? '' : sval(ns, k))}"></label>`;
+const sselect = (ns, k, label, opts) => `<label class="sf"><span>${label}</span><select data-sfield="${ns}.${k}">${opts.map(([v, l]) =>
+  `<option value="${esc(v)}"${String(sval(ns, k)) === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+const ssave = (ns, label = 'Lưu') => `<button class="pill amber" data-ssave="${ns}">${label}</button>`;
+window.SETUP_UI = {api, esc, icon, toast, soon, sval, sinput, sselect, ssave, loadSetting, saveSetting, DRAFT, SAVED, DEMO};
+document.addEventListener('input', e => {
+  const f = e.target.closest?.('[data-sfield]');
+  if (!f) return;
+  const [ns, k] = f.dataset.sfield.split('.');
+  (DRAFT[ns] ||= {})[k] = f.type === 'checkbox' ? f.checked : f.type === 'number' ? Number(f.value) : f.value;
+});
+document.addEventListener('change', e => { if (e.target.matches?.('select[data-sfield]')) e.target.dispatchEvent(new Event('input', {bubbles: true})); });
+addEventListener('load', () => soon());   // mục cài đặt nạp sau dash.js
 
 /* ---------- Kéo bằng chuột để cuộn ngang (cảm ứng đã tự cuộn); kéo quá 5px thì bỏ cú click lúc thả ---------- */
 let hs = null, hsBlock = 0;
@@ -1175,6 +1213,11 @@ document.addEventListener('click', async e => {
     return draw();
   }
   if ((el = pick('[data-airtab]'))) { airTab = el.dataset.airtab; return draw(); }
+  if ((el = pick('[data-ssave]'))) return saveSetting(el.dataset.ssave);
+  if ((el = pick('[data-sact]'))) {
+    const v = el.dataset.sact, m = SETUP.find(x => x.id === v.slice(0, v.indexOf(':')));
+    return m?.act?.(v.slice(v.indexOf(':') + 1), el);
+  }
   if ((el = pick('[data-wzone]'))) { addZone = el.dataset.wzone; return draw(); }
   if ((el = pick('[data-wadd]'))) {
     const L = layout[pageType()], id = el.dataset.wadd;
