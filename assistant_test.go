@@ -249,3 +249,23 @@ func TestVoiceProxy(t *testing.T) {
 		t.Fatalf("code=%d body=%q path=%q cookie=%q", w.Code, w.Body.String(), gotPath, gotCookie)
 	}
 }
+
+// Trợ lý tắt (chưa có token) thì dashboard không hiện nút nói: hubd không chuyển tiếp /voice/* sang voiced
+// (dịch vụ đó có thể không chạy, mỗi lần gọi để lại một dòng lỗi) và /voice/enabled trả 404; bật thì 204.
+// /voice/enabled không cần PIN: chỉ cho biết bật hay tắt.
+func TestVoiceEnabledOnlyWithAssistantToken(t *testing.T) {
+	t.Setenv("HUBD_VOICED_URL", "http://voiced:8090")
+	h := NewHub(Config{}, newDB(t), func(string, string) {})
+	off := newMux(h, NewAuth("1234", h.db))
+	if w := call(off, "GET", "/voice/enabled", "", ""); w.Code != 404 {
+		t.Fatalf("trợ lý tắt: /voice/enabled code=%d, muốn 404", w.Code)
+	}
+	lw := call(off, "POST", "/api/login", `{"pin":"1234"}`, "")
+	if w := call(off, "GET", "/voice/events", "", "", lw.Result().Cookies()...); w.Code != 404 {
+		t.Fatalf("trợ lý tắt mà vẫn chuyển tiếp /voice/events: code=%d", w.Code)
+	}
+	on, _, _ := assistantMux(t, Config{})
+	if w := call(on, "GET", "/voice/enabled", "", ""); w.Code != 204 {
+		t.Fatalf("trợ lý bật: /voice/enabled code=%d, muốn 204", w.Code)
+	}
+}

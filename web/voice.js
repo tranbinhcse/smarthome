@@ -1,8 +1,9 @@
 // Trợ lý giọng nói (voiced, thiết kế mục 15.2). Cần dash.js (DEMO, toast) và app.js (api).
 // Nút nói: chạm để nghe, chạm lần nữa (hoặc sau 8 giây) để gửi WAV lên /voice/ask; đọc câu trả lời.
 // Cảnh báo từ /voice/events được đọc thành tiếng. Safari chỉ cho dùng micro trên HTTPS (cổng 8443).
-(() => {
+(async () => {
   if (DEMO) return;
+  if (!(await fetch('/voice/enabled').then(r => r.ok, () => false))) return;   // trợ lý chưa bật: không hiện nút, không nghe
   const btn = document.createElement('button');
   Object.assign(btn, {className: 'rbtn', id: 'mic', type: 'button', title: 'Nói với trợ lý'});
   btn.setAttribute('aria-label', 'Nói với trợ lý');

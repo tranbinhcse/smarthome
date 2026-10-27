@@ -177,7 +177,18 @@ func mountAssistant(mux *http.ServeMux, h *Hub, a *Auth) {
 
 	// Nút nói trên dashboard: /voice/* chuyển sang voiced (cùng origin, dùng PIN của dashboard).
 	// voiced không nhận cookie người dùng; nó tự gọi lại hubd bằng token trợ lý.
-	if u, err := url.Parse(os.Getenv("HUBD_VOICED_URL")); err == nil && u.Host != "" {
+	// Chỉ chuyển tiếp khi trợ lý bật (có token): tắt thì voiced có thể không chạy. /voice/enabled (không cần PIN)
+	// cho dashboard biết để ẩn nút nói.
+	u, err := url.Parse(os.Getenv("HUBD_VOICED_URL"))
+	on := err == nil && u.Host != "" && a.assistant != ""
+	mux.HandleFunc("GET /voice/enabled", func(w http.ResponseWriter, r *http.Request) {
+		if !on {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if on {
 		p := httputil.NewSingleHostReverseProxy(u)
 		dir := p.Director
 		p.Director = func(r *http.Request) { dir(r); r.Header.Del("Cookie") }
