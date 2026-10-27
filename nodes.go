@@ -47,7 +47,7 @@ var nodeNameRe = regexp.MustCompile(`^node-[a-z0-9]+(-[a-z0-9]+)*$`)
 func validNode(n string) bool { return len(n) <= 31 && nodeNameRe.MatchString(n) }
 
 func topicNode(topic string) string {
-	if n, _, _ := strings.Cut(topic, "/"); validNode(n) {
+	if n, _, ok := strings.Cut(topic, "/"); ok && validNode(n) {
 		return n
 	}
 	return ""
@@ -68,7 +68,8 @@ func topicMatch(filter, topic string) bool {
 }
 
 // nodeMsg: ghi lần gửi cuối của node; trạng thái kết nối và mã hồng ngoại vừa học lên giao diện (SSE), không vào lịch sử.
-func (h *Hub) nodeMsg(topic, payload string, now time.Time) {
+// Tin giữ lại (ESPHome retain số đo) là số cũ broker phát lại khi hubd nối lại: lấy giá trị, không tính là node vừa gửi.
+func (h *Hub) nodeMsg(topic, payload string, now time.Time, retained bool) {
 	name := topicNode(topic)
 	if name == "" {
 		return
@@ -81,7 +82,9 @@ func (h *Hub) nodeMsg(topic, payload string, now time.Time) {
 			n = &nodeSeen{}
 			h.nodes[name] = n
 		}
-		n.last = now
+		if !retained {
+			n.last = now
+		}
 		if rest == "sensor/wifi/state" {
 			n.wifi = payload
 		}
@@ -133,7 +136,9 @@ func (h *Hub) nodeList() map[string]any {
 	h.mu.RLock()
 	for n, s := range h.nodes {
 		v := get(n)
-		v.Last, v.Wifi = s.last.Unix(), s.wifi
+		if v.Wifi = s.wifi; !s.last.IsZero() {
+			v.Last = s.last.Unix()
+		}
 	}
 	for k, st := range h.val {
 		if n, ok := strings.CutPrefix(k, "node:"); ok {

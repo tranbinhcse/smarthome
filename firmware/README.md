@@ -47,19 +47,22 @@ Vì sao chọn plugin dynamic security của Mosquitto, và vì sao chuyển nh�
 bản đang chạy trên trung tâm):
 
 - Plugin có sẵn trong image `eclipse-mosquitto:2`. hubd gửi lệnh qua MQTT bằng tài khoản quản trị riêng `hubd-admin`
-  (chỉ có quyền quản lý tài khoản); tài khoản `hubd` thường không gửi được lệnh quản trị. Thêm, khoá, xoá có hiệu lực
+  (chỉ hubd giữ mật khẩu; ngoài quản lý tài khoản còn đọc/ghi topic thường như `hubd`); tài khoản `hubd` thường và
+  tài khoản node không gửi được lệnh quản trị. Thêm, khoá, xoá có hiệu lực
   ngay, khoá thì ngắt cả kết nối đang mở. Không cần cho hubd ghi `passwd` của container khác hay gửi HUP qua docker socket.
 - Tài khoản dịch vụ (`hubd`, `tuya`, `node`, `hik`, `voiced`) giữ nguyên trong `passwd`, mật khẩu không đổi. Có plugin mà
   không có `acl_file` thì mọi tài khoản `passwd` bị chặn subscribe/publish: `mosquitto/start.sh` thêm `acl_file` một dòng
   `pattern readwrite #` để giữ đúng quyền như trước.
-- Plugin xét trước `passwd`: tài khoản plugin trùng tên sẽ thay tài khoản `passwd`. hubd chỉ tạo tên `node-<khu>`.
+- Plugin xét trước `passwd`: tài khoản plugin trùng tên sẽ thay tài khoản `passwd`. hubd chỉ tạo tên `node-<khu>`;
+  node đã tạo bằng cách cũ (`node_mqtt_user.py`) mà tạo lại trên dashboard thì phải nạp firmware với mật khẩu mới
+  (dashboard hỏi lại khi node đó đang chạy).
 - `start.sh` tạo sẵn file cấu hình plugin chỉ có `hubd-admin`; để plugin tự sinh thì có thêm `democlient` toàn quyền.
 - `.env` chưa có `HUBD_MQTT_ADMIN_PASS`: Mosquitto chạy y như trước (chỉ `mosquitto.conf` + `passwd`). Quay lại: xoá
   dòng đó khỏi `.env` rồi `docker compose up -d mosquitto hubd`.
 - Tài khoản node nằm trong volume `mosquitto-data` (`dynamic-security.json`, chỉ có bản băm): đừng xoá volume. Sao lưu:
   `docker run --rm -v hubd_mosquitto-data:/d -v $PWD:/b alpine cp /d/dynamic-security.json /b/`.
-- Đổi `HUBD_MQTT_ADMIN_PASS` sau lần đầu: `start.sh` không ghi lại file, đổi trong plugin trước:
-  `docker exec hub-mosquitto mosquitto_ctrl -u hubd-admin -P <cũ> dynsec setClientPassword hubd-admin <mới>`.
+- Đổi mật khẩu quản trị: sửa `HUBD_MQTT_ADMIN_PASS` trong `.env` rồi `docker compose up -d mosquitto hubd`; mỗi lần
+  khởi động `start.sh` ghi mật khẩu trong `.env` vào plugin, tài khoản node giữ nguyên.
 
 **Chưa bật plugin** thì dùng cách cũ: sinh mật khẩu trên PC và đưa bản băm vào `passwd` (chỉ bản băm đi qua mạng),
 Mosquitto nạp lại khi nhận HUP. Đừng tạo cùng một node ở cả hai nơi.

@@ -64,7 +64,7 @@ func main() {
 		topics := hub.Topics()
 		for _, topic := range topics {
 			c.Subscribe(topic, 1, func(_ mqtt.Client, m mqtt.Message) {
-				hub.Handle(m.Topic(), string(m.Payload()), time.Now())
+				hub.handle(m.Topic(), string(m.Payload()), time.Now(), m.Retained())
 			})
 		}
 		log.Printf("MQTT đã kết nối, đăng ký %d topic", len(topics))

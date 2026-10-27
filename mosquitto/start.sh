@@ -12,9 +12,14 @@ set -eu
 conf=/mosquitto/config/mosquitto.conf
 if [ -n "${MQTT_ADMIN_PASS:-}" ]; then
   umask 077
-  f=/mosquitto/data/dynamic-security.json
+  f=/mosquitto/data/dynamic-security.json user=${MQTT_ADMIN_USER:-hubd-admin}
   if [ ! -f "$f" ]; then
-    mosquitto_ctrl dynsec init "$f" "${MQTT_ADMIN_USER:-hubd-admin}" "$MQTT_ADMIN_PASS" >/dev/null
+    # ponytail: role admin của "dynsec init" còn đọc được mọi topic và ghi được qua acl_file, ngang tài khoản hubd
+    # (chỉ hubd giữ mật khẩu). Cần hẹp hơn thì tự viết file cấu hình: mosquitto_ctrl -f chỉ đổi được mật khẩu.
+    mosquitto_ctrl dynsec init "$f" "$user" "$MQTT_ADMIN_PASS" >/dev/null
+  else
+    # .env là gốc: đổi HUBD_MQTT_ADMIN_PASS rồi docker compose up -d mosquitto hubd là đủ (sửa file lúc broker chưa chạy).
+    mosquitto_ctrl -f "$f" dynsec setClientPassword "$user" "$MQTT_ADMIN_PASS" >/dev/null || true
   fi
   echo 'pattern readwrite #' > /tmp/acl
   { cat "$conf"; printf '\nplugin /usr/lib/mosquitto_dynamic_security.so\nplugin_opt_config_file %s\nacl_file /tmp/acl\n' "$f"; } > /tmp/mosquitto.conf

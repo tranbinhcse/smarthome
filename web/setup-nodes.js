@@ -73,12 +73,12 @@
       ${open === n.name ? detail(n) : ''}`;
   }
   function detail(n) {
-    const a = n.account, ac = String(U.sval('nodes', 'ac:' + n.name));
+    const a = n.account, ac = String(U.sval('nodes', n.name + ':ac'));
     const acts = !data.manage || !a ? [] : a === 'none' ? [['create', 'Tạo tài khoản MQTT', 'amber']]
       : [['reset', 'Đổi mật khẩu'], a === 'active' ? ['disable', 'Khoá'] : ['enable', 'Mở khoá'], ['delete', 'Xoá tài khoản']];
     return `<div class="ndetail">${a ? `<p class="note">Tài khoản MQTT <b>${U.esc(n.name)}</b>: <em class="tag ${ACC[a][0]}">${ACC[a][1]}</em></p>` : ''}
       ${acts.length ? `<div class="kv">${acts.map(([x, l, c]) => `<button class="pill ${c || ''}" data-sact="nodes:${x}:${U.esc(n.name)}">${l}</button>`).join('')}</div>` : ''}
-      <h4 class="nh">Máy lạnh</h4>${U.sselect('nodes', 'ac:' + n.name, 'Hãng máy lạnh (climate_ir, chỉ node có mắt hồng ngoại)', AC)}
+      <h4 class="nh">Máy lạnh</h4>${U.sselect('nodes', n.name + ':ac', 'Hãng máy lạnh (climate_ir, chỉ node có mắt hồng ngoại)', AC)}
       <p class="note">${ac ? `Đổi hãng phải nạp lại firmware: <code>cd firmware &amp;&amp; esphome -s ac_platform ${U.esc(ac)} run ${U.esc(n.name)}.yaml</code>`
         : 'Hãng không có trong danh sách: bỏ gói ir.yaml khỏi máy lạnh và học mã như TV (firmware/README.md).'}</p>
       <div class="kv">${U.ssave('nodes', 'Lưu hãng máy lạnh')}</div>${irBox(n)}</div>`;
@@ -99,7 +99,10 @@
   }
 
   async function account(name, action) {
-    const w = WARN[action];
+    // Node đang gửi tin mà chưa có tài khoản trong plugin: đang dùng tài khoản khác (vd passwd cũ), plugin sẽ chiếm tên đó.
+    const live = action === 'create' && data.nodes.some(x => x.name === name && (x.last || isOn(x)));
+    const w = live ? ['Tạo', 'Node đang chạy bằng một tài khoản khác (vd tài khoản cũ trong mosquitto/passwd). Tài khoản mới thay nó: '
+      + 'node bị từ chối từ lần nối lại tới, cho tới khi nạp firmware có mật khẩu mới.'] : WARN[action];
     if (w && !(await ask({title: `${w[0]} tài khoản ${name}?`, text: w[1], ok: w[0], danger: action !== 'reset'}))) return;
     const r = await U.api(`/api/nodes/${encodeURIComponent(name)}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})});
     if (!r.ok) return U.toast(`Chưa được: ${await r.text()}`);

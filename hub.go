@@ -72,8 +72,11 @@ func (h *Hub) Topics() []string {
 
 // Handle nhận tin MQTT thô và phân cho mọi mục đọc topic đó.
 // Mục có field lấy một khoá của payload JSON; payload hỏng hoặc thiếu khoá thì giữ giá trị cũ.
-func (h *Hub) Handle(topic, payload string, now time.Time) {
-	h.nodeMsg(topic, payload, now)
+func (h *Hub) Handle(topic, payload string, now time.Time) { h.handle(topic, payload, now, false) }
+
+// handle: retained = tin broker giữ lại và gửi lại khi hubd (nối lại), không phải thiết bị vừa gửi (nodes.go).
+func (h *Hub) handle(topic, payload string, now time.Time, retained bool) {
+	h.nodeMsg(topic, payload, now, retained)
 	var obj map[string]any
 	parsed := false
 	for _, r := range h.routes[topic] {

@@ -288,6 +288,9 @@ func TestNodeListFromConfigAndTraffic(t *testing.T) {
 	h.Handle("node-cafe/status", "online", t0.Add(2*time.Minute)) // trạng thái không tính là lần gửi số đo
 	h.Handle("node-moi/status", "online", t0)
 	h.Handle("obk-quat/status", "online", t0) // không phải node ESPHome
+	h.Handle("node-x", "1", t0)               // topic không có "/" (config gõ sai): không được làm sập hubd
+	// ESPHome giữ lại (retain) số đo: hubd nối lại broker là nhận lại cả số cũ của node đã tắt, không phải node vừa gửi.
+	h.handle("node-ro/sensor/wifi/state", "-70", t0.Add(5*time.Minute), true)
 
 	_, body := req("GET", "/api/nodes", "")
 	cafe := nodeOf(t, body, "node-cafe")
@@ -295,8 +298,8 @@ func TestNodeListFromConfigAndTraffic(t *testing.T) {
 		cafe["last"] != float64(t0.Add(time.Minute).Unix()) || fmt.Sprint(cafe["ir"]) != "[tv_cafe]" {
 		t.Fatalf("node-cafe = %v", cafe)
 	}
-	if ro := nodeOf(t, body, "node-ro"); ro == nil || ro["online"] != false || ro["last"] != float64(0) || ro["zone"] != "cafe" {
-		t.Fatalf("node-ro (đã khai báo, chưa gửi gì) = %v", ro)
+	if ro := nodeOf(t, body, "node-ro"); ro == nil || ro["online"] != false || ro["last"] != float64(0) || ro["zone"] != "cafe" || ro["wifi"] != "-70" {
+		t.Fatalf("node-ro (đã khai báo, chỉ có tin giữ lại) = %v", ro)
 	}
 	if nodeOf(t, body, "node-moi") == nil || nodeOf(t, body, "obk-quat") != nil {
 		t.Fatalf("node mới chưa khai báo phải hiện, thiết bị khác thì không: %s", body)
@@ -401,6 +404,11 @@ func TestACPlatformsMatchFirmware(t *testing.T) {
 			}
 			fw[p] = true
 		}
+	}
+	// Khoá lưu hãng của từng node không được giống khoá bí mật (settings.go) với tên node nào: node-monkey, node-pass...
+	k := regexp.MustCompile(`U\.sselect\('nodes', n\.name \+ '(:[a-z_]+)'`).FindSubmatch(js)
+	if k == nil || secretKey.MatchString("node-monkey"+string(k[1])) || secretKey.MatchString("node-x-secret"+string(k[1])) {
+		t.Fatalf("khoá hãng máy lạnh phải dạng <node>:<hậu tố cố định không phải bí mật>, đọc được %q", k)
 	}
 	acList := regexp.MustCompile(`(?s)const AC = \[(.*?)\];`).FindSubmatch(js)
 	if len(fw) < 10 || acList == nil {
