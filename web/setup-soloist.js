@@ -19,8 +19,9 @@
       ${S?.state === 'running' && !S.logged_in ? `<p class="note">Ghép đôi một lần: điện thoại nối cùng Wi-Fi với hub, mở app Spotify, chạm biểu tượng thiết bị phát, chọn <b>${name}</b> rồi phát một bài. Hub nhớ phiên này cho các lần sau.</p>` : ''}
       ${S?.logged_in ? `<p class="note">Đã ghép đôi. Trong app Spotify chọn <b>${name}</b> để nghe qua các khu.</p>` : ''}
       <h4 class="mh">Khoá API Soloist</h4>
-      <p class="note">1. Mở developer.spotify.com, đăng nhập bằng tài khoản Spotify Premium của bạn.<br>
-        2. Vào Dashboard, mở mục Spotify Soloist API Key; đọc điều khoản và đồng ý nếu được hỏi.<br>
+      <p class="note">1. Mở <a href="https://developer.spotify.com/dashboard/soloist" target="_blank" rel="noopener">developer.spotify.com/dashboard/soloist</a>
+        (trang này không có trong menu Dashboard, phải mở thẳng địa chỉ), đăng nhập bằng tài khoản Spotify Premium của bạn.<br>
+        2. Đọc điều khoản của Spotify Soloist, đồng ý nếu được hỏi.<br>
         3. Bấm tạo khoá (Generate), chép khoá, dán vào ô dưới rồi bấm Lưu khoá.<br>
         Khoá gắn với tài khoản của bạn: không gửi cho người khác. Hub chỉ lưu khoá ở hub, không hiện lại.</p>
       ${U.sinput('soloist', 'api_key', 'Khoá API', {secret: true, ph: 'Dán khoá API Soloist'})}
