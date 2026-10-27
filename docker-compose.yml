@@ -28,7 +28,8 @@ services:
       # Trợ lý giọng nói (mục 15.2): token riêng, quyền bằng người chưa nhập PIN; trống = tắt.
       HUBD_ASSISTANT_TOKEN: ${HUBD_ASSISTANT_TOKEN:-}
       HUBD_VOICED_URL: http://voiced:8090
-      # HTTPS cổng 8443 cho nút nói trên iPad (scripts/tls-selfsigned.sh); trống = chỉ HTTP.
+      # HTTPS cổng 8443 (micro, Spotify): trống = hub tự cấp chứng chỉ khi bấm Bật HTTPS trong Cài đặt (tls.go);
+      # điền để dùng chứng chỉ riêng (scripts/tls-selfsigned.sh, tên miền thật).
       HUBD_TLS_CERT: ${HUBD_TLS_CERT:-}
       HUBD_TLS_KEY: ${HUBD_TLS_KEY:-}
     volumes:
