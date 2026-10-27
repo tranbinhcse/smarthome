@@ -18,6 +18,36 @@
   say.innerHTML = icon('vol');
   btn.before(say);
 
+  // Mỗi màn hình một hội thoại (voiced nhớ vài lượt cho AI, và lệnh có khoá đang chờ xác nhận của riêng màn hình này).
+  const rid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);   // crypto.randomUUID chỉ có trên HTTPS
+  const VSID = (() => { try { return sessionStorage.vsid ||= rid(); } catch (_) { return rid(); } })();
+  const VH = {'X-Voice-Session': VSID};
+  // Thiết bị / ngữ cảnh có khoá: voiced không tự làm. Màn hình hỏi xác nhận; người bấm nút hoặc nói "có" thì chính màn hình
+  // này gửi lệnh bằng phiên PIN của nó (j.execute), nói "không" / "thôi" thì bỏ.
+  let asking = false;
+  async function doIt(c) {
+    if (asking) { asking = false; $('#modal').close('0'); }   // đã nói "có": đóng hộp đang hỏi, không làm hai lần
+    if (c.scene) { const i = cfg.scenes.findIndex(s => s.id === c.scene); if (i >= 0) runScene(i); return; }
+    let bad = 0;
+    for (const id of c.ids || []) { const d = cfg.devices.find(x => x.id === id); if (!d || !(await setDev(d, c.to))) bad++; }
+    draw();
+    if (bad) toast(`Chưa gửi được lệnh ${c.label}`);
+  }
+  async function confirmIt(c) {
+    asking = true;
+    const ok = await ask({title: c.label[0].toUpperCase() + c.label.slice(1) + '?', ok: c.scene ? 'Chạy' : c.to === 'off' ? 'Tắt' : 'Bật',
+      danger: c.to === 'off', text: 'Được bảo vệ nên trợ lý cần bạn xác nhận. Có thể bấm hoặc nói "có" / "không".'});
+    if (!asking) return;   // đã xác nhận bằng giọng nói
+    asking = false;
+    if (ok) doIt(c);
+  }
+  const answered = j => {
+    toast(`“${j.heard}” — ${j.reply}`); play(j.audio);
+    if (j.confirm) confirmIt(j.confirm);
+    if (j.execute) doIt(j.execute);
+    else if (asking && !j.confirm) { asking = false; $('#modal').close('0'); }   // nói sang chuyện khác: voiced đã bỏ lệnh chờ
+  };
+
   // iOS chỉ cho phát tiếng sau một lần chạm: mở khoá loa ở lần chạm đầu để cảnh báo tự đọc được về sau.
   // voiced trả âm thanh theo từng câu (câu đầu có ngay, câu sau đang tổng hợp): phát lần lượt, theo tốc độ trong Cài đặt.
   const player = new Audio();
@@ -71,10 +101,9 @@
       ctx.close();
       btn.disabled = true; toast('Đang xử lý…');
       try {
-        const r = await api('/voice/ask', {method: 'POST', headers: {'Content-Type': 'audio/wav'}, body});
+        const r = await api('/voice/ask', {method: 'POST', headers: {'Content-Type': 'audio/wav', ...VH}, body});
         if (!r.ok) throw r.status;
-        const j = await r.json();
-        toast(`“${j.heard}” — ${j.reply}`); play(j.audio);
+        answered(await r.json());
       } catch { toast('Trợ lý chưa sẵn sàng'); }
       btn.disabled = false;
     }};
@@ -118,11 +147,12 @@
       const k = Math.max(1, Math.round(ctx.sampleRate / 16000)), out = [];   // hạ về ~16 kHz cho nhẹ (voiced tự đổi tần số)
       for (const c of chunks) for (let i = 0; i + k <= c.length; i += k) { let a = 0; for (let j = 0; j < k; j++) a += c[i + j]; out.push(a / k); }
       try {   // ngay sau khi trợ lý hỏi lại ("Dạ, em đây...") thì câu kế không cần gọi tên
-        const r = await fetch(`/voice/ask${Date.now() < until ? '' : '?listen=1'}`, {method: 'POST', headers: {'Content-Type': 'audio/wav'},
+        const r = await fetch(`/voice/ask${Date.now() < until ? '' : '?listen=1'}`, {method: 'POST', headers: {'Content-Type': 'audio/wav', ...VH},
           body: wav([Float32Array.from(out)], Math.round(ctx.sampleRate / k))});
         if (r.status === 401) { ear(false); toast('Nghe gọi tên đã tắt: cần nhập lại PIN'); }
         const j = r.ok ? await r.json() : {ignored: true};
-        if (!j.ignored) { toast(`“${j.heard}” — ${j.reply}`); play(j.audio); until = j.awaiting ? Date.now() + 10000 : 0; }
+        // trợ lý vừa hỏi lại hay hỏi xác nhận: câu kế ("có", "thôi") không cần gọi tên
+        if (!j.ignored) { answered(j); until = j.awaiting || j.confirm ? Date.now() + 10000 : 0; }
       } catch (_) { /* voiced tạm vắng: nghe tiếp */ }
       busy = false;
     }

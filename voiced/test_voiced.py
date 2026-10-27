@@ -103,10 +103,15 @@ class TestRun(unittest.TestCase):
                        "online:tuya_eb89a0372bd6a5acf1owhi": "offline"})
         say = lambda t: voiced.run(voiced.match(t, CFG), hub)
         self.assertEqual(say("bật đèn kho"), "Đã bật Đèn Kho.")
-        self.assertIn("cần PIN", say("tắt CB tổng bếp"))
+        # thiết bị / ngữ cảnh có khoá: hubd chặn (403) → hỏi lại và trả hộp xác nhận cho màn hình; voiced không tự làm
+        c = voiced.Conv()
+        lock = lambda t: voiced.run(voiced.match(t, CFG), hub, voiced.Persona(), c)
+        self.assertEqual(lock("tắt CB tổng bếp"), "CB Tổng Bếp được bảo vệ, bạn xác nhận tắt không?")
         self.assertEqual(hub.calls[-1], ("POST", "/cmd", {"device": "tuya_eb6564a5a81a53bb8ayyzs", "to": "off"}))
+        self.assertEqual(c.take(), {"confirm": {"ids": ["tuya_eb6564a5a81a53bb8ayyzs"], "to": "off", "label": "tắt CB Tổng Bếp"}})
         self.assertEqual(say("ra khỏi nhà"), "Đã chạy Ra khỏi nhà.")
-        self.assertIn("cần PIN", say("đóng quán"))
+        self.assertEqual(lock("đóng quán"), "Đóng quán được bảo vệ, bạn xác nhận chạy không?")
+        self.assertEqual(c.take(), {"confirm": {"scene": "dong_quan", "label": "chạy Đóng quán"}})
         self.assertEqual(say("pin còn bao nhiêu"), "Pin lưu trữ 85 phần trăm.")
         self.assertEqual(say("điện mặt trời bao nhiêu"), "Điện mặt trời 1234,5 oát.")
         self.assertEqual(say("đèn kho bật chưa"), "Đèn Kho đang bật.")
@@ -194,8 +199,10 @@ class TestAI(AICase):
         r2 = {"role": "assistant", "content": None, "tool_calls": [tc("t3", "set_device", {"device": "tuya_eb6564a5a81a53bb8ayyzs", "to": "off"})]}
         api, hub = self.fake(r1, r2, say("CB tổng bếp cần PIN, bạn bấm trên màn hình nhé.")), FakeHub({"jk.soc": "85"})
         ai = voiced.AI(api.url + "/", "sk-test", "gpt-test")
-        reply = voiced.ask_ai("pin hôm nay thế nào, rồi cắt điện bếp", CFG, hub, ai)
+        c = voiced.Conv()
+        reply = voiced.ask_ai("pin hôm nay thế nào, rồi cắt điện bếp", CFG, hub, ai, voiced.Persona(), c)
         self.assertEqual(reply, "CB tổng bếp cần PIN, bạn bấm trên màn hình nhé.")
+        self.assertEqual(c.take(), {"confirm": {"ids": ["tuya_eb6564a5a81a53bb8ayyzs"], "to": "off", "label": "tắt CB Tổng Bếp"}})
         chats = api.chats()
         self.assertEqual(len(chats), 3)
         self.assertTrue(all(c[2] == "Bearer sk-test" for c in chats))
@@ -213,11 +220,11 @@ class TestAI(AICase):
         self.assertEqual([x["tool_call_id"] for x in m[3:]], ["t1", "t2"])
         self.assertIn("Pin lưu trữ (jk.soc): 85 %", m[3]["content"])
         self.assertIn("mới nhất 85", m[4]["content"])
-        # Lượt 3: hubd chặn thiết bị cần PIN → tool báo lỗi, model không vượt được.
+        # Lượt 3: hubd chặn thiết bị có khoá → màn hình hiện hộp xác nhận; dặn model hỏi lại người, không gọi lại tool.
         denied = chats[2][3]["messages"][-1]
         self.assertEqual(denied["tool_call_id"], "t3")
-        self.assertIn("cần PIN", denied["content"])
-        self.assertIn("bấm trên màn hình", denied["content"])  # dặn model chuyển cho người, không thử đường khác
+        self.assertIn("xác nhận", denied["content"])
+        self.assertIn("không gọi lại", denied["content"])
         self.assertIn(("POST", "/cmd", {"device": "tuya_eb6564a5a81a53bb8ayyzs", "to": "off"}), hub.calls)
 
     def test_bad_tool_call_reported_not_crashed(self):
@@ -378,6 +385,65 @@ def wav_bytes(rate=48000, channels=1, seconds=0.5):
     return b.getvalue()
 
 
+class TestConversation(AICase):
+    def test_yes_no_sweep(self):
+        # Chỉ câu ngắn mới là trả lời có/không; có cả "có" lẫn "không" ("có ai không") là câu hỏi, không phải đồng ý.
+        for t in ("có", "Có.", "đồng ý", "ừ làm đi", "ok", "xác nhận", "đúng rồi", "chắc chắn rồi", "được em"):
+            self.assertIs(voiced.yes_no(t), True, t)
+        for t in ("không", "thôi", "huỷ đi", "hủy", "đừng", "khỏi"):
+            self.assertIs(voiced.yes_no(t), False, t)
+        for t in ("", "có ai ở nhà không", "bật đèn kho", "có thể cho tôi biết pin còn bao nhiêu phần trăm"):
+            self.assertIsNone(voiced.yes_no(t), t)
+
+    def test_confirm_yes_no_other_and_expiry(self):
+        hub, t = FakeHub(), [0.0]
+        c = voiced.Conv(now=lambda: t[0])
+        ask = lambda text: voiced.answer(text, hub, None, voiced.Persona(), c)
+        ask("tắt CB tổng bếp")
+        self.assertIn("confirm", c.take())
+        n = len(hub.calls)
+        self.assertEqual(ask("đồng ý"), "Đã xác nhận, tắt CB Tổng Bếp.")
+        self.assertEqual(c.take(), {"execute": {"ids": ["tuya_eb6564a5a81a53bb8ayyzs"], "to": "off", "label": "tắt CB Tổng Bếp"}})
+        self.assertEqual([x for x in hub.calls[n:] if x[1] == "/cmd"], [])   # màn hình (có PIN) làm, voiced không gửi
+        self.assertEqual(ask("đồng ý"), voiced.Persona().fmt(voiced.FIXED_ONLY))   # không còn gì chờ: câu thường
+        ask("tắt CB tổng bếp"), c.take()
+        self.assertEqual(ask("thôi"), "Đã huỷ.")
+        self.assertEqual(c.take(), {})
+        ask("tắt CB tổng bếp"), c.take()
+        self.assertEqual(ask("bật đèn kho"), "Đã bật Đèn Kho.")   # nói sang chuyện khác: bỏ lệnh đang chờ
+        self.assertEqual((ask("có"), c.take()), (voiced.Persona().fmt(voiced.FIXED_ONLY), {}))
+        ask("tắt CB tổng bếp"), c.take()
+        t[0] += voiced.Conv.WAIT + 1   # quá hạn xác nhận
+        self.assertEqual((ask("có"), c.take()), (voiced.Persona().fmt(voiced.FIXED_ONLY), {}))
+
+    def test_history_sent_to_ai_per_conversation(self):
+        api = self.fake(say("Đèn kho đang bật."), say("Đã ghi nhận."), say("Chào."))
+        ai, hub = voiced.AI(api.url + "/", "", "m"), FakeHub()
+        a, b = voiced.Conv(), voiced.Conv()
+        voiced.answer("bật đèn kho", hub, ai, voiced.Persona(), a)   # lệnh cố định cũng vào lịch sử
+        voiced.answer("vừa rồi em làm gì", hub, ai, voiced.Persona(), a)
+        voiced.answer("còn nó thì sao", hub, ai, voiced.Persona(), a)
+        voiced.answer("còn nó thì sao", hub, ai, voiced.Persona(), b)
+        m = [c[3]["messages"] for c in api.chats()]
+        self.assertEqual([x["content"] for x in m[0][1:]], ["bật đèn kho", "Đã bật Đèn Kho.", "vừa rồi em làm gì"])
+        self.assertEqual([x["role"] for x in m[1][1:]], ["user", "assistant", "user", "assistant", "user"])
+        self.assertEqual(m[1][-2]["content"], "Đèn kho đang bật.")
+        self.assertEqual([x["role"] for x in m[2]], ["system", "user"])   # màn hình khác: không thấy lịch sử của màn hình kia
+        for i in range(10):
+            a.add(f"câu {i}", "ừ")
+        self.assertEqual(len(a.history()), 2 * voiced.Conv.TURNS)
+
+    def test_app_conversation_per_screen_and_idle_reset(self):
+        app, t = voiced.App(FakeHub(), None, None, None), [0.0]
+        app.clock = lambda: t[0]
+        x = app.conv("man-hinh-1")
+        self.assertIs(app.conv("man-hinh-1"), x)
+        self.assertIsNot(app.conv("man-hinh-2"), x)
+        x.add("a", "b")
+        t[0] += voiced.Conv.IDLE + 1
+        self.assertEqual(app.conv("man-hinh-1").history(), [])
+
+
 class TestHotwords(unittest.TestCase):
     def test_names_from_config(self):
         cfg = {"zones": [{"id": "kho", "name": "Phòng kho"}, {"id": "sau", "name": "Sân  sau"}, {"id": "t1", "name": "Tủ điện tầng 1"}],
@@ -463,6 +529,16 @@ class TestServer(unittest.TestCase):
         self.assertEqual(urllib.request.urlopen(self.base + r["audio"][0]).read()[:4], b"RIFF")
         r = self.post(json.dumps({"text": "ra khỏi nhà"}).encode(), "application/json")
         self.assertEqual(r["reply"], "Đã chạy Ra khỏi nhà.")
+
+    def test_confirm_round_trip_per_screen(self):
+        talk = lambda text, sid: json.load(urllib.request.urlopen(urllib.request.Request(self.base + "/voice/ask",
+            data=json.dumps({"text": text}).encode(), headers={"Content-Type": "application/json", "X-Voice-Session": sid})))
+        r = talk("tắt CB tổng bếp", "ipad")
+        self.assertEqual(r["confirm"]["ids"], ["tuya_eb6564a5a81a53bb8ayyzs"])
+        self.assertNotIn("execute", talk("có", "dien-thoai"))   # màn hình khác nói "có": không làm lệnh của iPad
+        r = talk("có", "ipad")
+        self.assertEqual(r["execute"], {"ids": ["tuya_eb6564a5a81a53bb8ayyzs"], "to": "off", "label": "tắt CB Tổng Bếp"})
+        self.assertNotIn("confirm", r)
 
     def test_stt_gets_hotwords_from_hub_config(self):
         # Từ khoá ưu tiên lấy từ cấu hình hub ở mỗi câu (giữ 60 giây), để mô hình nghe đúng tên trong nhà.
@@ -669,7 +745,7 @@ class TestPersona(unittest.TestCase):
         self.assertEqual(p.say("CB tổng bếp cần PIN."), "Dạ anh Bình, CB tổng bếp cần PIN.")  # chữ viết tắt giữ nguyên hoa
         hub = FakeHub({"jk.soc": "85"})
         self.assertEqual(voiced.run(voiced.match("bật đèn kho", CFG), hub, p), "Dạ anh Bình, đã bật Đèn Kho.")
-        self.assertEqual(voiced.run(voiced.match("tắt CB tổng bếp", CFG), hub, p), "Dạ anh Bình, CB Tổng Bếp cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(voiced.run(voiced.match("tắt CB tổng bếp", CFG), hub, p), "Dạ anh Bình, CB Tổng Bếp được bảo vệ, anh Bình xác nhận tắt không?")
         self.assertTrue(voiced.brief(OUT_CFG, {"values": {}, "alerts": []}, p).startswith("Chào anh Bình. Chưa có số đo"))
         sp = voiced.system_prompt(CFG, p)
         self.assertIn("Bạn là Mây", sp)
@@ -738,9 +814,13 @@ class TestGroups(AICase):
         self.assertEqual(say("tắt đèn phòng lạnh nút 2"), "Đã tắt Đèn phòng lạnh Nút 2.")
         self.assertEqual(cmds(), [("tuya_lanh_2", "off")])
         hub.calls.clear()
-        self.assertEqual(say("TẮT Ổ CẮM HỒ CÁ"), "Đã tắt Lỗ 1, Lỗ 2 của Ổ cắm Hồ Cá. Lỗ 3 của Ổ cắm Hồ Cá cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(say("TẮT Ổ CẮM HỒ CÁ"), "Đã tắt Lỗ 1, Lỗ 2 của Ổ cắm Hồ Cá. Lỗ 3 của Ổ cắm Hồ Cá được bảo vệ, bạn xác nhận tắt không?")
         self.assertEqual(cmds(), [("tuya_ca_1", "off"), ("tuya_ca_2", "off"), ("tuya_ca_3", "off")])  # lỗ 3: hubd trả 403
-        self.assertEqual(say("tắt ổ cắm hồ cá lỗ 3"), "Ổ cắm Hồ Cá Lỗ 3 cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(say("tắt ổ cắm hồ cá lỗ 3"), "Ổ cắm Hồ Cá Lỗ 3 được bảo vệ, bạn xác nhận tắt không?")
+        # nhóm có một phần được bảo vệ: kênh thường làm ngay, hộp xác nhận chỉ hỏi kênh có khoá
+        c = voiced.Conv()
+        voiced.run(voiced.match("tắt ổ cắm hồ cá", GROUP_CFG), FakeHub(cfg=GROUP_CFG), voiced.Persona(), c)
+        self.assertEqual(c.take(), {"confirm": {"ids": ["tuya_ca_3"], "to": "off", "label": "tắt Lỗ 3 của Ổ cắm Hồ Cá"}})
         self.assertEqual(say("bật đèn sân"), "Đã bật Đèn sân.")  # nhóm một kênh: gọi bằng tên nhóm
         self.assertEqual(say("đèn phòng lạnh đang bật không"), "Đèn phòng lạnh: Nút 1 bật, Nút 2 tắt.")
         self.assertEqual(say("đèn phòng lạnh nút 1 bật chưa"), "Đèn phòng lạnh Nút 1 đang bật.")
@@ -782,7 +862,7 @@ class TestGroups(AICase):
         tools = api.chats()[1][3]["messages"][-3:]
         self.assertEqual(tools[0]["content"], "Đã bật Đèn phòng lạnh.")
         self.assertTrue(tools[1]["content"].startswith("LỖI"), tools[1])
-        self.assertIn("Lỗ 3 của Ổ cắm Hồ Cá cần PIN", tools[1]["content"])
+        self.assertIn("Lỗ 3 của Ổ cắm Hồ Cá được bảo vệ", tools[1]["content"])
         self.assertEqual(tools[2]["content"], "Đã tắt Đèn phòng lạnh Nút 2.")
         self.assertEqual([c[2]["device"] for c in hub.calls if c[1] == "/cmd"],
                          ["tuya_lanh_1", "tuya_lanh_2", "tuya_ca_1", "tuya_ca_2", "tuya_ca_3", "tuya_lanh_2"])

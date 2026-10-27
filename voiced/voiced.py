@@ -106,6 +106,52 @@ class Persona:
         return a is not None and b is not None and a != b and (now.hour * 60 + now.minute - a) % 1440 < (b - a) % 1440
 
 
+# ---------- Hội thoại của một màn hình: nhớ vài lượt cho AI, và lệnh có khoá đang chờ xác nhận ----------
+
+class Conv:
+    """Mỗi màn hình một hội thoại (mã gửi qua header X-Voice-Session). Vài lượt gần nhất gửi kèm cho AI để hiểu câu nối tiếp
+    ("tắt nó đi"). Lệnh tới thiết bị / ngữ cảnh có khoá bị hubd chặn thì chờ xác nhận WAIT giây: màn hình hiện hộp xác nhận,
+    người nói "có" thì trả lệnh cho chính màn hình đó làm bằng phiên PIN của nó; voiced không bao giờ tự làm lệnh có khoá."""
+    TURNS, IDLE, WAIT = 6, 300, 60
+
+    def __init__(self, now=time.monotonic):
+        self.now, self.turns, self.at, self._pending, self.out = now, [], now(), None, {}
+
+    def history(self):
+        return [m for u, a in self.turns for m in ({"role": "user", "content": u}, {"role": "assistant", "content": a})]
+
+    def add(self, user, reply):
+        self.turns, self.at = (self.turns + [(user, reply)])[-self.TURNS:], self.now()
+
+    def ask(self, act):
+        """act: {"ids": [thiết bị], "to"} hoặc {"scene"}, kèm "label" ("tắt CB Tổng Bếp") để màn hình hỏi lại."""
+        self._pending, self.out = (act, self.now()), {"confirm": act}
+
+    @property
+    def pending(self):
+        return self._pending[0] if self._pending and self.now() - self._pending[1] <= self.WAIT else None
+
+    def take(self):
+        """Phần gửi kèm câu trả lời cho màn hình ({"confirm": ...} hay {"execute": ...}), lấy một lần."""
+        out, self.out = self.out, {}
+        return out
+
+
+YES = ("có", "đồng ý", "xác nhận", "ừ", "ok", "oke", "đúng rồi", "làm đi", "chắc chắn", "được")
+NO = ("không", "thôi", "huỷ", "hủy", "đừng", "khỏi")
+
+
+def yes_no(text):
+    """Trả lời có/không cho lệnh đang chờ: True / False, None nếu không phải (câu dài, hay có cả hai như "có ai không").
+    Giữ dấu: bỏ dấu thì "đúng" và "đừng" trùng nhau."""
+    ws = re.findall(r"\w+", unicodedata.normalize("NFC", text.lower()))
+    if not ws or len(ws) > 5:
+        return None
+    t = f" {' '.join(ws)} "
+    y, n = any(f" {w} " in t for w in YES), any(f" {w} " in t for w in NO)
+    return y if y != n else None
+
+
 # ---------- Lệnh cố định (cục bộ) ----------
 
 def plain(s):
@@ -229,18 +275,21 @@ def num(v):
         return v
 
 
-def switch(x, to, hub):
-    """Bật/tắt một thiết bị, một kênh hay cả nhóm (từng kênh một; hubd tự chặn kênh cần PIN).
-    Trả (câu trả lời, mọi kênh đã nhận lệnh)."""
+def switch(x, to, hub, p=None, conv=None):
+    """Bật/tắt một thiết bị, một kênh hay cả nhóm (từng kênh một). Kênh có khoá bị hubd chặn (403): hỏi lại người và chờ
+    xác nhận trong conv. Trả (câu trả lời, mọi kênh đã nhận lệnh)."""
     ms = x.get("members") or [x]
     done, pin, bad = [], [], []
     for d in ms:
         code, _ = hub("POST", "/cmd", {"device": d["id"], "to": to})
-        (done if code == 204 else pin if code == 403 else bad).append(d["name"].strip())
-    name = x["name"].strip()
-    of = (lambda ns: f"{', '.join(ns)} của {name}") if sum(map(bool, (done, pin, bad))) > 1 else (lambda ns: name)
-    out = ([f"Đã {'bật' if to == 'on' else 'tắt'} {of(done)}."] if done else []) + \
-          ([f"{of(pin)} cần PIN, hãy bấm trên màn hình."] if pin else []) + ([f"Không gửi được lệnh tới {of(bad)}."] if bad else [])
+        (done if code == 204 else pin if code == 403 else bad).append(d)
+    name, verb = x["name"].strip(), "bật" if to == "on" else "tắt"
+    of = (lambda ds: f"{', '.join(d['name'].strip() for d in ds)} của {name}") if sum(map(bool, (done, pin, bad))) > 1 else (lambda ds: name)
+    if pin and conv is not None:
+        conv.ask({"ids": [d["id"] for d in pin], "to": to, "label": f"{verb} {of(pin)}"})
+    you = (p or Persona()).you
+    out = ([f"Đã {verb} {of(done)}."] if done else []) + \
+          ([f"{of(pin)} được bảo vệ, {you} xác nhận {verb} không?"] if pin else []) + ([f"Không gửi được lệnh tới {of(bad)}."] if bad else [])
     return " ".join(out), not pin and not bad
 
 
@@ -257,18 +306,20 @@ def status(x, v):
     return f"{x['name'].strip()}: " + ", ".join(f"{n} {s.removeprefix('đang ')}" for n, s in ss) + "."
 
 
-def run(intent, hub, p=Persona()):
-    return summary(hub, p) if intent[0] == "brief" else p.say(reply(intent, hub))
+def run(intent, hub, p=Persona(), conv=None):
+    return summary(hub, p) if intent[0] == "brief" else p.say(reply(intent, hub, p, conv))
 
 
-def reply(intent, hub):
+def reply(intent, hub, p=Persona(), conv=None):
     kind, x, to = intent
     name = x and x["name"].strip()
     if kind == "set":
-        return switch(x, to, hub)[0]
+        return switch(x, to, hub, p, conv)[0]
     if kind == "scene":
         code, msg = hub("POST", "/scene/" + quote(x["id"], safe=""))
-        return {204: f"Đã chạy {name}.", 403: f"Kịch bản {name} cần PIN, hãy bấm trên màn hình."}.get(code, f"{name}: {msg}.")
+        if code == 403 and conv is not None:
+            conv.ask({"scene": x["id"], "label": f"chạy {name}"})
+        return {204: f"Đã chạy {name}.", 403: f"{name} được bảo vệ, {p.you} xác nhận chạy không?"}.get(code, f"{name}: {msg}.")
     if kind == "ack":
         hub("POST", "/alarm/ack")
         return "Đã xác nhận cảnh báo."
@@ -417,7 +468,11 @@ def verdict(code, msg):
     return f"LỖI {code}: {msg}"
 
 
-def call_tool(name, args, hub, cfg):
+LOCKED_TOOL = ("Thiết bị / kịch bản này được bảo vệ: màn hình đã hiện hộp xác nhận. Hỏi lại người dùng một câu ngắn có muốn "
+               "{act} không. Họ đồng ý thì hệ thống tự làm, không gọi lại tool, không thử cách khác.")
+
+
+def call_tool(name, args, hub, cfg, conv=None):
     """Chạy một lời gọi tool, trả chữ cho message role=tool. Lỗi bắt đầu bằng "LỖI" (API OpenAI không có cờ lỗi)."""
     try:
         a = json.loads(args or "{}")
@@ -432,10 +487,17 @@ def call_tool(name, args, hub, cfg):
             x = next((d for d in grouped(cfg)["devices"] if d["id"] == a["device"]), None)
             if x is None:
                 return f"LỖI: không có thiết bị {a['device']}"
-            text, ok = switch(x, a["to"], hub)
+            text, ok = switch(x, a["to"], hub, None, conv)
+            if conv is not None and conv.out.get("confirm"):
+                return LOCKED_TOOL.format(act=conv.out["confirm"]["label"])
             return text if ok else f"LỖI: {text} Không thử cách khác."
         if name == "run_scene":
-            return verdict(*hub("POST", "/scene/" + quote(a["scene"], safe="")))
+            code, msg = hub("POST", "/scene/" + quote(a["scene"], safe=""))
+            sc = next((s for s in cfg.get("scenes", []) if s["id"] == a["scene"]), None)
+            if code == 403 and conv is not None and sc:
+                conv.ask({"scene": sc["id"], "label": f"chạy {sc['name']}"})
+                return LOCKED_TOOL.format(act=f"chạy {sc['name']}")
+            return verdict(code, msg)
         if name == "ack_alarm":
             return verdict(*hub("POST", "/alarm/ack"))
         return f"LỖI: không có tool {name}"
@@ -497,8 +559,8 @@ class AI:
         return sorted(m["id"] for m in self.call("/models")["data"])
 
 
-def ask_ai(text, cfg, hub, ai, p=Persona()):
-    msgs = [{"role": "system", "content": system_prompt(cfg, p)}, {"role": "user", "content": text}]
+def ask_ai(text, cfg, hub, ai, p=Persona(), conv=None):
+    msgs = [{"role": "system", "content": system_prompt(cfg, p)}] + (conv.history() if conv else []) + [{"role": "user", "content": text}]
     for _ in range(6):
         m = ai.chat(msgs, TOOLS)
         calls = [{"id": c["id"], "type": "function", "function": {"name": c["function"]["name"], "arguments": c["function"].get("arguments") or "{}"}}
@@ -509,21 +571,41 @@ def ask_ai(text, cfg, hub, ai, p=Persona()):
             return (m.get("content") or "").strip() or "Tôi chưa có câu trả lời."
         # Gửi lại đúng lời gọi tool; bỏ trường riêng của từng hãng (reasoning_content...) mà hãng khác không nhận.
         msgs.append({"role": "assistant", "content": m.get("content"), "tool_calls": calls})
-        msgs += [{"role": "tool", "tool_call_id": c["id"], "content": call_tool(c["function"]["name"], c["function"]["arguments"], hub, cfg)}
+        msgs += [{"role": "tool", "tool_call_id": c["id"], "content": call_tool(c["function"]["name"], c["function"]["arguments"], hub, cfg, conv)}
                  for c in calls]
     return "Việc này nhiều bước quá, bạn nói cụ thể hơn giúp tôi."
 
 
-def answer(text, hub, ai, p=Persona()):
+def answer(text, hub, ai, p=Persona(), conv=None):
+    """Câu trả lời cho một câu nói. conv: hội thoại của màn hình (lịch sử cho AI, lệnh có khoá chờ xác nhận); phần gửi
+    kèm cho màn hình (hộp xác nhận, lệnh đã được xác nhận) nằm ở conv.take()."""
+    conv = conv if conv is not None else Conv()
+    conv.out = {}
+    out = _answer(text, hub, ai, p, conv)
+    if text.strip():
+        conv.add(text, out)
+    return out
+
+
+def _answer(text, hub, ai, p, conv):
     if not text.strip():
         return p.fmt(NOT_HEARD)
+    act = conv.pending
+    if act:
+        conv._pending = None   # chỉ một lượt để trả lời có/không; nói sang chuyện khác thì bỏ lệnh đang chờ
+        yn = yes_no(text)
+        if yn is True:
+            conv.out = {"execute": act}
+            return p.say(f"Đã xác nhận, {act['label']}.")
+        if yn is False:
+            return p.say("Đã huỷ.")
     try:
         code, cfg = hub("GET", "/config")
         if code != 200:
             return "Trung tâm từ chối trợ lý, cần kiểm tra token trợ lý."
         intent = match(text, cfg)
         if intent:
-            return run(intent, hub, p)
+            return run(intent, hub, p, conv)
     except OSError:
         return "Không kết nối được trung tâm."
     if greeting(text, p):
@@ -531,7 +613,7 @@ def answer(text, hub, ai, p=Persona()):
     if ai is None:
         return p.fmt(FIXED_ONLY)
     try:
-        return ask_ai(text, cfg, hub, ai, p)
+        return ask_ai(text, cfg, hub, ai, p, conv)
     except urllib.error.HTTPError as e:
         print(f"AI lỗi HTTP {e.code} ({ai.url}, model {ai.model})", flush=True)  # không in thân lỗi: có hãng nhắc lại một phần khoá
         return AI_KEY if e.code in (401, 403) else AI_ERROR
@@ -697,6 +779,18 @@ class App:
         self.persona, self.phrases, self.warming = Persona(), [], None
         self.now = lambda: datetime.now(VN)
         self.hot_words, self.hot_at = "", -1e9
+        self.convs, self.clock = {}, time.monotonic
+
+    def conv(self, sid):
+        """Hội thoại của một màn hình; im lặng quá Conv.IDLE thì bắt đầu lại. Giữ tối đa 50 màn hình (bỏ cái cũ nhất)."""
+        sid = (sid or "-")[:64]
+        with self.lock:
+            c = self.convs.get(sid)
+            if c is None or self.clock() - c.at > Conv.IDLE:
+                c = self.convs[sid] = Conv(now=lambda: self.clock())
+                while len(self.convs) > 50:
+                    del self.convs[min(self.convs, key=lambda k: self.convs[k].at)]
+            return c
 
     def hot(self):
         """Từ khoá theo cấu hình hub, giữ 60 giây: đổi tên phòng trên dashboard thì chậm nhất một phút sau có hiệu lực."""
@@ -831,6 +925,7 @@ def handler(app):
                     heard = app.stt(rate, a, app.hot()).strip().lower() if len(a) >= rate * 0.3 else ""
             except Exception:
                 return self.send(400, "cần WAV PCM 16-bit hoặc JSON {\"text\": ...}".encode(), "text/plain; charset=utf-8")
+            conv = app.conv(self.headers.get("X-Voice-Session", ""))
             if listen:
                 rest = wake(heard, app.persona)
                 if rest is None:  # người trong nhà/quán nói chuyện, không gọi trợ lý: bỏ qua, không ghi log
@@ -841,7 +936,7 @@ def handler(app):
                 heard = rest
             t1 = time.perf_counter()
             try:
-                reply = answer(heard, app.hub, app.ai, app.persona)
+                reply = answer(heard, app.hub, app.ai, app.persona, conv)
             except Exception as e:
                 print(f"lỗi khi trả lời {heard!r}: {e!r}", flush=True)
                 reply = "Có lỗi, bạn thử lại sau."
@@ -849,7 +944,7 @@ def handler(app):
             audio = app.speak(reply)
             ms = lambda a, b: f"{(b - a) * 1000:.0f} ms"
             print(f"nghe: {heard!r} → {reply!r} (STT {ms(t0, t1)}, xử lý {ms(t1, t2)}, TTS {ms(t2, time.perf_counter())})", flush=True)
-            self.json({"heard": heard, "reply": reply, "audio": audio})
+            self.json({"heard": heard, "reply": reply, "audio": audio, **conv.take()})
 
         def do_GET(self):
             if m := re.fullmatch(r"/voice/tts/([0-9a-f]{16})\.wav", self.path):
