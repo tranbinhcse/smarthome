@@ -53,7 +53,7 @@ function nowHtml() {
     ${SP.reconnect ? '<p class="note">Cần cấp thêm quyền để xem playlist và bài đã thích. <button class="sub" data-sact="spotify:login">Kết nối lại Spotify</button></p>' : ''}`;
 }
 const nowKey = () => (hub() ? HM.file?.id : SP.uri) || '';
-const sig = () => hub() ? [HM.file?.id, HM.playing, HM.dur_ms, (HM.zones || []).map(z => [z.id, z.name, z.connected, z.volume, z.muted].join()).join('|')].join('|') : [SP.uri, SP.playing, SP.shuffle, SP.reconnect, SP.duration_ms, SP.device?.id, SP.device?.volume_percent, (spDevs || []).map(x => x.id + x.is_active).join()].join('|');
+const sig = () => hub() ? [HM.file?.id, HM.playing, HM.dur_ms, HM.source, SP.track, (HM.zones || []).map(z => [z.id, z.name, z.connected, z.volume, z.muted].join()).join('|')].join('|') : [SP.uri, SP.playing, SP.shuffle, SP.reconnect, SP.duration_ms, SP.device?.id, SP.device?.volume_percent, (spDevs || []).map(x => x.id + x.is_active).join()].join('|');
 const tabsHtml = () => M.q ? '<button class="rb sel">Kết quả tìm</button>'
   : [['lists', 'Playlist'], ['queue', 'Hàng đợi']].map(([v, l]) => `<button class="rb${M.tab === v ? ' sel' : ''}" data-mtab="${v}">${l}</button>`).join('');
 
@@ -221,6 +221,7 @@ function hNowHtml() {
   const f = HM.file, zs = HM.zones || [];
   return `<div class="mart"></div>
     <div class="mtitle"><b>${esc(f?.title || 'Chưa phát bài nào')}</b><small>${esc(f ? f.folder || 'Nhạc trên hub' : 'Chọn bài trong thư viện bên cạnh')}</small></div>
+    ${HM.source === 'spotify' ? `<p class="note">Các khu đang phát Spotify qua hub${SP.track ? `: ${esc(SP.track)}` : ''}. Chọn bài bên cạnh để chuyển sang nhạc trên hub.</p>` : ''}
     ${HM.dur_ms ? `<div class="mprog"><div class="bar"><i data-hprog style="width:${100 * hmPos() / HM.dur_ms}%"></i></div>
       <span><small data-mpos>${mmss(hmPos())}</small><small>${mmss(HM.dur_ms)}</small></span></div>` : ''}
     ${f ? `<div class="mctl">${hb('prev', 'Bài trước', icon('prev'))}${hb(HM.playing ? 'pause' : 'play', HM.playing ? 'Dừng' : 'Phát', icon(HM.playing ? 'pause' : 'play'), 'rb big pp')}${hb('next', 'Bài sau', icon('next'))}</div>` : ''}
