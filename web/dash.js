@@ -258,7 +258,7 @@ function draw() {
   $('#bottom').innerHTML = bottom;
   for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) { const k = keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w]; if (k) [e.scrollLeft, e.scrollTop] = k; }
   $('#bottom').classList.toggle('scroll', !!scroll);
-  if (sheet && $('#modal').open) $('#modal').innerHTML = sheetHtml(sheet);
+  if (sheet && $('#modal').open) fillSheet($('#modal'));
   masonry();
 }
 // Cột phải xếp kiểu gạch: lưới chia hàng 6px, mỗi widget chiếm số hàng đúng bằng chiều cao của nó (+ khoảng cách),
@@ -491,10 +491,27 @@ function openSheet(key) {
   const m = $('#modal');
   sheet = key;
   delete CHARTS.sheet;   // biểu đồ trong bảng mở lại từ tab được chạm
-  m.innerHTML = sheetHtml(key);
+  fillSheet(m);
   m.onclick = e => { if (e.target === m || e.target.closest('.m-act button, [data-go]')) m.close(); };
-  m.onclose = () => { sheet = ''; };
+  m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); };   // đóng bảng thì ngắt luồng camera
   m.showModal();
+}
+// Vẽ bảng đang mở. Khung xem camera ([data-live] = WebSocket go2rtc qua hub) được giữ nguyên khi vẽ lại (mỗi tin SSE),
+// không thì luồng bị ngắt rồi nối lại liên tục. Trình phát là video-rtc.js của go2rtc: thử WebRTC, không được thì MSE.
+function fillSheet(m) {
+  const live = m.querySelector('[data-live]');
+  m.innerHTML = sheetHtml(sheet);
+  const slot = live && [...m.querySelectorAll('[data-live]')].find(e => e.dataset.live === live.dataset.live);
+  if (slot) slot.replaceWith(live);
+  for (const el of m.querySelectorAll('[data-live]:empty')) import('/api/cam-js/video-rtc.js').then(({VideoRTC}) => {
+    if (!customElements.get('video-rtc')) customElements.define('video-rtc', VideoRTC);
+    if (!el.isConnected || el.firstChild) return;
+    const v = document.createElement('video-rtc');
+    v.mode = 'webrtc,mse';
+    v.media = 'video';   // không lấy tiếng
+    el.append(v);
+    v.src = new URL(el.dataset.live, location.href);
+  }, () => {});
 }
 // on/off chỉ bấm nguồn máy đang khác trạng thái; lệnh khác gửi tới mọi máy (bỏ qua máy mất kết nối).
 async function acGroup(zid, code, label) {
@@ -627,7 +644,7 @@ const W = {
   climate: {t: 'Không khí', i: 'leaf', c: 'green', o: () => CLIM_OPTS, hx: airTabs, r: f => airWidget(f, 'climate')},
   cameras: {t: 'Camera', i: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
     const cs = devsOf(f, 'camera').filter(d => !hid('cameras', d.id));
-    return cs.length ? `<div class="cams" data-keep="cameras">${cs.map(d => `<button class="cam" data-sheet="cam:${esc(d.id)}" style="${thumbBg(zone(d.zone))}" title="Ảnh minh hoạ phòng, chưa có hình trực tiếp">
+    return cs.length ? `<div class="cams" data-keep="cameras">${cs.map(d => `<button class="cam" data-sheet="cam:${esc(d.id)}" style="${camBg(d)}" title="${SNAP[d.id] ? 'Ảnh chụp từ đầu ghi, mỗi phút một ảnh' : 'Ảnh minh hoạ phòng, chưa có hình từ đầu ghi'}">
       ${icon('camera', 'camic')}<span><i class="dot ${offline(d) ? 'bad' : 'ok'}"></i>${esc(zone(d.zone)?.name || d.name)}</span></button>`).join('')}</div>` : '';
   }},
   security: {t: 'An ninh', i: 'shield', c: 'green', r: () => {
@@ -694,15 +711,28 @@ function stripCard(ds) {
     <button class="sw${on ? ' on' : ''}" data-strip="${esc(ds[0].id)}" ${lost ? 'disabled' : ''} aria-pressed="${on}" aria-label="${on ? 'Tắt' : 'Bật'} cả ${esc(name)}"></button></div>
     <div class="outs">${ds.map(d => `<button class="out${isOn(d) ? ' on' : ''}${pending.has(d.id) ? ' pend' : ''}" data-dev="${esc(d.id)}" ${offline(d) ? 'disabled' : ''} aria-pressed="${isOn(d)}" aria-label="Bật/tắt ${esc(d.name)}">${esc(d.name)}</button>`).join('')}</div></div>`;
 }
-// Camera: thẻ vuông, chạm để xem lớn. Chưa nối đầu thu nên dùng ảnh phòng làm hình minh hoạ.
-const camCard = d => `<button class="dv cam1${offline(d) ? ' lost' : ''}" data-sheet="cam:${esc(d.id)}" style="${thumbBg(zone(d.zone))}" aria-label="Xem ${esc(d.name)}">
+// Ảnh camera: ảnh chụp thật qua hub (/api/cam/<id>/snapshot), mỗi phút một ảnh, tải ngầm xong mới thay nên không nháy.
+// Chưa có ảnh (đang tải, đầu ghi chưa nối, dữ liệu mẫu) thì dùng ảnh minh hoạ của phòng.
+const SNAP = {}, SNAP_TRY = {};
+function camBg(d) {
+  const u = `/api/cam/${encodeURIComponent(d.id)}/snapshot?t=${Math.floor(Date.now() / 60000)}`;
+  if (!DEMO && SNAP_TRY[d.id] !== u) {
+    SNAP_TRY[d.id] = u;
+    const im = new Image();
+    im.onload = () => { SNAP[d.id] = u; soon(); };
+    im.src = u;
+  }
+  return SNAP[d.id] ? `background-image:url('${SNAP[d.id]}')` : thumbBg(zone(d.zone));
+}
+// Camera: thẻ vuông, chạm để xem lớn.
+const camCard = d => `<button class="dv cam1${offline(d) ? ' lost' : ''}" data-sheet="cam:${esc(d.id)}" style="${camBg(d)}" aria-label="Xem ${esc(d.name)}">
   <i class="dot ${offline(d) ? 'bad' : 'ok'}"></i><b>${esc(d.name)}</b></button>`;
 function camPanel(id) {
   const d = cfg.devices.find(x => x.id === id), z = zone(d.zone);
   return `<div class="m-box sheet camsheet"><header class="wh">${icon('camera', 'wi blue')}<h3>${esc(d.name)}<small>${esc(z?.name || '')}</small></h3>
     <span class="tag ${offline(d) ? 'bad' : 'good'}">${offline(d) ? 'Mất kết nối' : 'Đang ghi hình'}</span></header>
-    <div class="camview" style="${thumbBg(z)}"></div>
-    <p class="note">Hình trực tiếp sẽ hiện khi hub nối với đầu thu camera ở tum kỹ thuật; hiện là ảnh minh hoạ của phòng.</p>
+    <div class="camview" style="${camBg(d)}"${DEMO ? '' : ` data-live="/api/cam/${encodeURIComponent(d.id)}/ws"`}></div>
+    <p class="note">${DEMO ? 'Dữ liệu mẫu: ảnh minh hoạ của phòng.' : 'Hình trực tiếp (luồng phụ) từ đầu ghi ở tum kỹ thuật, đi qua hub.'}</p>
     <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
 }
 // Mức gió quạt: ba vạch tăng dần, vạch vượt mức thì mờ.

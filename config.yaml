@@ -143,6 +143,11 @@ entities:
   - { id: ro.loc_l,   name: "Đã lọc hôm nay", unit: "L",    zone: cafe,    topic: node-ro/sensor/da_loc_hom_nay/state }
   - { id: ro.loi,     name: "Lõi lọc còn",   unit: "%",     zone: cafe,    topic: node-ro/sensor/loi_loc_con/state }
   - { id: ro.ro_nuoc, name: "Rò nước",       unit: "",      zone: cafe,    topic: node-ro/sensor/ro_nuoc/state }
+  # Sự kiện camera từ hikbridge (ON/OFF, hub đọc thành 1/0 nên dùng được trong luật với above: 0.5).
+  # Topic hik/<kênh>/<eventType viết thường>: vmd chuyển động, linedetection vượt hàng rào ảo, fielddetection
+  # xâm nhập vùng, human/vehicle khi camera nhận ra người/xe. Bỏ # sau khi bật camera (README mục Camera).
+  # - { id: cam_santruoc.vmd,   name: "Chuyển động", topic: hik/1/vmd,   zone: santruoc, device: cam_santruoc }
+  # - { id: cam_santruoc.human, name: "Có người",    topic: hik/1/human, zone: santruoc, device: cam_santruoc }
 
 # Thiết bị Tuya: phần giữa BEGIN/END do tuya-bridge/gen_config.py sinh từ tuya/devices.json.
 # Gắn zone / protected: true bằng cách sửa tay NGOÀI đoạn sinh, hoặc dùng tuya/overrides (xem README).
@@ -175,6 +180,18 @@ devices:
   #     power:    "0000 006D 0022 0002 0157 00AC 0015 0016 ..."
   #     vol_up:   "0000 006D ..."
   #     vol_down: "0000 006D ..."
+  # Camera Hikvision qua đầu ghi ở tum kỹ thuật (README mục Camera). channel = số kênh trên đầu ghi.
+  # Ánh xạ dưới đây là ĐỀ XUẤT theo dashboard mẫu, CHỜ CHỦ NHÀ XÁC NHẬN kênh nào là camera nào rồi mới bỏ #.
+  # - { id: cam_santruoc, name: "Camera sân trước",      zone: santruoc,   kind: camera, channel: 1,  online_topic: hik/1/online }
+  # - { id: cam_cafe1,    name: "Camera cafe 1",         zone: cafe,       kind: camera, channel: 2,  online_topic: hik/2/online }
+  # - { id: cam_cafe2,    name: "Camera cafe 2",         zone: cafe,       kind: camera, channel: 3,  online_topic: hik/3/online }
+  # - { id: cam_cafe3,    name: "Camera cafe 3",         zone: cafe,       kind: camera, channel: 4,  online_topic: hik/4/online }
+  # - { id: cam_bep,      name: "Camera bếp",            zone: bep,        kind: camera, channel: 5,  online_topic: hik/5/online }
+  # - { id: cam_kho,      name: "Camera kho",            zone: kho,        kind: camera, channel: 6,  online_topic: hik/6/online }
+  # - { id: cam_sansau,   name: "Camera sân sau",        zone: sansau,     kind: camera, channel: 7,  online_topic: hik/7/online }
+  # - { id: cam_lamviec,  name: "Camera phòng làm việc", zone: lamviec,    kind: camera, channel: 8,  online_topic: hik/8/online }
+  # - { id: cam_kythuat,  name: "Camera tum",            zone: kythuat,    kind: camera, channel: 9,  online_topic: hik/9/online }
+  # - { id: cam_giengtroi, name: "Camera giếng trời",    zone: gieng_troi, kind: camera, channel: 10, online_topic: hik/10/online }
 
 # Luật tự động hoá (ví dụ, bỏ # để bật). Thiết bị protected không bao giờ bị luật tắt.
 # rules:
@@ -196,3 +213,7 @@ rules:
   - { id: pin_qua_nhiet,   entity: jk.temp,       above: 45,   clear_below: 40,   for: 1m,  alert: "Pin hoặc BMS nóng trên 45°C" }
   - { id: pin_bms_loi,     entity: jk.alarms,     above: 0,                       for: 30s, alert: "BMS pin đang báo lỗi" }
   - { id: pin_mat_ket_noi, entity: jk.online,     below: 3,                       for: 2m,  alert: "Mất kết nối với pack pin" }
+#   - id: nguoi_san_truoc          # camera sân trước thấy người -> bật đèn sân
+#     entity: cam_santruoc.human
+#     above: 0.5
+#     then: [ { set: tuya_xxx, to: on } ]

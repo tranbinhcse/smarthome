@@ -55,6 +55,7 @@ type Device struct {
 	StateTopic   string `yaml:"state_topic" json:"-"`
 	Field        string `yaml:"field" json:"-"` // khoá trong JSON của state_topic (ổ nhiều lỗ đọc chung dps)
 	OnlineTopic  string `yaml:"online_topic" json:"-"`
+	Channel      int    `yaml:"channel" json:"-"` // camera: số kênh trên đầu ghi Hikvision (camera.go)
 	On           string `yaml:"on" json:"-"`
 	Off          string `yaml:"off" json:"-"`
 	// Codes: mã hồng ngoại học được (Pronto) theo mã nút dashboard (power, vol_up...). Xem firmware/README.md.

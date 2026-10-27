@@ -1,0 +1,31 @@
+# go2rtc (mục 15.1): RTSP luồng phụ H.264 của đầu ghi -> WebRTC/MSE cho trình duyệt, không chuyển mã.
+# API (1984) chỉ nằm trong mạng Docker: hubd gọi tới sau khi kiểm PIN, trình duyệt không gọi thẳng.
+# Tài khoản đầu ghi lấy từ .env (NVR_HOST, NVR_USER, NVR_PASS), không ghi ở đây. Mật khẩu nên chỉ gồm chữ và số
+# vì nằm trong URL RTSP. NVR_HOST chỉ ghi IP (RTSP cổng 554). Luồng chỉ mở tới đầu ghi khi có người xem.
+api:
+  listen: ":1984"
+rtsp:
+  listen: ""                 # không phát lại luồng ra mạng
+webrtc:
+  listen: ":8555"            # chỉ media (DTLS-SRTP), không có API
+  candidates:
+    - 192.168.1.254:8555     # IP máy Ubuntu trong LAN
+
+# ch<N> = kênh N trên đầu ghi (camera device trong config.yaml có channel: N). Đầu ghi trên 16 kênh: thêm dòng.
+streams:
+  ch1: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/102
+  ch2: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/202
+  ch3: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/302
+  ch4: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/402
+  ch5: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/502
+  ch6: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/602
+  ch7: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/702
+  ch8: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/802
+  ch9: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/902
+  ch10: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1002
+  ch11: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1102
+  ch12: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1202
+  ch13: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1302
+  ch14: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1402
+  ch15: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1502
+  ch16: rtsp://${NVR_USER}:${NVR_PASS}@${NVR_HOST}:554/Streaming/Channels/1602
