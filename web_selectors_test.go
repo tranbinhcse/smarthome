@@ -90,3 +90,34 @@ func TestCSSBlocksWellFormed(t *testing.T) {
 		}
 	}
 }
+
+// Trang Cài đặt nhảy lên đầu (2026-10-27): draw() thay nút cũ bằng nút mới mỗi lần có số đo, nhưng chỉ giữ vị trí cuộn
+// của vài vùng liệt kê tay (cột phải #side và hộp danh sách phòng không có trong đó), lưu sau khi #stage đã bị vẽ đè,
+// và đặt lại trước masonry() (lúc cột phải tạm co lại nên vị trí bị cắt về 0).
+// Giữ ba điều: lưu mọi vùng đang cuộn (không liệt kê), lưu trước khi vẽ bất cứ gì, đặt lại sau masonry().
+func TestDrawKeepsEveryScrollPosition(t *testing.T) {
+	b, err := os.ReadFile("web/dash.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	i := strings.Index(src, "\nfunction draw() {")
+	if i < 0 {
+		t.Fatal("không thấy function draw()")
+	}
+	body := src[i : i+strings.Index(src[i:], "\n}\n")]
+	at := func(re string) int {
+		loc := regexp.MustCompile(re).FindStringIndex(body)
+		if loc == nil {
+			t.Fatalf("draw() thiếu %s", re)
+		}
+		return loc[0]
+	}
+	save := at(`querySelectorAll\('\*'\)\) if \(e\.scrollTop \|\| e\.scrollLeft\)`)
+	if first := at(`innerHTML =`); save > first {
+		t.Error("draw() lưu vị trí cuộn sau khi đã vẽ đè một vùng: vùng đó mất vị trí trước khi kịp lưu")
+	}
+	if restore, m := at(`keep\.get\(skey\(e\)\)`), at(`masonry\(\);`); restore < m {
+		t.Error("draw() đặt lại vị trí cuộn trước masonry(): cột phải đang co lại nên vị trí bị cắt về 0")
+	}
+}

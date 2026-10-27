@@ -240,11 +240,13 @@ const pageType = () => view.page || (view.room ? 'room' : view.floor ? 'floor' :
 let shellKey = '';
 function draw() {
   if (drag) return;
+  const key = `${pageType()}|${view.floor}|${view.room}|${sceneNow().src}|${editing}`;
+  const v = $('#view'), sy = scrollY, same = key === shellKey, keep = new Map();
+  // vẫn trang cũ: nhớ vị trí mọi vùng đang cuộn (cột phải, hộp danh sách, dải ảnh...) trước khi vẽ đè bằng nút mới
+  if (same) for (const e of $('.app').querySelectorAll('*')) if (e.scrollTop || e.scrollLeft) keep.set(skey(e), [e.scrollLeft, e.scrollTop]);
   renderTop();
   renderBg();
   renderRain();
-  const key = `${pageType()}|${view.floor}|${view.room}|${sceneNow().src}|${editing}`;
-  const v = $('#view'), sy = scrollY, same = key === shellKey;
   if (key !== shellKey) {
     shellKey = key;
     v.className = `view v-${pageType()}${DEBUG_ZONES ? ' debug' : ''}${editing ? ' editing' : ''}`;
@@ -255,19 +257,21 @@ function draw() {
   const c = $('#chips');
   if (c) c.innerHTML = chipsHtml();
   if (view.page && !document.activeElement?.matches?.('#stage input, #stage select')) $('#stage').innerHTML = stageHtml();
-  const [side, bottom, scroll] = zonesHtml(), keep = {};
-  for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w] = [e.scrollLeft, e.scrollTop];
+  const [side, bottom, scroll] = zonesHtml();
   // trang Cài đặt: đang gõ trong một ô thì không vẽ đè cột phải (mất con trỏ, bàn phím iPad đóng lại)
   if (!(view.page === 'settings' && document.activeElement?.matches?.('#side input, #side select, #side textarea'))) $('#side').innerHTML = side;
   $('#bottom').innerHTML = bottom;
-  for (const e of $('#view').querySelectorAll('[data-keep], [data-w] > :last-child')) { const k = keep[e.dataset.keep || 'w:' + e.parentElement.dataset.w]; if (k) [e.scrollLeft, e.scrollTop] = k; }
   $('#bottom').classList.toggle('scroll', !!scroll);
   if (sheet && $('#modal').open) fillSheet($('#modal'));
   masonry();
+  // đặt lại sau masonry(): trước đó cột phải tạm co lại (widget chưa có số hàng) nên vị trí bị cắt về 0
+  if (keep.size) for (const e of $('.app').querySelectorAll('*')) { const k = keep.get(skey(e)); if (k) [e.scrollLeft, e.scrollTop] = k; }
   // vẫn trang cũ (chuyển tab trong widget, số đo mới): giữ chỗ đang cuộn. Safari iPhone có lúc nhảy về đầu
   // trang khi nút vừa chạm bị thay bằng nút mới. Sang trang khác thì để trình duyệt tự xử lý như thường.
   if (same && scrollY !== sy) scrollTo(0, sy);
 }
+// khoá nhận lại một vùng cuộn sau khi vẽ lại: data-keep, id, hoặc widget chứa nó + class
+function skey(e) { return e.dataset.keep || e.id || `${e.closest('[data-w]')?.dataset.w ?? ''}:${e.getAttribute('class') ?? ''}`; }
 // Cột phải xếp kiểu gạch: lưới chia hàng 6px, mỗi widget chiếm số hàng đúng bằng chiều cao của nó (+ khoảng cách),
 // nên widget nhỏ kế tiếp nằm ngay dưới widget cùng cột thay vì chờ widget cao bên cạnh.
 function masonry() {
