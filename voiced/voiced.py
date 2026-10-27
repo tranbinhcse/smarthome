@@ -11,12 +11,12 @@ nhóm "ai" (URL, khoá, model), nhóm "voice" (giọng, cách gọi chủ nhà, 
 
 HTTP (chỉ trong mạng docker; dashboard đi qua hubd /voice/*, không mở cổng ra LAN):
   POST /voice/ask       body audio/wav (PCM 16-bit, tần số bất kỳ) hoặc JSON {"text": "..."}
-                        → {"heard", "reply", "audio": "/voice/tts/<key>.wav"}
+                        → {"heard", "reply", "audio": ["/voice/tts/<key>.wav", ...]} (từng câu, phát lần lượt)
   POST /voice/brief     tóm tắt tình hình (thời tiết, không khí, điện/pin, cảnh báo) → {"reply", "audio"}
   POST /voice/ai/check  JSON {url, api_key, model} (ô trống = giá trị đã lưu) → {"ok", "models", "message"}
   POST /voice/preview   JSON {voice, owner, name} (đang nhập, chưa lưu) → lời chào thử {"reply", "audio"}
   GET  /voice/tts/<key>.wav
-  GET  /voice/events    SSE: {"type": "alert", "level", "text", "audio"} | {"type": "ack"}
+  GET  /voice/events    SSE: {"type": "alert", "level", "text", "audio": [...] | null} | {"type": "ack"}
 """
 import hashlib
 import io
@@ -548,31 +548,69 @@ def check_ai(stored, draft):
 
 # ---------- Âm thanh ----------
 
+def sentences(text):
+    """Cắt câu trả lời để phát câu đầu trong lúc tổng hợp câu sau; mẩu ngắn (dưới 25 ký tự) gộp vào câu kế."""
+    out = []
+    for part in re.split(r"(?<=[.!?;])\s+", text.strip()):
+        if out and len(out[-1]) < 25:
+            out[-1] += " " + part
+        elif part:
+            out.append(part)
+    return out
+
+
 class TTS:
     """Đọc thành WAV, cache theo (giọng, câu): câu cảnh báo và câu lặp lại không phải tổng hợp lại.
     Giữ `keep` file dùng gần nhất (câu trả lời của AI hầu như không lặp lại)."""
     keep = 500  # ponytail: xoá theo mtime khi ghi file mới, ~0,5 MB/file → tối đa vài trăm MB
 
     def __init__(self, cache, synth):
-        self.cache, self.synth, self.lock = cache, synth, threading.Lock()
+        self.cache, self.synth, self.lock, self.pending = cache, synth, threading.Lock(), {}
         cache.mkdir(parents=True, exist_ok=True)
 
     def key(self, text, voice=DEFAULT_VOICE):
         return hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest()[:16]  # cache tách theo giọng
 
-    def url(self, text, voice=DEFAULT_VOICE):
+    def later(self, text, voice):
+        """Ghi nhận câu sẽ cần (tổng hợp khi make). Trả khoá."""
         k = self.key(text, voice)
+        with self.lock:
+            self.pending[k] = (text, voice)
+            while len(self.pending) > 200:  # câu chờ mà không ai xin (trình phát đã đóng)
+                self.pending.pop(next(iter(self.pending)))
+        return k
+
+    def make(self, k):
+        """Tệp WAV của khoá k, tổng hợp nếu chưa có. Khoá chưa từng ghi nhận → None."""
         p = self.cache / f"{k}.wav"
         with self.lock:
             if p.exists():
                 os.utime(p)  # đánh dấu vừa dùng
-            else:
-                tmp = self.cache / f"{k}.part.wav"
-                self.synth(text, tmp, voice)
-                tmp.replace(p)
-                for old in sorted(self.cache.glob("*.wav"), key=lambda f: f.stat().st_mtime_ns)[:-self.keep]:
-                    old.unlink(missing_ok=True)
+                return p
+            if k not in self.pending:
+                return None
+            text, voice = self.pending[k]
+            tmp = self.cache / f"{k}.part.wav"
+            self.synth(text, tmp, voice)
+            tmp.replace(p)
+            self.pending.pop(k, None)
+            for old in sorted(self.cache.glob("*.wav"), key=lambda f: f.stat().st_mtime_ns)[:-self.keep]:
+                old.unlink(missing_ok=True)
+        return p
+
+    def url(self, text, voice=DEFAULT_VOICE):
+        k = self.later(text, voice)
+        self.make(k)
         return f"/voice/tts/{k}.wav"
+
+    def urls(self, text, voice=DEFAULT_VOICE):
+        """URL từng câu: câu đầu tổng hợp ngay, câu sau tổng hợp nền theo thứ tự (hoặc khi trình phát xin tới trước)."""
+        first, *rest = sentences(text) or [text]
+        keys = [self.later(t, voice) for t in rest]
+        out = [self.url(first, voice)] + [f"/voice/tts/{k}.wav" for k in keys]
+        if keys:
+            threading.Thread(target=lambda: [self.make(k) for k in keys], daemon=True).start()
+        return out
 
 
 def vieneu_synth():
@@ -636,8 +674,9 @@ class App:
         print(f"AI: model {self.ai.model} tại {self.ai.url}" if self.ai else "chưa cài AI: chỉ chạy lệnh cố định", flush=True)
 
     def speak(self, text, voice=None):
+        """Danh sách URL âm thanh theo câu (dashboard phát lần lượt), None nếu TTS lỗi."""
         try:
-            return self.tts.url(text, voice or self.persona.voice)
+            return self.tts.urls(text, voice or self.persona.voice)
         except Exception as e:  # mất tiếng vẫn còn chữ
             print(f"TTS lỗi: {e}", flush=True)
             return None
@@ -752,8 +791,12 @@ def handler(app):
 
         def do_GET(self):
             if m := re.fullmatch(r"/voice/tts/([0-9a-f]{16})\.wav", self.path):
-                p = app.tts.cache / f"{m[1]}.wav"
-                return self.send(200, p.read_bytes(), "audio/wav") if p.exists() else self.send_error(404)
+                try:
+                    p = app.tts.make(m[1])  # câu sau của câu trả lời dài: tổng hợp ngay nếu nền chưa tới
+                except Exception as e:
+                    print(f"TTS lỗi: {e}", flush=True)
+                    p = None
+                return self.send(200, p.read_bytes(), "audio/wav") if p else self.send_error(404)
             if self.path == "/voice/healthz":
                 return self.send(200, b"ok", "text/plain")
             if self.path != "/voice/events":

@@ -1,4 +1,4 @@
-import contextlib, io, json, re, socket, tempfile, threading, unittest, urllib.error, urllib.request, wave
+import contextlib, io, json, re, socket, tempfile, threading, time, unittest, urllib.error, urllib.request, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -436,14 +436,14 @@ class TestServer(unittest.TestCase):
     def test_brief_endpoint(self):
         r = self.post(b"", "application/json", "/voice/brief")
         self.assertEqual(r["reply"], voiced.brief(CFG, {"values": {}, "alerts": []}))
-        self.assertRegex(r["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertRegex(r["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
 
     def test_ask_with_wav_and_text(self):
         r = self.post(wav_bytes(channels=2), "audio/wav")
         self.assertEqual((r["heard"], r["reply"]), ("bật đèn kho", "Đã bật Đèn Kho."))
         self.assertEqual(self.heard, [(48000, (24000,))])  # stereo → mono, giữ tần số gốc cho sherpa tự đổi
-        self.assertRegex(r["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
-        self.assertEqual(urllib.request.urlopen(self.base + r["audio"]).read()[:4], b"RIFF")
+        self.assertRegex(r["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertEqual(urllib.request.urlopen(self.base + r["audio"][0]).read()[:4], b"RIFF")
         r = self.post(json.dumps({"text": "ra khỏi nhà"}).encode(), "application/json")
         self.assertEqual(r["reply"], "Đã chạy Ra khỏi nhà.")
 
@@ -471,7 +471,7 @@ class TestServer(unittest.TestCase):
         self.app.on_mqtt("hubd/alert/ack", "{}")
         ev = [json.loads(resp.readline()[6:]), resp.readline(), json.loads(resp.readline()[6:])]
         self.assertEqual((ev[0]["type"], ev[0]["level"], ev[0]["text"]), ("alert", "urgent", "Có khói ở bếp"))
-        self.assertRegex(ev[0]["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertRegex(ev[0]["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
         self.assertEqual(ev[2], {"type": "ack"})
 
     def test_bad_mqtt_payload_does_not_raise(self):
@@ -543,12 +543,39 @@ class TestServer(unittest.TestCase):
                          [("Trời bắt đầu mưa", False), ("Có khói ở bếp", True), ("CO2 cao", True)])
         self.assertNotIn(("Hải Đăng", "Trời bắt đầu mưa"), self.spoken)  # không tổng hợp, đỡ tốn CPU ban đêm
 
+    def test_long_reply_plays_first_sentence_while_rest_synthesizes(self):
+        # Đọc nhanh hơn: câu trả lời dài trả về ngay khi xong câu đầu; câu sau tổng hợp nền, hoặc ngay khi trình phát xin tới.
+        self.assertEqual(voiced.sentences("Chào anh Bình. Ngoài trời 31 độ, đang mưa. Pin 85 phần trăm; nhà dùng 800 oát. Không có cảnh báo nào."),
+                         ["Chào anh Bình. Ngoài trời 31 độ, đang mưa.", "Pin 85 phần trăm; nhà dùng 800 oát.", "Không có cảnh báo nào."])
+        self.assertEqual(voiced.sentences("Đã bật Đèn Kho."), ["Đã bật Đèn Kho."])
+        gate = threading.Event()
+        synth = self.app.tts.synth
+        def slow(text, path, voice):  # câu sau chờ tới khi được thả, để thấy phản hồi không đợi chúng
+            if not text.startswith("Ngoài"):
+                gate.wait(5)
+            synth(text, path, voice)
+        self.app.tts.synth = slow
+        self.app.hub.values = {"gt.t": "31", "gt.mua": "1", "jk.soc": "85", "deye.load": "800"}
+        self.app.hub.cfg = OUT_CFG
+        t0 = time.perf_counter()
+        r = self.post(b"", "application/json", "/voice/brief")
+        self.assertLess(time.perf_counter() - t0, 3)
+        self.assertGreater(len(r["audio"]), 1)
+        first = Path(self.tmp.name) / r["audio"][0].rsplit("/", 1)[1]
+        self.assertTrue(first.exists())
+        gate.set()
+        for u in r["audio"]:
+            self.assertEqual(urllib.request.urlopen(self.base + u).read()[:4], b"RIFF")
+        self.assertEqual([t for v, t in self.spoken][-len(r["audio"]):], voiced.sentences(r["reply"]))
+        with self.assertRaises(urllib.error.HTTPError):  # khoá lạ (chưa từng đăng ký) thì 404, không tổng hợp gì
+            urllib.request.urlopen(self.base + "/voice/tts/0123456789abcdef.wav")
+
     def test_preview_endpoint(self):
         # Nút Nghe thử: dùng giá trị đang nhập (chưa lưu), không đổi cấu hình đang chạy.
         r = self.post(json.dumps({"voice": "Trúc Ly", "owner": "anh Bình", "name": "Mây"}).encode(), "application/json", "/voice/preview")
         self.assertEqual(r["reply"], "Dạ, em là Mây đây, anh Bình cần gì ạ?")
         self.assertEqual(self.spoken[-1], ("Trúc Ly", r["reply"]))
-        self.assertRegex(r["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertRegex(r["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
         self.assertEqual(self.app.persona.voice, "Hải Đăng")
         r = self.post(b"{}", "application/json", "/voice/preview")
         self.assertEqual(r["reply"], "Tôi đây, bạn cần gì?")

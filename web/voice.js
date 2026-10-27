@@ -17,8 +17,22 @@
   btn.before(say);
 
   // iOS chỉ cho phát tiếng sau một lần chạm: mở khoá loa ở lần chạm đầu để cảnh báo tự đọc được về sau.
+  // voiced trả âm thanh theo từng câu (câu đầu có ngay, câu sau đang tổng hợp): phát lần lượt, theo tốc độ trong Cài đặt.
   const player = new Audio();
-  const play = url => { if (url) { player.src = url; player.play().catch(() => {}); } };
+  // Tốc độ đọc (nhóm "voice"): fetch thường, không qua api() để lúc chưa đăng nhập không mở thêm một khung PIN
+  // giành nút "Vào" với lần nạp dashboard. Đã mở trang Cài đặt thì dùng giá trị ở đó (cả khi vừa lưu).
+  let voiceCfg = {};
+  fetch('/api/settings/voice').then(r => r.ok ? r.json() : {}).then(v => { voiceCfg = v; }, () => {});
+  let queue = [];
+  const next = () => {
+    const url = queue.shift();
+    if (!url) return;
+    player.src = url;
+    player.defaultPlaybackRate = player.playbackRate = Number((SETUP_UI.SAVED.voice || voiceCfg).speed) || 1;
+    player.play().catch(() => {});
+  };
+  player.onended = next;
+  const play = urls => { queue = [].concat(urls || []); next(); };
   addEventListener('pointerup', () => play('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA='), {once: true});
 
   say.onclick = async () => {
@@ -78,7 +92,7 @@
     es.onmessage = ev => {
       const m = JSON.parse(ev.data);
       if (m.type === 'alert') { toast(m.text); play(m.audio); }
-      else if (m.type === 'ack') player.pause();
+      else if (m.type === 'ack') { queue = []; player.pause(); }
     };
     es.onerror = () => { es.close(); setTimeout(listen, 30000); };   // voiced tắt: thử lại, dashboard vẫn chạy
   })();
