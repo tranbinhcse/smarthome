@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Ghép đôi Spotify trên hub (Soloist trong container hubd, spotifyhub.go): container ở mạng bridge của Docker nên mDNS của
+     Soloist không ra tới LAN. avahi-daemon của máy chủ quảng bá thay: app Spotify trong LAN gọi ZeroConf ở cổng 8080 của hub,
+     đường /zc; hubd chuyển tới Soloist. TXT giống hệt bản ghi Soloist tự phát. Cài: chép vào /etc/avahi/services/
+     (avahi tự nạp, không cần khởi động lại). Tên hiển thị trong app lấy từ Soloist (HUBD_SPOTIFY_NAME), không lấy tên ở đây. -->
+<service-group>
+  <name replace-wildcards="yes">iNIX Smart Spotify on %h</name>
+  <service>
+    <type>_spotify-connect._tcp</type>
+    <port>8080</port>
+    <txt-record>CPath=/zc</txt-record>
+    <txt-record>VERSION=1.0</txt-record>
+    <txt-record>Stack=SP</txt-record>
+  </service>
+</service-group>

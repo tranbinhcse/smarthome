@@ -79,6 +79,9 @@ func putSetting(h *Hub, n string, patch map[string]any) (restart bool, err error
 	if n == "nvr" {
 		syncCamGen(h.db)
 	}
+	if n == "soloist" && h.music != nil {
+		h.music.spot.restart() // khoá API Soloist vừa đổi: chạy lại với khoá mới (xoá khoá thì dừng)
+	}
 	h.publish("hubd/settings/"+n, "changed")
 	return n == "devices" || n == "zones", nil
 }

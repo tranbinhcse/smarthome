@@ -1,5 +1,5 @@
 // Trình phát đầy đủ (bảng "music:" trong SHEETS của dash.js), hai nguồn: "Trên hub" (file MP3 trong bộ nhớ hub, USB, phát tới
-// các khu qua /api/music/*, music.go) và Spotify (bìa lớn, tiến độ, điều khiển, âm lượng, nơi phát; tìm bài/playlist/album/nghệ sĩ,
+// các khu qua /api/music/*, music.go; hoặc Spotify đang phát trên hub qua Soloist, /api/spotify/hub) và Spotify (bìa lớn, tiến độ, điều khiển, âm lượng, nơi phát; tìm bài/playlist/album/nghệ sĩ,
 // playlist của tài khoản, bài đã thích, hàng đợi qua /api/spotify/*).
 // Bảng không vẽ lại cả khối theo mỗi tin SSE (mất chữ đang gõ, mất chỗ cuộn): draw() chỉ gọi musicLive() để vẽ lại phần
 // đang phát khi có đổi; danh sách chỉ vẽ lại khi chính nó đổi (tìm xong, mở playlist...). Cần dash.js (SP, spDevs, spCmd...).
@@ -20,7 +20,7 @@ const spTarget = () => SP.device?.id || spDevs?.[0]?.id || '';   // chưa có n�
 
 function openMusic() {
   // nguồn đang phát; không bên nào phát thì giữ nguồn lần trước
-  M.src = HM.playing ? 'hub' : SP.playing ? 'spotify' : M.src || (SP.connected || !HM.ok ? 'spotify' : 'hub');
+  M.src = HM.playing || hsNow() ? 'hub' : SP.playing ? 'spotify' : M.src || (SP.connected || !HM.ok ? 'spotify' : 'hub');
   $('#modal').innerHTML = '';   // vẽ mới cả bảng
   openSheet('music:');
   hLoadLib();
@@ -52,8 +52,8 @@ function nowHtml() {
       || '<small class="note">Không thấy thiết bị nào. Bật đầu thu Spotify, hoặc mở app Spotify trên điện thoại cùng tài khoản.</small>'}</div>
     ${SP.reconnect ? '<p class="note">Cần cấp thêm quyền để xem playlist và bài đã thích. <button class="sub" data-sact="spotify:login">Kết nối lại Spotify</button></p>' : ''}`;
 }
-const nowKey = () => (hub() ? HM.file?.id : SP.uri) || '';
-const sig = () => hub() ? [HM.file?.id, HM.playing, HM.dur_ms, HM.source, SP.track, (HM.zones || []).map(z => [z.id, z.name, z.connected, z.volume, z.muted].join()).join('|')].join('|') : [SP.uri, SP.playing, SP.shuffle, SP.reconnect, SP.duration_ms, SP.device?.id, SP.device?.volume_percent, (spDevs || []).map(x => x.id + x.is_active).join()].join('|');
+const nowKey = () => (hub() ? hsNow()?.uri || HM.file?.id : SP.uri) || '';
+const sig = () => hub() ? [HM.file?.id, HM.playing, HM.dur_ms, HM.source, hsNow()?.uri, hsNow()?.status, hsNow()?.volume, (HM.zones || []).map(z => [z.id, z.name, z.connected, z.volume, z.muted].join()).join('|')].join('|') : [SP.uri, SP.playing, SP.shuffle, SP.reconnect, SP.duration_ms, SP.device?.id, SP.device?.volume_percent, (spDevs || []).map(x => x.id + x.is_active).join()].join('|');
 const tabsHtml = () => M.q ? '<button class="rb sel">Kết quả tìm</button>'
   : [['lists', 'Playlist'], ['queue', 'Hàng đợi']].map(([v, l]) => `<button class="rb${M.tab === v ? ' sel' : ''}" data-mtab="${v}">${l}</button>`).join('');
 
@@ -122,7 +122,7 @@ function musicLive(m) {
 }
 setInterval(() => {   // tiến độ chạy giữa hai lần hỏi Spotify (5 giây)
   if (!sheet.startsWith('music:') || M.drag) return;
-  const r = $('#modal [data-mseek]'), t = $('#modal [data-mpos]'), p = $('#modal [data-hprog]'), pos = hub() ? hmPos() : spPos();
+  const r = $('#modal [data-mseek], #modal [data-hsseek]'), t = $('#modal [data-mpos]'), p = $('#modal [data-hprog]'), pos = hub() ? hsNow() ? hsPos() : hmPos() : spPos();
   if (r) r.value = pos;
   if (t) t.textContent = mmss(pos);
   if (p && HM.dur_ms) p.style.width = `${100 * pos / HM.dur_ms}%`;
@@ -150,12 +150,14 @@ document.addEventListener('input', e => {
   }
 });
 // Kéo thanh tua / âm lượng: không vẽ lại phần đang phát giữa chừng; thả tay mới gửi lệnh.
-document.addEventListener('pointerdown', e => { if (e.target.matches?.('[data-mseek], [data-mvol], [data-hzvol]')) M.drag = true; });
+document.addEventListener('pointerdown', e => { if (e.target.matches?.('[data-mseek], [data-mvol], [data-hzvol], [data-hsseek], [data-hsvol]')) M.drag = true; });
 document.addEventListener('change', e => {
   const t = e.target;
-  if (!t.matches?.('[data-mseek], [data-mvol], [data-hzvol]')) return;
+  if (!t.matches?.('[data-mseek], [data-mvol], [data-hzvol], [data-hsseek], [data-hsvol]')) return;
   M.drag = false;
   if (t.matches('[data-hzvol]')) return hmCmd({do: 'zone', id: t.dataset.hzvol, volume: Number(t.value)});
+  if (t.matches('[data-hsseek]')) return hsCmd({do: 'seek', position_ms: Number(t.value)});
+  if (t.matches('[data-hsvol]')) return hsCmd({do: 'volume', volume: Number(t.value)});
   if (t.matches('[data-mvol]')) { if (SP.device) SP.device.volume_percent = Number(t.value); spCmd({do: 'volume', volume: Number(t.value)}); }
   else { SP.progress_ms = Number(t.value); spSeen = null; spCmd({do: 'seek', position_ms: Number(t.value)}); }
 });
@@ -198,7 +200,7 @@ const hmPos = () => { if (HM !== hmSeen) { hmSeen = HM; hmAt = Date.now(); } ret
 async function hmFetch() {
   try { const r = await fetch('/api/music/state'); if (r.ok) { HM = {...await r.json(), ok: true}; soon(); } } catch (_) { /* mất mạng: giữ trạng thái cũ */ }
 }
-(function hmLoop() { if (!DEMO && !document.hidden) hmFetch(); setTimeout(hmLoop, HM.playing || sheet.startsWith('music:') ? 2000 : 10000); })();
+(function hmLoop() { if (!DEMO && !document.hidden) hmFetch(); setTimeout(hmLoop, HM.playing || HM.spotify?.status === 'playing' || sheet.startsWith('music:') ? 2000 : 10000); })();
 async function hmCmd(body) {
   const r = await api('/api/music/cmd', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!r.ok) toast(await r.text());
@@ -208,9 +210,24 @@ async function hmCmd(body) {
 async function hLoadLib() { M.lib = await mGet('/api/music/library'); mBody(); }
 const hzOn = () => (HM.zones || []).filter(z => z.connected && !z.muted).length;
 const hb = (v, l, ic, cls = 'rb sq') => `<button class="${cls}" data-hm="${v}" aria-label="${l}" title="${l}">${ic}</button>`;
+// Spotify trên hub (Soloist, spotifyhub.go): hiện khi hub là thiết bị Spotify đang dùng và không phát MP3. Lệnh qua hubd,
+// không cần kết nối Spotify Web API ở Cài đặt.
+const hsNow = () => !HM.playing && HM.spotify?.active ? HM.spotify : null;
+const hsPos = () => { hmPos(); const s = HM.spotify; return Math.min(s.dur_ms || 0, s.pos_ms + (s.status === 'playing' ? Date.now() - hmAt : 0)); };
+const hsb = (v, l, ic, cls = 'rb sq') => `<button class="${cls}" data-hs="${v}" aria-label="${l}" title="${l}">${ic}</button>`;
+async function hsCmd(body) {
+  const r = await api('/api/spotify/hub', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) toast(await r.text());
+  setTimeout(hmFetch, 400);   // Soloist đổi trạng thái chậm một nhịp sau lệnh
+  return r.ok;
+}
 
 // Thanh nhạc thu gọn (player() trong dash.js) khi nguồn là nhạc trên hub.
 function hmBar() {
+  const s = hsNow(), pl = s?.status === 'playing';
+  if (s) return `<button class="pt" data-mfull aria-label="Mở trình phát đầy đủ"><b>${esc(s.track || 'Spotify')}</b>
+    <small>${esc(`${s.artist ? s.artist + ' · ' : ''}Spotify trên hub · ${hzOn()} khu đang nghe`)}</small></button>
+    ${hsb(pl ? 'pause' : 'play', pl ? 'Dừng' : 'Phát', icon(pl ? 'pause' : 'play'), 'rb big')}${hsb('next', 'Bài sau', icon('next'), 'rb')}`;
   return `<button class="pt" data-mfull aria-label="Mở trình phát đầy đủ"><b>${esc(HM.file?.title || 'Nhạc trên hub')}</b>
     <small>${esc(HM.file ? `${HM.file.folder || 'Nhạc trên hub'} · ${hzOn()} khu đang nghe` : 'Chạm để chọn bài')}</small></button>
     ${HM.file ? hb(HM.playing ? 'pause' : 'play', HM.playing ? 'Dừng' : 'Phát', icon(HM.playing ? 'pause' : 'play'), 'rb big') + hb('next', 'Bài sau', icon('next'), 'rb') : ''}`;
@@ -218,13 +235,19 @@ function hmBar() {
 
 function hNowHtml() {
   M.sig = sig();
-  const f = HM.file, zs = HM.zones || [];
-  return `<div class="mart"></div>
+  const f = HM.file, zs = HM.zones || [], s = hsNow(), pl = s?.status === 'playing';
+  return (s ? `<div class="mart"${artBg(s.art)}></div>
+    <div class="mtitle"><b>${esc(s.track || 'Spotify')}</b><small>${esc([s.artist, s.album].filter(Boolean).join(' · ') || 'Spotify trên hub')}</small></div>
+    ${s.dur_ms ? `<div class="mprog"><input type="range" data-hsseek min="0" max="${s.dur_ms}" step="1000" value="${hsPos()}" aria-label="Tua bài">
+      <span><small data-mpos>${mmss(hsPos())}</small><small>${mmss(s.dur_ms)}</small></span></div>` : ''}
+    <div class="mctl">${hsb('prev', 'Bài trước', icon('prev'))}${hsb(pl ? 'pause' : 'play', pl ? 'Dừng' : 'Phát', icon(pl ? 'pause' : 'play'), 'rb big pp')}${hsb('next', 'Bài sau', icon('next'))}</div>
+    <label class="mvol">${icon('vol')}<input type="range" data-hsvol min="0" max="100" step="5" value="${s.volume}" aria-label="Âm lượng Spotify trên hub"></label>
+    <p class="note">Spotify đang phát trên hub, ra các khu bên dưới. Chọn bài bên cạnh để chuyển sang nhạc trên hub.</p>`
+    : `<div class="mart"></div>
     <div class="mtitle"><b>${esc(f?.title || 'Chưa phát bài nào')}</b><small>${esc(f ? f.folder || 'Nhạc trên hub' : 'Chọn bài trong thư viện bên cạnh')}</small></div>
-    ${HM.source === 'spotify' ? `<p class="note">Các khu đang phát Spotify qua hub${SP.track ? `: ${esc(SP.track)}` : ''}. Chọn bài bên cạnh để chuyển sang nhạc trên hub.</p>` : ''}
     ${HM.dur_ms ? `<div class="mprog"><div class="bar"><i data-hprog style="width:${100 * hmPos() / HM.dur_ms}%"></i></div>
       <span><small data-mpos>${mmss(hmPos())}</small><small>${mmss(HM.dur_ms)}</small></span></div>` : ''}
-    ${f ? `<div class="mctl">${hb('prev', 'Bài trước', icon('prev'))}${hb(HM.playing ? 'pause' : 'play', HM.playing ? 'Dừng' : 'Phát', icon(HM.playing ? 'pause' : 'play'), 'rb big pp')}${hb('next', 'Bài sau', icon('next'))}</div>` : ''}
+    ${f ? `<div class="mctl">${hb('prev', 'Bài trước', icon('prev'))}${hb(HM.playing ? 'pause' : 'play', HM.playing ? 'Dừng' : 'Phát', icon(HM.playing ? 'pause' : 'play'), 'rb big pp')}${hb('next', 'Bài sau', icon('next'))}</div>` : ''}`) + `
     <h4 class="mh">Khu phát</h4>
     ${zs.length ? zs.map(z => { const n = esc(z.name || z.id); return `<div class="hz${z.connected ? '' : ' lost'}">
       <button class="sw${z.muted ? '' : ' on'}" data-hzmute="${esc(z.id)}" aria-pressed="${!z.muted}" aria-label="${z.muted ? 'Bật' : 'Tắt'} tiếng ${n}"${z.connected ? '' : ' disabled'}></button>
@@ -261,7 +284,7 @@ function hBodyHtml() {
 
 document.addEventListener('input', e => { if (e.target.matches?.('[data-hq]')) { M.hq = e.target.value.trim(); mBody(false); } });
 document.addEventListener('click', e => {
-  const el = e.target.closest?.('[data-msrc], [data-hm], [data-hfolder], [data-hback], [data-hplay], [data-hzmute], [data-hzname]');
+  const el = e.target.closest?.('[data-msrc], [data-hm], [data-hs], [data-hfolder], [data-hback], [data-hplay], [data-hzmute], [data-hzname]');
   if (!el) return;
   const ds = el.dataset, z = id => (HM.zones || []).find(x => x.id === id);
   if ('msrc' in ds) {
@@ -271,6 +294,7 @@ document.addEventListener('click', e => {
     return;
   }
   if ('hm' in ds) { if (ds.hm === 'play' || ds.hm === 'pause') { HM.playing = ds.hm === 'play'; draw(); } return hmCmd({do: ds.hm}); }
+  if ('hs' in ds) { if (HM.spotify && (ds.hs === 'play' || ds.hs === 'pause')) { HM.spotify.status = ds.hs === 'play' ? 'playing' : 'paused'; draw(); } return hsCmd({do: ds.hs}); }
   if ('hfolder' in ds) { M.folder = ds.hfolder; return mBody(false); }
   if ('hback' in ds) { M.folder = null; return mBody(false); }
   if ('hplay' in ds) {
