@@ -35,11 +35,15 @@ func (t *Transport) clock() time.Time {
 	return time.Now()
 }
 
-func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+// Locked: đang tạm ngừng vì đầu ghi vừa từ chối tài khoản này.
+func (t *Transport) Locked() bool {
 	t.mu.Lock()
-	locked := t.clock().Before(t.until)
-	t.mu.Unlock()
-	if locked {
+	defer t.mu.Unlock()
+	return t.clock().Before(t.until)
+}
+
+func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.Locked() {
 		return nil, ErrLocked
 	}
 	base := t.Base

@@ -31,6 +31,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("mở SQLite %s: %v", cfg.DB, err)
 	}
+	if syncCamGen(db) { // camera gán trên trang Cài đặt: ghi file sinh trước khi theo dõi thư mục
+		mergeGenerated(&cfg, os.Getenv("HUBD_GEN_DIR"))
+	}
 	applyDeviceOverrides(&cfg, db.Setting("devices")) // phòng / tên thiết bị sắp xếp trên trang Cài đặt
 	if pin == "" {
 		log.Println("CẢNH BÁO: HUBD_PIN trống — giao diện và lệnh KHÔNG có mật khẩu")
@@ -153,7 +156,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 			}
 		}
 	}))
-	newCams(hub.cfg.Devices).register(mux, auth)
+	newCams(hub.cfg.Devices, hub.db).register(mux, auth)
 	mux.HandleFunc("POST /api/cmd", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Device, To string }
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil ||
