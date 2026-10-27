@@ -274,8 +274,8 @@ const PAGES = {
         <p class="note">Mỗi lần nhập PIN là một phiên, giữ 90 ngày. Máy bị đăng xuất phải nhập lại PIN.</p></section>`;
     }}),
   mang: () => sectionOfSetups('mang', 'Mạng & kết nối', `${cfg.devices.filter(d => !offline(d)).length}/${cfg.devices.length} thiết bị đang kết nối`,
-    row('hub', icon('server'), 'Hub Center', $('#conn')?.title || 'Kết nối máy chủ'),
-    id => id === 'hub' ? `<section class="setcard"><h3>${icon('server')}Hub Center</h3><div class="kvs"><span>Địa chỉ<b>${esc(location.host)}</b></span>
+    row('hub', icon('server'), 'iNIX Smart', $('#conn')?.title || 'Kết nối máy chủ'),
+    id => id === 'hub' ? `<section class="setcard"><h3>${icon('server')}iNIX Smart</h3><div class="kvs"><span>Địa chỉ<b>${esc(location.host)}</b></span>
       <span>Kết nối trực tiếp<b>${esc($('#conn')?.title || '—')}</b></span><span>Phòng<b>${cfg.zones.length}</b></span><span>Thiết bị<b>${cfg.devices.length}</b></span>
       <span>Số đo<b>${cfg.entities.length}</b></span><span>Mất kết nối<b>${cfg.devices.filter(offline).length}</b></span></div></section>` : ''),
   thongbao: () => sectionOfSetups('thongbao', 'Thông báo', alerts().length ? `${alerts().length} cảnh báo đang mở` : 'Không có cảnh báo',

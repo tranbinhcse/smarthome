@@ -18,7 +18,7 @@ import (
 )
 
 // Spotify phát qua hub (mục 18.3, giai đoạn 2): hubd chạy librespot (v0.8.0, dựng tĩnh) như tiến trình con, hiện là
-// thiết bị Spotify "Hub Center". librespot ghi PCM 44,1 kHz/16 bit stereo vào một FIFO; hubMusic.chunk() lấy từ đây
+// thiết bị Spotify "iNIX Smart". librespot ghi PCM 44,1 kHz/16 bit stereo vào một FIFO; hubMusic.chunk() lấy từ đây
 // trước nhạc MP3 nên mọi khu nghe Spotify. Không bật mDNS (container không ở mạng host): đăng nhập một lần bằng OAuth
 // của librespot (--enable-oauth --oauth-port 0): librespot in "Browse to: <url>" rồi đọc địa chỉ trả về từ stdin; hub
 // đưa url lên Cài đặt và chuyển địa chỉ người dùng dán vào. Thông tin đăng nhập librespot lưu ở thư mục cache, lần sau tự vào.
@@ -53,7 +53,7 @@ func newHubSpotify() *hubSpotify {
 		return def
 	}
 	s := &hubSpotify{bin: env("HUBD_LIBRESPOT", "librespot"), cache: env("HUBD_SPOTIFY_CACHE", "/db/librespot"),
-		name: env("HUBD_SPOTIFY_NAME", "Hub Center"), pcm: make(chan []byte, 25), state: "off", retry: 5 * time.Second}
+		name: env("HUBD_SPOTIFY_NAME", "iNIX Smart"), pcm: make(chan []byte, 25), state: "off", retry: 5 * time.Second}
 	s.fifo = filepath.Join(s.cache, "audio.fifo")
 	if s.available() && s.loggedIn() {
 		s.start(false)

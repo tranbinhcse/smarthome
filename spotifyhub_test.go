@@ -50,7 +50,7 @@ func fakeLibrespot() {
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, `[INFO librespot_core::session] Authenticated as 'thu' !`)
-	if arg["--name"] != "Hub Center" || arg["--backend"] != "pipe" || arg["--disable-discovery"] != "1" {
+	if arg["--name"] != "iNIX Smart" || arg["--backend"] != "pipe" || arg["--disable-discovery"] != "1" {
 		fmt.Fprintln(os.Stderr, "[ERROR librespot] tham số sai:", os.Args)
 		os.Exit(2)
 	}
@@ -165,7 +165,7 @@ func TestHubSpotifyLogin(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cache, "credentials.json")); err != nil {
 		t.Fatal("thông tin đăng nhập phải được lưu cho lần sau")
 	}
-	if s := hubSpot(t, mux, ck); s.Name != "Hub Center" {
+	if s := hubSpot(t, mux, ck); s.Name != "iNIX Smart" {
 		t.Fatalf("tên thiết bị Spotify: %+v", s)
 	}
 	if w := call(mux, "POST", "/api/spotify/hub", `{"do":"logout"}`, "", ck...); w.Code != 204 {

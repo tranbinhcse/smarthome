@@ -1,4 +1,4 @@
-// Hub Center: ảnh nền nhà (ngày/đêm) + widget kính mờ. Cả nhà -> tầng -> phòng, và trang Điện năng.
+// iNIX Smart: ảnh nền nhà (ngày/đêm) + widget kính mờ. Cả nhà -> tầng -> phòng, và trang Điện năng.
 // Cần app.js (api, esc, LOGIN_HTML), scene.js (SCENE: ảnh + vị trí nhãn), demo.js (DEMO_DATA, dùng khi ?demo).
 'use strict';
 const $ = (s, el = document) => el.querySelector(s);

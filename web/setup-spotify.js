@@ -5,7 +5,7 @@
   // Spotify chỉ trả về địa chỉ HTTPS: cổng 8443 của hub, chung chứng chỉ với micro trợ lý (scripts/tls-selfsigned.sh).
   const redirect = () => `https://${location.hostname}:8443/api/spotify/callback`;
   const on = () => SP.connected;
-  // Phát Spotify qua hub (spotifyhub.go): librespot trên hub là thiết bị "Hub Center"; đăng nhập một lần cho hub.
+  // Phát Spotify qua hub (spotifyhub.go): librespot trên hub là thiết bị "iNIX Smart"; đăng nhập một lần cho hub.
   let HS = null, hsAt = 0, hsPaste = '';
   const hsLoad = async () => { hsAt = Date.now(); const r = await fetch('/api/spotify/hub'); if (r.ok) { HS = await r.json(); U.soon(); } };
   document.addEventListener('input', e => { if (e.target.matches?.('[data-hsurl]')) hsPaste = e.target.value; });

@@ -430,7 +430,7 @@ func (m *hubMusic) chunk() ([]byte, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
-	case sp != nil && !m.spotHold: // Spotify phát trên "Hub Center": ra mọi khu, nhạc MP3 dừng
+	case sp != nil && !m.spotHold: // Spotify phát trên "iNIX Smart": ra mọi khu, nhạc MP3 dừng
 		m.playing = false
 		return sp, true
 	case sp == nil && m.spotHold && !m.spot.active():

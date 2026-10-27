@@ -173,7 +173,7 @@ func (s *spotify) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Spotify</title>
-<body style="font:17px system-ui;background:#0a1119;color:#e8eef4;padding:32px"><p>Đã kết nối Spotify. Đóng trang này và quay lại Hub Center.</p>
+<body style="font:17px system-ui;background:#0a1119;color:#e8eef4;padding:32px"><p>Đã kết nối Spotify. Đóng trang này và quay lại iNIX Smart.</p>
 <p><a style="color:#f6b93b" href="/#/caidat">Về trang Cài đặt</a></p>`)
 }
 
