@@ -181,6 +181,22 @@ Mỗi mục trong danh sách chỉ gồm `{uri, name, sub, art, ms, total}` (sub
 
 Ngắt kết nối: nút **Ngắt kết nối** trong Cài đặt (xoá refresh token ở hub). Muốn chắc chắn thu hồi quyền: spotify.com → Tài khoản → Ứng dụng → gỡ app.
 
+## Nhạc trên hub (file MP3, phát tới các amply)
+
+Hub tự phát nhạc, không cần mở app nào (mục 18.3 tài liệu thiết kế, `music.go` + `snapcast.go`). Mỗi amply có một **đầu nhận** cắm dây AUX/RCA: ESP32 + DAC I2S (PCM5102A) hoặc Raspberry Pi Zero 2 W + DAC, chạy snapclient có sẵn. Các khu phát đồng bộ cùng một nhạc; trên dashboard bật/tắt tiếng, chỉnh âm lượng, đặt tên từng khu.
+
+- **Nhạc:** chép file `.mp3` vào thư mục `music/` cạnh `docker-compose.yml`, hoặc cắm USB (máy Ubuntu cần tự gắn USB dưới `/media`, ví dụ bằng `udisks2`). Hub quét lại sau 30 giây; bỏ file và thư mục ẩn (`._*`, `.Trashes`) và symlink.
+- **Đầu nhận:** snapclient trỏ tới IP hub, cổng `1704` (vd. Pi: `apt install snapclient`, sửa `/etc/default/snapclient` thành `SNAPCLIENT_OPTS="--host 192.168.1.254 --hostID khu-cafe"`). Mở `ufw` cho LAN vào cổng 1704. Đặt `--hostID` theo khu để nhận ra dễ, đổi tên hiển thị ngay trên dashboard.
+- **Dashboard:** mở thanh nhạc → chạm đĩa → bảng trình phát → nguồn **Trên hub**: thư mục → bài, ô tìm, khu phát.
+
+| API (sau PIN) | |
+|---|---|
+| `GET /api/music/library` | `{files: [{id, title, folder}], roots: [{path, ok}]}` |
+| `GET /api/music/state` | `{playing, file, index, queue, pos_ms, dur_ms, zones: [{id, name, connected, volume, muted}]}` |
+| `POST /api/music/cmd` | `{do: play, files: [id...], index}` (hàng đợi mới, tối đa 2000 bài), `{do: play}` phát tiếp, `pause`, `next`, `prev`, `stop`, `{do: zone, id, volume?, muted?, name?}` |
+
+Luồng: PCM 44,1 kHz/16 bit stereo, khoảng 1,4 Mbit/s mỗi đầu nhận trong LAN, đệm 1 giây. Spotify phát qua hub (librespot) là giai đoạn sau.
+
 ## Vận hành
 
 | Việc | Lệnh |

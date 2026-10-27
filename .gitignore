@@ -28,3 +28,6 @@ web/images/*.png
 
 # Bản sao lưu tài khoản node của plugin dynamic security (firmware/README.md)
 dynamic-security.json
+
+# nhạc của người dùng (thư mục nhạc trên hub, music.go)
+/music/
