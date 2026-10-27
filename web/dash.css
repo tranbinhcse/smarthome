@@ -305,6 +305,14 @@ button.pt { text-align: left; }
 .mhead { display: flex; align-items: center; gap: 12px; padding: 4px 0 10px; } .mhead .mthumb { width: 56px; height: 56px; } .mhead b { font-size: 16px; font-weight: 600; }
 .mh { margin: 14px 8px 4px; font-size: 12px; font-weight: 500; color: var(--ink3); text-transform: uppercase; letter-spacing: .05em; }
 .mlist .empty, .mlist .note { padding: 12px 8px; }
+/* Nguồn nhạc trên hub: chọn nguồn, các khu phát (bật/tắt tiếng, âm lượng từng đầu nhận), biểu tượng thư mục/bài */
+.msrc { margin-bottom: 14px; }
+.hz { display: flex; align-items: center; gap: 10px; min-height: 48px; } .hz.lost { opacity: .55; }
+.hz .hzn { flex: 1; min-width: 0; text-align: left; }
+.hz .hzn b, .hz .hzn small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hz .hzn b { font-size: 14.5px; font-weight: 500; } .hz .hzn small { font-size: 12px; color: var(--ink2); }
+.mnow .hz input[type=range] { width: 38%; flex: none; }
+.mthumb.ic2 { display: grid; place-items: center; color: var(--ink2); } .mthumb.ic2 .ic { width: 20px; height: 20px; }
 @media (max-width: 900px) {
   .musicsheet { max-height: calc(100dvh - 24px); }
   .mgrid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
