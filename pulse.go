@@ -104,6 +104,7 @@ func (p *hubPulse) start(sock string) error {
 	p.cmd, p.done = c, done
 	go func() {
 		err := c.Wait()
+		os.Remove(sock) // socket cũ không còn ai nghe: có socket = PulseAudio đang chạy
 		close(done)
 		p.mu.Lock()
 		var died []func()

@@ -350,7 +350,7 @@ func (b *hubBT) run(timeout time.Duration, args ...string) (string, error) {
 // adapter: bluetoothd của máy chủ trả lời được không, adapter đã bật chưa; không được thì lý do (vd. AppArmor chặn D-Bus).
 func (b *hubBT) adapter() (ok, powered bool, err error) {
 	if _, err := os.Stat(b.dbus); err != nil {
-		return false, false, errors.New("container hubd chưa được gắn D-Bus hệ thống của máy (chờ profile AppArmor chỉ cho tới bluez, tài liệu mục 18.3)")
+		return false, false, errors.New("container hubd chưa được gắn D-Bus hệ thống của máy (docker-compose.yml: socket D-Bus + profile AppArmor inix-hubd, tài liệu mục 18.3)")
 	}
 	out, err := b.run(5*time.Second, "show")
 	if err == nil && !strings.Contains(out, "Controller ") {
@@ -519,11 +519,11 @@ func (o *hubOut) outCmd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "pair":
-		if err = o.bt.pair(mac); err == nil && !o.configured() {
+		if err = o.withPulse(func() error { return o.bt.pair(mac) }); err == nil && !o.configured() {
 			err = o.save(map[string]any{"out": "bt:" + mac}) // chưa chọn ngõ ra: dùng luôn loa vừa ghép đôi
 		}
 	case "connect":
-		err = o.bt.connect(mac)
+		err = o.withPulse(func() error { return o.bt.connect(mac) })
 	case "disconnect":
 		err = o.bt.disconnect(mac)
 	default:
@@ -535,6 +535,16 @@ func (o *hubOut) outCmd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+// withPulse: giữ PulseAudio trong lúc nối loa: bluez chỉ nối A2DP khi đã có endpoint (PulseAudio của hub đăng ký), không thì
+// báo profile-unavailable. Nối xong mà khu chưa phát thì PulseAudio dừng; khi có nhạc hub nối lại (hubOut.start).
+func (o *hubOut) withPulse(f func() error) error {
+	if err := o.pulse.acquire("bt", nil); err != nil {
+		return err
+	}
+	defer o.pulse.release("bt")
+	return f()
 }
 
 func (o *hubOut) save(patch map[string]any) error {

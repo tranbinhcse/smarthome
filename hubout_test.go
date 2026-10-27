@@ -95,6 +95,10 @@ func fakeAudioTool(tool string) {
 			find(a[1]).Trusted = true
 		case "connect":
 			d := find(a[1])
+			if _, err := os.Stat(filepath.Join(dir, "native")); err != nil { // như bluez: chưa có endpoint A2DP (PulseAudio chưa chạy)
+				fmt.Println("Failed to connect: org.bluez.Error.NotAvailable br-connection-profile-unavailable")
+				os.Exit(1)
+			}
 			if !d.Paired {
 				fmt.Println("Failed to connect: org.bluez.Error.Failed")
 				os.Exit(1)

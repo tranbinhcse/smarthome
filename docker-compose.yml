@@ -52,11 +52,15 @@ services:
       - tuya-state:/gen   # tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh); hubd chỉ ghi camera.yaml
       - hubd-db:/db
       - ./tls:/tls:ro
-      # Loa Bluetooth (hubout.go) cần bluetoothd của máy chủ qua D-Bus hệ thống, nhưng CHƯA gắn socket ở đây: hubd chạy root,
-      # D-Bus hệ thống mà không giới hạn thì hubd bị chiếm = chiếm máy chủ (systemd1, login1). Chờ profile AppArmor chỉ cho
-      # tới org.bluez (mục 18.3 tài liệu thiết kế). Không bao giờ gắn socket này cùng apparmor=unconfined.
+      # Loa Bluetooth (hubout.go): bluetoothd của máy chủ qua D-Bus hệ thống. hubd chạy root nên chỉ gắn socket này cùng profile
+      # AppArmor inix-hubd (bên dưới), không bao giờ cùng apparmor=unconfined. create_host_path: false: thiếu thì báo lỗi.
+      - { type: bind, source: /run/dbus/system_bus_socket, target: /run/dbus/system_bus_socket, bind: { create_host_path: false } }
     devices:
       - /dev/snd:/dev/snd   # khu "Loa nối vào hub": loa cắm jack 3,5 mm hoặc HDMI của hub
+    # deploy/apparmor/inix-hubd = docker-default + D-Bus chỉ tới bus và org.bluez (chặn systemd1, login1...). Phải nạp trên máy
+    # chủ trước: sudo cp deploy/apparmor/inix-hubd /etc/apparmor.d/ && sudo apparmor_parser -r -W /etc/apparmor.d/inix-hubd
+    security_opt:
+      - apparmor=inix-hubd
     ports:
       - "8080:8080"
       - "8443:8443"
