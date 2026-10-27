@@ -11,8 +11,9 @@
       `<p class="note">Tạo app tại developer.spotify.com → Dashboard → Create app, chọn Web API, điền Redirect URI đúng như dưới (có cả cổng 8443):</p>
       <p class="note"><b>${U.esc(redirect())}</b></p>
       <p class="note">Cần Spotify Premium: tài khoản tạo app và tài khoản phát nhạc (thêm vào User Management của app nếu khác nhau). Hub cần bật HTTPS và iPad đã tin chứng chỉ của hub (như nút nói trợ lý).</p>
-      <div class="kv">${U.ssave('spotify', 'Lưu Client ID')}${on() ? '<button class="pill" data-sact="spotify:off">Ngắt kết nối</button>'
-        : '<button class="pill amber" data-sact="spotify:login">Kết nối Spotify</button>'}</div>`;
+      ${SP.error ? `<p class="note bad">${U.esc(SP.error)}</p>` : ''}
+      <div class="kv">${U.ssave('spotify', 'Lưu Client ID')}${on() ? '' : `<button class="pill amber" data-sact="spotify:login">${SP.error ? 'Kết nối lại' : 'Kết nối Spotify'}</button>`}${
+        on() || SP.error ? '<button class="pill" data-sact="spotify:off">Ngắt kết nối</button>' : ''}</div>`;
   }
 
   async function act(what) {
@@ -31,5 +32,5 @@
   }
 
   SETUP.push({id: 'spotify', ns: 'spotify', icon: 'music', c: 'green', title: 'Spotify', body, act,
-    meta: () => on() ? `Đã kết nối${SP.device ? ', đang mở ở ' + U.esc(SP.device.name) : ''}` : 'Chưa kết nối'});
+    meta: () => on() ? `Đã kết nối${SP.device ? ', đang mở ở ' + U.esc(SP.device.name) : ''}` : SP.error ? 'Spotify từ chối' : 'Chưa kết nối'});
 })();

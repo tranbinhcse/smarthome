@@ -826,7 +826,11 @@ let SP = {connected: false}, spDevs = null, spDevOpen = false;
 const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
 const spZone = d => d && cfg.zones.find(z => z.type !== 'panel' && [z.name, z.id].some(n => fold(d.name).includes(fold(n))));
 async function spFetch() {
-  try { const r = await fetch('/api/spotify/player'); if (r.ok) { SP = await r.json(); soon(); } } catch (_) { /* mất mạng: giữ trạng thái cũ */ }
+  try {
+    const r = await fetch('/api/spotify/player');
+    if (r.ok) { SP = await r.json(); soon(); }
+    else if (r.status !== 401) { SP = {connected: false, error: await r.text()}; soon(); }   // đã kết nối nhưng Spotify từ chối: hiện lý do ở Cài đặt
+  } catch (_) { /* mất mạng: giữ trạng thái cũ */ }
   if (SP.connected && playerOpen && !spDevs) spLoadDevs();   // mở trình phát trước lần hỏi đầu tiên
 }
 function spLoop() { if (!document.hidden) spFetch(); setTimeout(spLoop, SP.connected ? 5000 : 30000); }

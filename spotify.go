@@ -267,6 +267,7 @@ func spotifyFail(w http.ResponseWriter, code int, body []byte, err error) {
 	case bytes.Contains(body, []byte("NO_ACTIVE_DEVICE")):
 		http.Error(w, "Chưa có thiết bị nào đang mở Spotify: chọn thiết bị phát", 409)
 	case code == 403:
+		log.Printf("spotify: HTTP 403 %.300s", body) // lời của Spotify (không chứa token): Premium, User Management...
 		http.Error(w, "Spotify từ chối: tài khoản cần Premium và phải có trong User Management của app", 403)
 	default:
 		log.Printf("spotify: HTTP %d %.300s", code, body)
