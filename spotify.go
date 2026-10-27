@@ -15,17 +15,21 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Spotify (mục 18 thiết kế): hubd đăng nhập OAuth PKCE và gọi Web API thay trình duyệt. Client ID và refresh token
 // nằm trong kho cấu hình nhóm "spotify" (settings.go che refresh_token); access token chỉ ở RAM. Trình duyệt chỉ gọi
 // /api/spotify/* sau PIN, không bao giờ thấy token. Spotify chỉ nhận redirect URI HTTPS (trừ 127.0.0.1), nên trang
 // trả về nằm ở cổng HTTPS 8443, chung chứng chỉ với micro trợ lý (scripts/tls-selfsigned.sh). Điều khiển phát cần Premium.
-const spotifyScopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing"
+// Thêm scope thì tài khoản đã kết nối phải bấm "Kết nối lại": hub so với scope Spotify đã cấp, /api/spotify/player báo reconnect.
+const spotifyScopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing" +
+	" playlist-read-private playlist-read-collaborative user-library-read" // playlist riêng, cùng sửa, bài đã thích
 
 // Lệnh điều khiển phát dashboard được gọi; ngoài bảng này hubd không chuyển gì tới Spotify.
 var spotifyCmds = map[string]struct{ method, path string }{
@@ -35,10 +39,14 @@ var spotifyCmds = map[string]struct{ method, path string }{
 	"prev":     {"POST", "/me/player/previous"},
 	"volume":   {"PUT", "/me/player/volume"},
 	"transfer": {"PUT", "/me/player"}, // chuyển nơi phát sang thiết bị khác, phát tiếp
+	"queue":    {"POST", "/me/player/queue"},
+	"seek":     {"PUT", "/me/player/seek"},
+	"shuffle":  {"PUT", "/me/player/shuffle"},
 }
 
 var (
 	spotifyDevRe  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	spotifyURIRe  = regexp.MustCompile(`^spotify:(track|album|playlist|artist):[A-Za-z0-9]{22}$`)
 	errSpotifyOff = errors.New("chưa kết nối Spotify")
 )
 
@@ -52,6 +60,7 @@ type spotify struct {
 	access  string
 	expires time.Time
 	rt      string // refresh token đã đổi ra access (xoá/đổi trong Cài đặt thì lấy lại)
+	scope   string // scope Spotify đã cấp cho token đang dùng; rỗng = chưa biết
 }
 
 type spotifyLogin struct {
@@ -63,6 +72,7 @@ type spotifyToken struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int    `json:"expires_in"`
+	Scope        string `json:"scope"`
 }
 
 // Thiết bị Spotify Connect: giữ tên trường của Spotify, chỉ lấy các trường dashboard cần.
@@ -89,6 +99,10 @@ func mountSpotify(mux *http.ServeMux, h *Hub, a *Auth) {
 	mux.HandleFunc("GET /api/spotify/player", a.Require(s.player))
 	mux.HandleFunc("GET /api/spotify/devices", a.Require(s.devices))
 	mux.HandleFunc("POST /api/spotify/cmd", a.Require(s.cmd))
+	mux.HandleFunc("GET /api/spotify/search", a.Require(s.search))
+	mux.HandleFunc("GET /api/spotify/playlists", a.Require(s.playlists))
+	mux.HandleFunc("GET /api/spotify/tracks", a.Require(s.tracks))
+	mux.HandleFunc("GET /api/spotify/queue", a.Require(s.queue))
 }
 
 func (s *spotify) setting(k string) string {
@@ -192,6 +206,9 @@ func (s *spotify) keep(t spotifyToken, rt string) error {
 		}
 	}
 	s.access, s.rt = t.AccessToken, rt
+	if t.Scope != "" {
+		s.scope = t.Scope
+	}
 	s.expires = time.Now().Add(time.Duration(t.ExpiresIn)*time.Second - time.Minute)
 	return nil
 }
@@ -266,6 +283,8 @@ func spotifyFail(w http.ResponseWriter, code int, body []byte, err error) {
 		http.Error(w, "Cần tài khoản Spotify Premium để điều khiển phát", 403)
 	case bytes.Contains(body, []byte("NO_ACTIVE_DEVICE")):
 		http.Error(w, "Chưa có thiết bị nào đang mở Spotify: chọn thiết bị phát", 409)
+	case bytes.Contains(body, []byte("scope")):
+		http.Error(w, "Thiếu quyền Spotify cho mục này: vào Cài đặt, mục Spotify, bấm Kết nối lại", 403)
 	case code == 403:
 		log.Printf("spotify: HTTP 403 %.300s", body) // lời của Spotify (không chứa token): Premium, User Management...
 		http.Error(w, "Spotify từ chối: tài khoản cần Premium và phải có trong User Management của app", 403)
@@ -287,33 +306,27 @@ func (s *spotify) player(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"connected": true, "playing": false}
+	if s.reconnect() {
+		out["reconnect"] = true
+	}
 	var p struct {
-		Playing bool           `json:"is_playing"`
-		Device  *spotifyDevice `json:"device"`
-		Item    *struct {
-			Name    string
-			Artists []struct{ Name string }
-			Album   struct {
-				Images []struct {
-					URL   string
-					Width int
-				}
-			}
-		}
+		Playing  bool           `json:"is_playing"`
+		Shuffle  bool           `json:"shuffle_state"`
+		Progress int            `json:"progress_ms"`
+		Device   *spotifyDevice `json:"device"`
+		Context  *struct{ URI string }
+		Item     *spotifyRaw
 	}
 	if code == 200 && json.Unmarshal(b, &p) == nil {
-		out["playing"], out["device"] = p.Playing, p.Device
-		if it := p.Item; it != nil {
-			var names []string
-			for _, a := range it.Artists {
-				names = append(names, a.Name)
-			}
-			out["track"], out["artist"] = it.Name, strings.Join(names, ", ")
-			// ảnh bìa nhỏ nhất còn rộng ≥ 200 px (Spotify xếp ảnh rộng nhất trước): đủ nét cho đĩa nhạc trên màn Retina
-			for i, im := range it.Album.Images {
-				if i == 0 || im.Width >= 200 {
-					out["art"] = im.URL
-				}
+		out["playing"], out["device"], out["shuffle"], out["progress_ms"] = p.Playing, p.Device, p.Shuffle, p.Progress
+		if p.Context != nil {
+			out["context"] = p.Context.URI // playlist/album đang phát: bảng trình phát tô đậm
+		}
+		if p.Item != nil {
+			it := p.Item.item()
+			out["track"], out["artist"], out["uri"], out["duration_ms"] = it.Name, it.Sub, it.URI, it.MS
+			if p.Item.Album != nil {
+				out["art"] = spotifyArt(p.Item.Album.Images, 200) // đủ nét cho đĩa nhạc và bìa lớn trên màn Retina
 			}
 		}
 	}
@@ -335,8 +348,11 @@ func (s *spotify) devices(w http.ResponseWriter, r *http.Request) {
 // cmd: {do, device?, volume?}; do thuộc spotifyCmds. device = id Spotify Connect (bỏ trống = thiết bị đang phát).
 func (s *spotify) cmd(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Do, Device string
-		Volume     *int
+		Do, Device, Context, Offset, URI string
+		URIs                             []string
+		Volume                           *int
+		Position                         *int `json:"position_ms"`
+		State                            *bool
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b) != nil {
 		http.Error(w, "cần JSON {do, device, volume}", 400)
@@ -361,8 +377,32 @@ func (s *spotify) cmd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, _ = json.Marshal(map[string]any{"device_ids": []string{b.Device}, "play": true})
+	case "queue":
+		if spotifyKind(b.URI) != "track" {
+			http.Error(w, "chọn một bài để thêm vào hàng đợi", 400)
+			return
+		}
+		q.Set("uri", b.URI)
+	case "seek":
+		if b.Position == nil || *b.Position < 0 {
+			http.Error(w, "vị trí tua không hợp lệ", 400)
+			return
+		}
+		q.Set("position_ms", strconv.Itoa(*b.Position))
+	case "shuffle":
+		if b.State == nil {
+			http.Error(w, "cần state true hoặc false", 400)
+			return
+		}
+		q.Set("state", strconv.FormatBool(*b.State))
+	case "play":
+		var ok bool
+		if body, ok = spotifyPlayBody(b.Context, b.Offset, b.URIs); !ok {
+			http.Error(w, "bài hoặc danh sách phát không hợp lệ", 400)
+			return
+		}
 	}
-	if b.Device != "" && body == nil {
+	if b.Device != "" && b.Do != "transfer" {
 		q.Set("device_id", b.Device)
 	}
 	code, resp, err := s.call(r.Context(), c.method, c.path, q, body)
@@ -371,4 +411,224 @@ func (s *spotify) cmd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spotifyFail(w, code, resp, err)
+}
+
+// Một mục gọn cho dashboard: bài hát, playlist, album hay nghệ sĩ (phân biệt bằng uri spotify:<loại>:<id>).
+type spotifyItem struct {
+	URI   string `json:"uri"`
+	Name  string `json:"name"`
+	Sub   string `json:"sub,omitempty"`   // nghệ sĩ (bài, album) hoặc chủ playlist
+	Art   string `json:"art,omitempty"`   // ảnh bìa nhỏ
+	MS    int    `json:"ms,omitempty"`    // độ dài bài
+	Total int    `json:"total,omitempty"` // số bài của playlist
+}
+
+// Ảnh nhỏ nhất còn rộng ≥ min px (Spotify xếp ảnh rộng nhất trước); không có ảnh nào đủ rộng thì ảnh đầu.
+type spotifyImage struct {
+	URL   string
+	Width int
+}
+
+func spotifyArt(ims []spotifyImage, min int) (art string) {
+	for i, im := range ims {
+		if i == 0 || im.Width >= min {
+			art = im.URL
+		}
+	}
+	return art
+}
+
+// Đối tượng Spotify (bài, playlist, album, nghệ sĩ): chỉ đọc các trường cần cho spotifyItem, phần còn lại bỏ.
+type spotifyRaw struct {
+	URI, Name  string
+	DurationMS int `json:"duration_ms"`
+	Artists    []struct{ Name string }
+	Images     []spotifyImage
+	Album      *struct{ Images []spotifyImage }
+	Owner      *struct {
+		DisplayName string `json:"display_name"`
+	}
+	Items  *struct{ Total int } // số bài của playlist (khoá mới từ 02/2026)
+	Tracks *struct{ Total int } // khoá cũ, Spotify còn trả song song
+}
+
+func (r *spotifyRaw) item() spotifyItem {
+	it := spotifyItem{URI: r.URI, Name: r.Name, MS: r.DurationMS, Art: spotifyArt(r.Images, 120)}
+	if r.Album != nil {
+		it.Art = spotifyArt(r.Album.Images, 120)
+	}
+	var names []string
+	for _, a := range r.Artists {
+		names = append(names, a.Name)
+	}
+	it.Sub = strings.Join(names, ", ")
+	if r.Owner != nil {
+		it.Sub = r.Owner.DisplayName
+	}
+	if r.Items != nil {
+		it.Total = r.Items.Total
+	} else if r.Tracks != nil {
+		it.Total = r.Tracks.Total
+	}
+	return it
+}
+
+// spotifyItems: bỏ mục null (Spotify trả null cho bài bị gỡ, có lúc cả playlist trong kết quả tìm).
+func spotifyItems(raws []*spotifyRaw) []spotifyItem {
+	out := []spotifyItem{}
+	for _, x := range raws {
+		if x != nil && x.URI != "" {
+			out = append(out, x.item())
+		}
+	}
+	return out
+}
+
+// spotifyKind: loại của một uri hợp lệ (track, album, playlist, artist); rỗng nếu không hợp lệ.
+func spotifyKind(u string) string {
+	if m := spotifyURIRe.FindStringSubmatch(u); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// spotifyPlayBody: thân lệnh phát. Không có gì = phát tiếp; context = album/playlist/nghệ sĩ, offset = bài bắt đầu
+// (Spotify chỉ nhận offset với album/playlist); uris = danh sách bài (bài đã thích, kết quả tìm), tối đa 50.
+func spotifyPlayBody(ctx, offset string, uris []string) ([]byte, bool) {
+	k := spotifyKind(ctx)
+	switch {
+	case ctx == "" && offset == "" && len(uris) == 0:
+		return nil, true
+	case ctx != "" && (k == "" || k == "track"),
+		offset != "" && (k != "album" && k != "playlist" || spotifyKind(offset) != "track"),
+		len(uris) > 0 && (ctx != "" || len(uris) > 50):
+		return nil, false
+	}
+	for _, u := range uris {
+		if spotifyKind(u) != "track" {
+			return nil, false
+		}
+	}
+	m := map[string]any{}
+	if ctx != "" {
+		m["context_uri"] = ctx
+	}
+	if offset != "" {
+		m["offset"] = map[string]string{"uri": offset}
+	}
+	if len(uris) > 0 {
+		m["uris"] = uris
+	}
+	b, _ := json.Marshal(m)
+	return b, true
+}
+
+// reconnect: token đang dùng thiếu scope hub cần (kết nối từ bản trước): dashboard nhắc Kết nối lại.
+func (s *spotify) reconnect() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	have := strings.Fields(s.scope)
+	return len(have) > 0 && slices.ContainsFunc(strings.Fields(spotifyScopes), func(want string) bool { return !slices.Contains(have, want) })
+}
+
+// get: GET Web API rồi đọc JSON vào v; lỗi thì đã trả lời trình duyệt bằng spotifyFail.
+func (s *spotify) get(w http.ResponseWriter, r *http.Request, path string, q url.Values, v any) bool {
+	code, b, err := s.call(r.Context(), "GET", path, q, nil)
+	if err == nil && code == 200 && json.Unmarshal(b, v) == nil {
+		return true
+	}
+	spotifyFail(w, code, b, err)
+	return false
+}
+
+// search: bài hát, playlist, album, nghệ sĩ; Spotify từ 02/2026 trả tối đa 10 kết quả mỗi loại.
+func (s *spotify) search(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" || utf8.RuneCountInString(q) > 200 {
+		http.Error(w, "nhập từ khoá tìm (tối đa 200 ký tự)", 400)
+		return
+	}
+	var res map[string]struct{ Items []*spotifyRaw }
+	if !s.get(w, r, "/search", url.Values{"q": {q}, "type": {"track,playlist,album,artist"}, "limit": {"10"}}, &res) {
+		return
+	}
+	out := map[string][]spotifyItem{}
+	for _, k := range []string{"tracks", "playlists", "albums", "artists"} {
+		out[k] = spotifyItems(res[k].Items)
+	}
+	writeJSON(w, out)
+}
+
+// playlists: playlist của tài khoản (tự tạo, cùng sửa, đang theo dõi).
+func (s *spotify) playlists(w http.ResponseWriter, r *http.Request) {
+	var res struct{ Items []*spotifyRaw }
+	// ponytail: chỉ 50 playlist đầu; nhà có nhiều hơn thì thêm phân trang (offset)
+	if s.get(w, r, "/me/playlists", url.Values{"limit": {"50"}}, &res) {
+		writeJSON(w, map[string][]spotifyItem{"playlists": spotifyItems(res.Items)})
+	}
+}
+
+// tracks: bài trong một playlist (spotify:playlist:<id>), album (spotify:album:<id>) hoặc bài đã thích (of=liked); 50 bài đầu.
+func (s *spotify) tracks(w http.ResponseWriter, r *http.Request) {
+	of := r.URL.Query().Get("of")
+	kind, id := spotifyKind(of), of[strings.LastIndex(of, ":")+1:]
+	var list []*spotifyRaw
+	switch {
+	case of == "liked":
+		var res struct{ Items []struct{ Track *spotifyRaw } }
+		if !s.get(w, r, "/me/tracks", url.Values{"limit": {"50"}}, &res) {
+			return
+		}
+		for _, x := range res.Items {
+			list = append(list, x.Track)
+		}
+	case kind == "album":
+		var res struct {
+			Images []spotifyImage
+			Tracks struct{ Items []*spotifyRaw }
+		}
+		if !s.get(w, r, "/albums/"+id, nil, &res) {
+			return
+		}
+		out := spotifyItems(res.Tracks.Items)
+		for i := range out {
+			out[i].Art = spotifyArt(res.Images, 120) // bài trong album không kèm ảnh: dùng bìa album
+		}
+		writeJSON(w, map[string][]spotifyItem{"tracks": out})
+		return
+	case kind == "playlist":
+		code, b, err := s.call(r.Context(), "GET", "/playlists/"+id+"/items", url.Values{"limit": {"50"}}, nil)
+		if err == nil && code == 403 && !bytes.Contains(b, []byte("scope")) {
+			http.Error(w, "Spotify chỉ cho xem bài của playlist bạn tạo hoặc cùng sửa. Vẫn phát được cả playlist.", 403)
+			return
+		}
+		var res struct {
+			Items []struct {
+				IsLocal bool `json:"is_local"`
+				Item    *spotifyRaw
+			}
+		}
+		if err != nil || code != 200 || json.Unmarshal(b, &res) != nil {
+			spotifyFail(w, code, b, err)
+			return
+		}
+		for _, x := range res.Items {
+			if !x.IsLocal { // file trên máy người dùng: API không phát được
+				list = append(list, x.Item)
+			}
+		}
+	default:
+		http.Error(w, "of là spotify:playlist:<id>, spotify:album:<id> hoặc liked", 400)
+		return
+	}
+	writeJSON(w, map[string][]spotifyItem{"tracks": spotifyItems(list)})
+}
+
+// queue: 20 bài kế tiếp.
+func (s *spotify) queue(w http.ResponseWriter, r *http.Request) {
+	var res struct{ Queue []*spotifyRaw }
+	if s.get(w, r, "/me/player/queue", nil, &res) {
+		q := spotifyItems(res.Queue)
+		writeJSON(w, map[string][]spotifyItem{"queue": q[:min(len(q), 20)]})
+	}
 }

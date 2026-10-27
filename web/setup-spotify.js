@@ -12,7 +12,8 @@
       <p class="note"><b>${U.esc(redirect())}</b></p>
       <p class="note">Cần Spotify Premium: tài khoản tạo app và tài khoản phát nhạc (thêm vào User Management của app nếu khác nhau). Hub cần bật HTTPS và iPad đã tin chứng chỉ của hub (như nút nói trợ lý).</p>
       ${SP.error ? `<p class="note bad">${U.esc(SP.error)}</p>` : ''}
-      <div class="kv">${U.ssave('spotify', 'Lưu Client ID')}${on() ? '' : `<button class="pill amber" data-sact="spotify:login">${SP.error ? 'Kết nối lại' : 'Kết nối Spotify'}</button>`}${
+      ${SP.reconnect ? '<p class="note bad">Trình phát mới cần thêm quyền xem playlist và bài đã thích: bấm Kết nối lại rồi đồng ý trên Spotify.</p>' : ''}
+      <div class="kv">${U.ssave('spotify', 'Lưu Client ID')}${on() && !SP.reconnect ? '' : `<button class="pill amber" data-sact="spotify:login">${SP.error || SP.reconnect ? 'Kết nối lại' : 'Kết nối Spotify'}</button>`}${
         on() || SP.error ? '<button class="pill" data-sact="spotify:off">Ngắt kết nối</button>' : ''}</div>`;
   }
 
@@ -32,5 +33,5 @@
   }
 
   SETUP.push({id: 'spotify', ns: 'spotify', icon: 'music', c: 'green', title: 'Spotify', body, act,
-    meta: () => on() ? `Đã kết nối${SP.device ? ', đang mở ở ' + U.esc(SP.device.name) : ''}` : SP.error ? 'Spotify từ chối' : 'Chưa kết nối'});
+    meta: () => on() && SP.reconnect ? 'Cần kết nối lại' : on() ? `Đã kết nối${SP.device ? ', đang mở ở ' + U.esc(SP.device.name) : ''}` : SP.error ? 'Spotify từ chối' : 'Chưa kết nối'});
 })();
