@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,8 @@ type hubMusic struct {
 	playing bool
 	src     *musicSource
 }
+
+var macRe = regexp.MustCompile(`^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$`)
 
 const musicMaxFiles = 20000 // ponytail: quét cả cây mỗi lần; thư viện lớn hơn thì cần chỉ mục lưu SQLite
 
@@ -145,8 +148,11 @@ func (m *hubMusic) zones() []musicZone {
 	for _, c := range m.snap.clients() {
 		z := m.zone(c.ID)
 		z.Connected = true
-		if z.Name == "" {
-			z.Name = c.Name
+		if z.Name == "" { // chưa đặt tên: theo hostID (--hostID khu-cafe); hostID là MAC (mặc định snapclient) thì theo hostname
+			z.Name = c.ID
+			if macRe.MatchString(c.ID) {
+				z.Name = c.Name
+			}
 		}
 		out, seen[c.ID] = append(out, z), true
 	}

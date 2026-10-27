@@ -229,6 +229,23 @@ func TestMusicZones(t *testing.T) {
 	for i := 0; i < 100 && len(getState(t, mux, ck).Zones) == 0; i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
+	// tên mặc định: hostID (snapclient --hostID khu-cafe); hostID là địa chỉ MAC (mặc định của snapclient) thì lấy hostname
+	m := dialSnap(t, addr, "00:11:22:33:44:55")
+	m.read()
+	for i := 0; i < 100 && len(getState(t, mux, ck).Zones) < 2; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	names := map[string]string{}
+	for _, z := range getState(t, mux, ck).Zones {
+		names[z.ID] = z.Name
+	}
+	if names["aa:bb:cc"] != "aa:bb:cc" || names["00:11:22:33:44:55"] != "loa-00:11:22:33:44:55" {
+		t.Fatalf("tên mặc định của khu: %v", names)
+	}
+	m.c.Close()
+	for i := 0; i < 100 && len(getState(t, mux, ck).Zones) > 1; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
 	cmd(t, mux, ck, `{"do":"zone","id":"aa:bb:cc","volume":30,"muted":true,"name":"Khu cafe"}`, 204)
 	if st := settingsOf(t, f.readType(3)); st.Volume != 30 || !st.Muted {
 		t.Fatalf("đầu nhận phải nhận mức mới: %+v", st)
