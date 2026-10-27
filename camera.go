@@ -120,13 +120,26 @@ func (c *cams) snapshot(w http.ResponseWriter, r *http.Request) {
 	defer res.Body.Close()
 	// chỉ chuyển ảnh; lỗi XML của đầu ghi ghi log, không đưa ra trình duyệt
 	if ct := res.Header.Get("Content-Type"); res.StatusCode != 200 || !strings.HasPrefix(ct, "image/") {
-		log.Printf("ảnh camera %s: HTTP %d %s", d.ID, res.StatusCode, ct)
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
+		log.Printf("ảnh camera %s: HTTP %d %s %s", d.ID, res.StatusCode, ct, isapiReason(b))
 		http.Error(w, "đầu ghi không trả ảnh", 502)
 		return
 	}
 	w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
 	w.Header().Set("Cache-Control", "private, max-age=30")
 	io.Copy(w, io.LimitReader(res.Body, 8<<20))
+}
+
+// isapiReason: lý do trong <ResponseStatus> lỗi của đầu ghi (vd "Invalid Operation/notSupport"), không chứa tài khoản.
+func isapiReason(b []byte) string {
+	var s struct {
+		Status string `xml:"statusString"`
+		Sub    string `xml:"subStatusCode"`
+	}
+	if xml.Unmarshal(b, &s) != nil {
+		return ""
+	}
+	return s.Status + "/" + s.Sub
 }
 
 // live chuyển tiếp WebSocket của go2rtc (MSE + báo hiệu WebRTC). Nguồn do hubd dựng từ cấu hình, bỏ mọi tham số
