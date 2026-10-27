@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -81,5 +82,33 @@ func TestSettingsSecretBoundToURL(t *testing.T) {
 	}
 	if s := put(`{"url":"http://192.168.1.20:11434/v1","api_key":"sk-moi"}`); s["api_key"] != "sk-moi" {
 		t.Fatalf("đổi url kèm khoá mới: %v", s)
+	}
+}
+
+// Giọng đọc, xưng hô, giờ yên lặng (Cài đặt → Giọng và xưng hô): voiced đọc nhóm "voice" bằng token trợ lý.
+func TestAssistantReadsVoiceSettings(t *testing.T) {
+	mux, _, pub := assistantMux(t, Config{})
+	ck := call(mux, "POST", "/api/login", `{"pin":"1234"}`, "").Result().Cookies()
+	if w := call(mux, "PUT", "/api/settings/voice", `{"voice":"Trúc Ly","owner":"anh Bình","quiet_from":"22:00"}`, "", ck...); w.Code != 204 {
+		t.Fatalf("lưu: %d", w.Code)
+	}
+	if b := call(mux, "GET", "/api/assistant/settings/voice", "", testTok).Body.String(); !strings.Contains(b, `"owner":"anh Bình"`) {
+		t.Fatalf("voiced không đọc được nhóm voice: %s", b)
+	}
+	if !strings.Contains(strings.Join(*pub, "\n"), "hubd/settings/voice changed") {
+		t.Fatalf("lưu phải báo voiced đọc lại: %v", *pub)
+	}
+}
+
+// Sắp xếp thiết bị chỉ gửi trường vừa đổi. Đổi tên một thiết bị không được làm mất phòng đã gán trước đó (2026-10-27):
+// object của từng thiết bị trộn theo trường, null xoá đúng trường đó.
+func TestSettingsMergeDeviceFields(t *testing.T) {
+	db := newDB(t)
+	db.PutSetting("devices", map[string]any{"a": map[string]any{"zone": "cafe", "name": "Đèn"}})
+	db.PutSetting("devices", map[string]any{"a": map[string]any{"name": "Đèn trần", "kind": "light"}, "b": map[string]any{"zone": "kho"}})
+	db.PutSetting("devices", map[string]any{"a": map[string]any{"kind": nil}})
+	want := map[string]any{"a": map[string]any{"zone": "cafe", "name": "Đèn trần"}, "b": map[string]any{"zone": "kho"}}
+	if got := db.Setting("devices"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("devices = %v, muốn %v", got, want)
 	}
 }

@@ -1,4 +1,4 @@
-import contextlib, io, json, re, socket, tempfile, threading, unittest, urllib.error, urllib.request, wave
+import contextlib, io, json, re, socket, tempfile, threading, time, unittest, urllib.error, urllib.request, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -33,21 +33,23 @@ CFG = {
 
 class FakeHub:
     """Giả API trợ lý của hubd, cùng quy tắc chặn: id trong locked → 403."""
-    def __init__(self, values=None, settings=None):
-        self.calls, self.values, self.alerts, self.settings = [], values or {}, [], settings or {}
+    def __init__(self, values=None, settings=None, cfg=CFG):
+        self.calls, self.values, self.alerts, self.settings, self.cfg, self.voice = [], values or {}, [], settings or {}, cfg, {}
 
     def __call__(self, method, path, body=None):
         self.calls.append((method, path, body))
         if path == "/config":
-            return 200, CFG
+            return 200, self.cfg
         if path == "/state":
             return 200, {"values": self.values, "alerts": self.alerts}
         if path == "/settings/ai":
             return 200, self.settings
+        if path == "/settings/voice":
+            return 200, self.voice
         if path.startswith("/history"):
             return 200, [{"t": 1000, "v": 80}, {"t": 2000, "v": 90}, {"t": 3000, "v": 85}]
         target = body["device"] if path == "/cmd" else path.rsplit("/", 1)[-1]
-        if target in CFG["locked"]:
+        if target in self.cfg["locked"]:
             return 403, "cần PIN"
         return 204, None
 
@@ -228,7 +230,7 @@ class TestAI(AICase):
 
     def test_errors_become_spoken_replies(self):
         ask = lambda ai: voiced.answer("trời hôm nay thế nào", FakeHub(), ai)
-        self.assertEqual(ask(voiced.AI(f"http://127.0.0.1:{closed_port()}/v1", "k", "m")), voiced.OFFLINE)
+        self.assertEqual(ask(voiced.AI(f"http://127.0.0.1:{closed_port()}/v1", "k", "m")), voiced.Persona().fmt(voiced.OFFLINE))
         self.assertEqual(ask(voiced.AI(self.fake(status=401).url, "sai", "m")), voiced.AI_KEY)
         self.assertEqual(ask(voiced.AI(self.fake(status=500).url, "k", "m")), voiced.AI_ERROR)
         refused = self.fake({"role": "assistant", "content": None, "refusal": "không"})
@@ -236,7 +238,7 @@ class TestAI(AICase):
 
     def test_no_key_sends_no_authorization(self):
         api = self.fake(say("Chào"))  # Ollama, LM Studio trong LAN: không cần khoá
-        self.assertEqual(voiced.answer("chào", FakeHub(), voiced.AI(api.url, "", "llama")), "Chào")
+        self.assertEqual(voiced.answer("kể chuyện cười", FakeHub(), voiced.AI(api.url, "", "llama")), "Chào")
         self.assertIsNone(api.reqs[0][2])
 
     def test_fixed_commands_never_call_ai(self):
@@ -244,7 +246,7 @@ class TestAI(AICase):
         ai = voiced.AI(api.url, "k", "m")
         self.assertEqual(voiced.answer("BẬT ĐÈN KHO", FakeHub(), ai), "Đã bật Đèn Kho.")
         self.assertEqual(api.reqs, [])
-        self.assertEqual(voiced.answer("kể chuyện cười", FakeHub(), None), voiced.FIXED_ONLY)
+        self.assertEqual(voiced.answer("kể chuyện cười", FakeHub(), None), voiced.Persona().fmt(voiced.FIXED_ONLY))
         wrong_token = lambda *a: (401, "cần token trợ lý")
         self.assertIn("token trợ lý", voiced.answer("bật đèn kho", wrong_token, ai))
 
@@ -383,7 +385,11 @@ class TestServer(unittest.TestCase):
         def stt(rate, samples):
             self.heard.append((rate, samples.shape))
             return "BẬT ĐÈN KHO"
-        tts = voiced.TTS(Path(self.tmp.name), lambda text, path: path.write_bytes(wav_bytes(seconds=0.1)))
+        self.spoken = []
+        def synth(text, path, voice):
+            self.spoken.append((voice, text))
+            path.write_bytes(wav_bytes(seconds=0.1))
+        tts = voiced.TTS(Path(self.tmp.name), synth)
         self.app = voiced.App(FakeHub(), None, stt, tts)
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), voiced.handler(self.app))
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -418,7 +424,7 @@ class TestServer(unittest.TestCase):
         self.app.hub.settings = {}
         self.app.on_mqtt("hubd/settings/ai", "changed")
         self.assertIsNone(self.app.ai)
-        self.assertEqual(self.post(json.dumps({"text": "kể chuyện cười"}).encode(), "application/json")["reply"], voiced.FIXED_ONLY)
+        self.assertEqual(self.post(json.dumps({"text": "kể chuyện cười"}).encode(), "application/json")["reply"], voiced.Persona().fmt(voiced.FIXED_ONLY))
 
     def test_ai_check_endpoint(self):
         api = self.fake()
@@ -430,14 +436,14 @@ class TestServer(unittest.TestCase):
     def test_brief_endpoint(self):
         r = self.post(b"", "application/json", "/voice/brief")
         self.assertEqual(r["reply"], voiced.brief(CFG, {"values": {}, "alerts": []}))
-        self.assertRegex(r["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertRegex(r["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
 
     def test_ask_with_wav_and_text(self):
         r = self.post(wav_bytes(channels=2), "audio/wav")
         self.assertEqual((r["heard"], r["reply"]), ("bật đèn kho", "Đã bật Đèn Kho."))
         self.assertEqual(self.heard, [(48000, (24000,))])  # stereo → mono, giữ tần số gốc cho sherpa tự đổi
-        self.assertRegex(r["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
-        self.assertEqual(urllib.request.urlopen(self.base + r["audio"]).read()[:4], b"RIFF")
+        self.assertRegex(r["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertEqual(urllib.request.urlopen(self.base + r["audio"][0]).read()[:4], b"RIFF")
         r = self.post(json.dumps({"text": "ra khỏi nhà"}).encode(), "application/json")
         self.assertEqual(r["reply"], "Đã chạy Ra khỏi nhà.")
 
@@ -445,7 +451,7 @@ class TestServer(unittest.TestCase):
         # Chạm nút rồi gửi ngay: WAV rỗng/ngắn làm sherpa-onnx lỗi ("Invalid input shape {0,80}") → phải trả "chưa nghe rõ".
         for seconds in (0, 0.1):
             r = self.post(wav_bytes(seconds=seconds), "audio/wav")
-            self.assertEqual((r["heard"], r["reply"]), ("", voiced.NOT_HEARD))
+            self.assertEqual((r["heard"], r["reply"]), ("", voiced.Persona().fmt(voiced.NOT_HEARD)))
         self.assertEqual(self.heard, [])
 
     def test_bad_input_and_path(self):
@@ -465,7 +471,7 @@ class TestServer(unittest.TestCase):
         self.app.on_mqtt("hubd/alert/ack", "{}")
         ev = [json.loads(resp.readline()[6:]), resp.readline(), json.loads(resp.readline()[6:])]
         self.assertEqual((ev[0]["type"], ev[0]["level"], ev[0]["text"]), ("alert", "urgent", "Có khói ở bếp"))
-        self.assertRegex(ev[0]["audio"], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertRegex(ev[0]["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
         self.assertEqual(ev[2], {"type": "ack"})
 
     def test_bad_mqtt_payload_does_not_raise(self):
@@ -492,11 +498,267 @@ class TestServer(unittest.TestCase):
         tts.url("câu 2")  # dùng lại: thành mới nhất
         tts.url("câu 5")
         left = {p.name for p in Path(self.tmp.name).glob("*.wav")}
-        self.assertEqual(left, {f"{tts.key(t)}.wav" for t in ("câu 4", "câu 2", "câu 5")})
+        self.assertEqual(left, {f"{tts.key(t, 'Hải Đăng')}.wav" for t in ("câu 4", "câu 2", "câu 5")})
+
+    def test_voice_settings_reload_and_rerender(self):
+        # Cài đặt → Trợ lý: đổi giọng / xưng hô → hubd publish hubd/settings/voice → voiced áp dụng ngay,
+        # câu cảnh báo cố định tạo lại theo giọng mới; cache tách theo giọng (cùng câu, hai giọng = hai tệp).
+        self.app.warm()
+        self.assertIn(("Hải Đăng", "Có khói ở bếp"), self.spoken)
+        self.app.hub.voice = {"voice": "Trúc Ly", "owner": "anh Bình", "name": "Mây"}
+        self.app.on_mqtt("hubd/settings/voice", "changed")
+        self.app.warming.join(10)
+        self.assertEqual((self.app.persona.voice, self.app.persona.owner), ("Trúc Ly", "anh Bình"))
+        self.assertIn(("Trúc Ly", "Có khói ở bếp"), self.spoken)
+        self.assertIn(("Trúc Ly", "Em chưa nghe rõ, anh Bình nói lại nhé."), self.spoken)
+        tts = self.app.tts
+        self.assertNotEqual(tts.key("Có khói ở bếp", "Hải Đăng"), tts.key("Có khói ở bếp", "Trúc Ly"))
+        self.assertTrue((Path(self.tmp.name) / f"{tts.key('Có khói ở bếp', 'Hải Đăng')}.wav").exists())
+        self.assertTrue((Path(self.tmp.name) / f"{tts.key('Có khói ở bếp', 'Trúc Ly')}.wav").exists())
+        r = self.post(json.dumps({"text": "bật đèn kho"}).encode(), "application/json")
+        self.assertEqual(r["reply"], "Dạ anh Bình, đã bật Đèn Kho.")
+        self.assertEqual(self.spoken[-1], ("Trúc Ly", "Dạ anh Bình, đã bật Đèn Kho."))
+        # Giọng lạ (sửa tay, giọng bị bỏ) → giọng mặc định, không làm hỏng TTS.
+        self.app.hub.voice = {"voice": "Không có"}
+        self.app.on_mqtt("hubd/settings/voice", "changed")
+        self.app.warming.join(10)
+        self.assertEqual(self.app.persona.voice, "Hải Đăng")
+
+    def test_quiet_hours_mute_alert_audio_not_text(self):
+        resp = urllib.request.urlopen(self.base + "/voice/events")
+        resp.readline(), resp.readline()
+        self.app.hub.voice = {"quiet_from": "22:00", "quiet_to": "06:00"}
+        self.app.load_voice()
+        self.app.now = lambda: voiced.datetime(2026, 10, 27, 23, 30, tzinfo=voiced.VN)
+        self.app.on_mqtt("hubd/alert", '{"level":"warn","text":"Trời bắt đầu mưa"}')
+        self.app.on_mqtt("hubd/alert", '{"level":"urgent","text":"Có khói ở bếp"}')
+        self.app.now = lambda: voiced.datetime(2026, 10, 27, 7, 0, tzinfo=voiced.VN)
+        self.app.on_mqtt("hubd/alert", '{"level":"warn","text":"CO2 cao"}')
+        got = []
+        while len(got) < 3:
+            line = resp.readline()
+            if line.startswith(b"data: "):
+                got.append(json.loads(line[6:]))
+        self.assertEqual([(e["text"], e["audio"] is not None) for e in got],
+                         [("Trời bắt đầu mưa", False), ("Có khói ở bếp", True), ("CO2 cao", True)])
+        self.assertNotIn(("Hải Đăng", "Trời bắt đầu mưa"), self.spoken)  # không tổng hợp, đỡ tốn CPU ban đêm
+
+    def test_long_reply_plays_first_sentence_while_rest_synthesizes(self):
+        # Đọc nhanh hơn: câu trả lời dài trả về ngay khi xong câu đầu; câu sau tổng hợp nền, hoặc ngay khi trình phát xin tới.
+        self.assertEqual(voiced.sentences("Chào anh Bình. Ngoài trời 31 độ, đang mưa. Pin 85 phần trăm; nhà dùng 800 oát. Không có cảnh báo nào."),
+                         ["Chào anh Bình. Ngoài trời 31 độ, đang mưa.", "Pin 85 phần trăm; nhà dùng 800 oát.", "Không có cảnh báo nào."])
+        self.assertEqual(voiced.sentences("Đã bật Đèn Kho."), ["Đã bật Đèn Kho."])
+        gate = threading.Event()
+        synth = self.app.tts.synth
+        def slow(text, path, voice):  # câu sau chờ tới khi được thả, để thấy phản hồi không đợi chúng
+            if not text.startswith("Ngoài"):
+                gate.wait(5)
+            synth(text, path, voice)
+        self.app.tts.synth = slow
+        self.app.hub.values = {"gt.t": "31", "gt.mua": "1", "jk.soc": "85", "deye.load": "800"}
+        self.app.hub.cfg = OUT_CFG
+        t0 = time.perf_counter()
+        r = self.post(b"", "application/json", "/voice/brief")
+        self.assertLess(time.perf_counter() - t0, 3)
+        self.assertGreater(len(r["audio"]), 1)
+        first = Path(self.tmp.name) / r["audio"][0].rsplit("/", 1)[1]
+        self.assertTrue(first.exists())
+        # Câu đầu đã có: tải ngay dù luồng nền đang giữ máy TTS cho câu sau (đo trên hub: từng phải chờ 4,7 s).
+        t0 = time.perf_counter()
+        self.assertEqual(urllib.request.urlopen(self.base + r["audio"][0], timeout=3).read()[:4], b"RIFF")
+        self.assertLess(time.perf_counter() - t0, 1)
+        gate.set()
+        for u in r["audio"]:
+            self.assertEqual(urllib.request.urlopen(self.base + u).read()[:4], b"RIFF")
+        self.assertEqual([t for v, t in self.spoken][-len(r["audio"]):], voiced.sentences(r["reply"]))
+        with self.assertRaises(urllib.error.HTTPError):  # khoá lạ (chưa từng đăng ký) thì 404, không tổng hợp gì
+            urllib.request.urlopen(self.base + "/voice/tts/0123456789abcdef.wav")
+
+    def test_listen_mode_wake_name(self):
+        # Nghe gọi tên (iPad để micro mở, gửi từng đoạn có tiếng): chỉ câu mở đầu bằng tên trợ lý mới được xử lý.
+        self.app.hub.voice = {"name": "Mây", "owner": "anh Bình"}
+        self.app.load_voice()
+        heard = {"v": ""}
+        self.app.stt = lambda rate, a: heard["v"]
+        listen = lambda text, q="?listen=1": (heard.__setitem__("v", text), self.post(wav_bytes(), "audio/wav", "/voice/ask" + q))[1]
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            r = listen("KHÁCH BÀN BA GỌI MỘT LY CÀ PHÊ SỮA")
+        self.assertEqual(r, {"ignored": True})
+        self.assertNotIn("CÀ PHÊ", log.getvalue().upper())  # không ghi lại câu nói không gọi trợ lý
+        n = len(self.spoken)
+        self.assertEqual(listen("MÁY LẠNH CÒN BẬT KHÔNG"), {"ignored": True})  # "máy" không phải "Mây"
+        self.assertEqual(len(self.spoken), n)
+        r = listen("MÂY ƠI BẬT ĐÈN KHO")
+        self.assertEqual((r["heard"], r["reply"]), ("bật đèn kho", "Dạ anh Bình, đã bật Đèn Kho."))
+        self.assertIn(("POST", "/cmd", {"device": "tuya_eba30c56ca208baad0y43a", "to": "on"}), self.app.hub.calls)
+        r = listen("MÂY ƠI")
+        self.assertEqual((r["reply"], r["awaiting"]), ("Dạ, em là Mây đây, anh Bình cần gì ạ?", True))
+        r = listen("TẮT ĐÈN KHO", "")  # câu ngay sau khi trợ lý hỏi lại: gửi như nút nói, không cần gọi tên
+        self.assertEqual(r["reply"], "Dạ anh Bình, đã tắt Đèn Kho.")
+
+    def test_preview_endpoint(self):
+        # Nút Nghe thử: dùng giá trị đang nhập (chưa lưu), không đổi cấu hình đang chạy.
+        r = self.post(json.dumps({"voice": "Trúc Ly", "owner": "anh Bình", "name": "Mây"}).encode(), "application/json", "/voice/preview")
+        self.assertEqual(r["reply"], "Dạ, em là Mây đây, anh Bình cần gì ạ?")
+        self.assertEqual(self.spoken[-1], ("Trúc Ly", r["reply"]))
+        self.assertRegex(r["audio"][0], r"^/voice/tts/[0-9a-f]{16}\.wav$")
+        self.assertEqual(self.app.persona.voice, "Hải Đăng")
+        r = self.post(b"{}", "application/json", "/voice/preview")
+        self.assertEqual(r["reply"], "Tôi đây, bạn cần gì?")
 
     def test_warm_prerenders_alert_phrases(self):
         self.app.warm()
-        self.assertTrue((Path(self.tmp.name) / f"{self.app.tts.key('Có khói ở bếp')}.wav").exists())
+        self.assertTrue((Path(self.tmp.name) / f"{self.app.tts.key('Có khói ở bếp', 'Hải Đăng')}.wav").exists())
+
+
+class TestWake(unittest.TestCase):
+    def test_wake_name(self):
+        # Tên có dấu khớp đúng, hoặc không dấu nhưng ngay sau là "ơi" (STT hay sai dấu); cho phép một tiếng đệm phía trước.
+        mây, plain = voiced.Persona({"name": "Mây"}), voiced.Persona()
+        cases = [(mây, "MÂY ƠI BẬT ĐÈN KHO", "BẬT ĐÈN KHO"), (mây, "mây ơi", ""), (mây, "Mây, tắt đèn", "tắt đèn"),
+                 (mây, "MÁY ƠI TẮT ĐÈN", "TẮT ĐÈN"), (mây, "à mây ơi tắt đèn", "tắt đèn"),
+                 (mây, "máy lạnh bật chưa", None), (mây, "bật đèn kho", None), (mây, "bật đèn kho mây ơi", None), (mây, "", None),
+                 (plain, "TRỢ LÝ ƠI BẬT ĐÈN", "BẬT ĐÈN"), (plain, "trợ lý", ""), (plain, "bật đèn kho", None)]
+        for p, text, want in cases:
+            self.assertEqual(voiced.wake(text, p), want, (p.name, text))
+
+
+class TestPersona(unittest.TestCase):
+    """Xưng hô (nhóm cấu hình "voice"): owner = cách gọi chủ nhà ("anh Bình"); có owner thì trợ lý xưng "em".
+    Trống thì nói như trước (tôi / bạn)."""
+    def test_defaults_unchanged(self):
+        p = voiced.Persona()
+        self.assertEqual((p.voice, p.me, p.you), ("Hải Đăng", "tôi", "bạn"))
+        self.assertEqual(p.fmt(voiced.NOT_HEARD), "Tôi chưa nghe rõ, bạn nói lại nhé.")
+        self.assertEqual(p.say("Đã bật Đèn Kho."), "Đã bật Đèn Kho.")
+        self.assertNotIn("Gọi người dùng", voiced.system_prompt(CFG, p))
+
+    def test_owner_in_fixed_replies_brief_and_prompt(self):
+        p = voiced.Persona({"owner": "anh Bình", "name": "Mây", "voice": "Trúc Ly"})
+        self.assertEqual(p.fmt(voiced.NOT_HEARD), "Em chưa nghe rõ, anh Bình nói lại nhé.")
+        self.assertEqual(p.fmt(voiced.FIXED_ONLY)[:30], "Chưa cài AI nên em chỉ làm đượ")
+        self.assertEqual(p.say("Đã bật Đèn Kho."), "Dạ anh Bình, đã bật Đèn Kho.")
+        self.assertEqual(p.say("CB tổng bếp cần PIN."), "Dạ anh Bình, CB tổng bếp cần PIN.")  # chữ viết tắt giữ nguyên hoa
+        hub = FakeHub({"jk.soc": "85"})
+        self.assertEqual(voiced.run(voiced.match("bật đèn kho", CFG), hub, p), "Dạ anh Bình, đã bật Đèn Kho.")
+        self.assertEqual(voiced.run(voiced.match("tắt CB tổng bếp", CFG), hub, p), "Dạ anh Bình, CB Tổng Bếp cần PIN, hãy bấm trên màn hình.")
+        self.assertTrue(voiced.brief(OUT_CFG, {"values": {}, "alerts": []}, p).startswith("Chào anh Bình. Chưa có số đo"))
+        sp = voiced.system_prompt(CFG, p)
+        self.assertIn("Bạn là Mây", sp)
+        self.assertIn('gọi họ là "anh Bình", tự xưng "em"', sp)
+
+    def test_greeting(self):
+        cases = {(): ("chào", "Tôi đây, bạn cần gì?"),
+                 ("anh Bình", ""): ("xin chào", "Dạ, em đây, anh Bình cần gì ạ?"),
+                 ("anh Bình", "Mây"): ("MÂY ƠI", "Dạ, em là Mây đây, anh Bình cần gì ạ?"),
+                 ("", "Mây"): ("alo", "Tôi là Mây đây, bạn cần gì?")}
+        for k, (text, want) in cases.items():
+            p = voiced.Persona(dict(zip(("owner", "name"), k)))
+            self.assertEqual(voiced.answer(text, FakeHub(), None, p), want, k)
+        # Gọi tên rồi ra lệnh: vẫn là lệnh, không phải lời chào.
+        self.assertEqual(voiced.answer("Mây ơi bật đèn kho", FakeHub(), None, voiced.Persona({"name": "Mây"})), "Đã bật Đèn Kho.")
+
+    def test_quiet_window_sweep(self):
+        # Quét đủ 1440 phút trong ngày × các dạng khung giờ (qua nửa đêm, trong ngày, trống, bằng nhau, sai định dạng),
+        # so với cách đếm độc lập: phút m yên lặng khi đi từ giờ bắt đầu tới m (theo vòng 24 giờ) chưa chạm giờ kết thúc.
+        windows = [("22:00", "06:00"), ("13:00", "14:30"), ("", ""), ("22:00", ""), ("07:00", "07:00"), ("25:00", "06:00"), ("0:05", "23:59")]
+        n = 0
+        for a, b in windows:
+            p = voiced.Persona({"quiet_from": a, "quiet_to": b})
+            ok = all(re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", x) for x in (a, b)) and a != b
+            mins = lambda x: int(x.split(":")[0]) * 60 + int(x.split(":")[1])
+            quiet = set()
+            if ok:  # đi từng phút từ giờ bắt đầu tới giờ kết thúc (không tính phút kết thúc)
+                m = mins(a)
+                while m != mins(b):
+                    quiet.add(m)
+                    m = (m + 1) % 1440
+            for m in range(1440):
+                n += 1
+                want = m in quiet
+                now = voiced.datetime(2026, 10, 27, m // 60, m % 60, tzinfo=voiced.VN)
+                self.assertEqual(p.quiet(now), want, (a, b, m))
+        self.assertEqual(n, len(windows) * 1440)
+
+
+# Thiết bị nhiều nút sau khi quét QR Tuya: tuya.yaml tách mỗi nút/lỗ thành một thiết bị tên "Nút 1", "Lỗ 2"... cùng `group`,
+# hubd bỏ thiết bị gốc (b3e097f). Dữ liệu giống trên hub: đèn 2 nút, ổ 3 lỗ có một lỗ protected, nhóm một kênh.
+GROUP_CFG = {
+    "zones": [{"id": "cafe", "name": "Khu cafe"}, {"id": "sansau", "name": "Sân sau"}],
+    "devices": [
+        {"id": "tuya_lanh_1", "name": "Nút 1", "group": "Đèn phòng lạnh", "zone": "cafe"},
+        {"id": "tuya_lanh_2", "name": "Nút 2", "group": "Đèn phòng lạnh", "zone": "cafe"},
+        {"id": "tuya_ca_1", "name": "Lỗ 1", "group": "Ổ cắm Hồ Cá", "zone": "sansau"},
+        {"id": "tuya_ca_2", "name": "Lỗ 2", "group": "Ổ cắm Hồ Cá", "zone": "sansau"},
+        {"id": "tuya_ca_3", "name": "Lỗ 3", "group": "Ổ cắm Hồ Cá", "zone": "sansau", "protected": True},
+        {"id": "tuya_san_1", "name": "Kênh 1", "group": "Đèn sân", "zone": "sansau"},
+        {"id": "tuya_kho", "name": "Đèn Kho", "zone": "cafe"},
+    ],
+    "scenes": [], "entities": [], "locked": ["tuya_ca_3"], "phrases": [],
+}
+
+
+class TestGroups(AICase):
+    """Kênh gọi bằng "<nhóm> <kênh>", nói tên nhóm thì áp dụng mọi kênh (lệnh cố định lẫn tool AI); kênh cần PIN vẫn bị hubd chặn."""
+    def test_fixed_commands(self):
+        hub = FakeHub({"dev:tuya_lanh_1": "ON", "dev:tuya_lanh_2": "OFF"}, cfg=GROUP_CFG)
+        say = lambda t: voiced.run(voiced.match(t, GROUP_CFG), hub)
+        cmds = lambda: [(c[2]["device"], c[2]["to"]) for c in hub.calls if c[1] == "/cmd"]
+        self.assertEqual(say("bật đèn phòng lạnh"), "Đã bật Đèn phòng lạnh.")
+        self.assertEqual(cmds(), [("tuya_lanh_1", "on"), ("tuya_lanh_2", "on")])
+        hub.calls.clear()
+        self.assertEqual(say("tắt đèn phòng lạnh nút 2"), "Đã tắt Đèn phòng lạnh Nút 2.")
+        self.assertEqual(cmds(), [("tuya_lanh_2", "off")])
+        hub.calls.clear()
+        self.assertEqual(say("TẮT Ổ CẮM HỒ CÁ"), "Đã tắt Lỗ 1, Lỗ 2 của Ổ cắm Hồ Cá. Lỗ 3 của Ổ cắm Hồ Cá cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(cmds(), [("tuya_ca_1", "off"), ("tuya_ca_2", "off"), ("tuya_ca_3", "off")])  # lỗ 3: hubd trả 403
+        self.assertEqual(say("tắt ổ cắm hồ cá lỗ 3"), "Ổ cắm Hồ Cá Lỗ 3 cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(say("bật đèn sân"), "Đã bật Đèn sân.")  # nhóm một kênh: gọi bằng tên nhóm
+        self.assertEqual(say("đèn phòng lạnh đang bật không"), "Đèn phòng lạnh: Nút 1 bật, Nút 2 tắt.")
+        self.assertEqual(say("đèn phòng lạnh nút 1 bật chưa"), "Đèn phòng lạnh Nút 1 đang bật.")
+        self.assertIsNone(voiced.match("bật nút 1", GROUP_CFG))  # "Nút 1" trần không còn là tên gọi: không đoán
+
+    def test_every_name_sweep(self):
+        # Quét mọi tên gọi do grouped() sinh (kênh, nhóm, nhóm một kênh, thiết bị thường) × 3 động từ × 3 dạng chữ.
+        targets = voiced.grouped(GROUP_CFG)["devices"]
+        self.assertEqual(sorted(d["name"] for d in targets), sorted([
+            "Đèn phòng lạnh Nút 1", "Đèn phòng lạnh Nút 2", "Ổ cắm Hồ Cá Lỗ 1", "Ổ cắm Hồ Cá Lỗ 2", "Ổ cắm Hồ Cá Lỗ 3",
+            "Đèn sân", "Đèn Kho", "Đèn phòng lạnh", "Ổ cắm Hồ Cá"]))
+        n = 0
+        for d in targets:
+            for verb, to in (("bật", "on"), ("mở", "on"), ("tắt", "off")):
+                for form in (str, str.upper, voiced.plain):
+                    n += 1
+                    got = voiced.match(form(f"{verb} {d['name']} giúp tôi"), GROUP_CFG)
+                    self.assertEqual(got and (got[0], got[1]["id"], got[2]), ("set", d["id"], to), (verb, d["name"]))
+        self.assertEqual(n, 9 * 9)
+        g = voiced.grouped(GROUP_CFG)
+        self.assertIs(voiced.grouped(g), g)  # gom lại cfg đã gom: giữ nguyên, không thành "Đèn phòng lạnh Đèn phòng lạnh Nút 1"
+
+    def test_ai_context_and_group_tool(self):
+        sp = voiced.system_prompt(GROUP_CFG)
+        self.assertIn("- tuya_lanh_1: Đèn phòng lạnh Nút 1, Khu cafe", sp)
+        self.assertIn("- group:Đèn phòng lạnh: Đèn phòng lạnh, Khu cafe (cả nhóm: Nút 1, Nút 2)", sp)
+        self.assertIn("- group:Ổ cắm Hồ Cá: Ổ cắm Hồ Cá, Sân sau (cả nhóm: Lỗ 1, Lỗ 2, Lỗ 3) [có kênh cần PIN]", sp)
+        self.assertIn("- tuya_san_1: Đèn sân, Sân sau", sp)
+        self.assertNotIn("- tuya_lanh_1: Nút 1,", sp)  # không còn dòng thiết bị tên trần "Nút 1"
+        st = voiced.state_text(GROUP_CFG, {"values": {"dev:tuya_lanh_1": "ON"}, "alerts": []})
+        self.assertIn("- Đèn phòng lạnh Nút 1 (tuya_lanh_1): bật", st)
+        self.assertNotIn("group:", st)  # trạng thái liệt kê từng kênh, không lặp nhóm
+        r1 = {"role": "assistant", "content": None, "tool_calls": [
+            tc("t1", "set_device", {"device": "group:Đèn phòng lạnh", "to": "on"}),
+            tc("t2", "set_device", {"device": "group:Ổ cắm Hồ Cá", "to": "off"}),
+            tc("t3", "set_device", {"device": "tuya_lanh_2", "to": "off"})]}
+        api, hub = self.fake(r1, say("Xong.")), FakeHub(cfg=GROUP_CFG)
+        self.assertEqual(voiced.ask_ai("bật đèn phòng lạnh, tắt ổ cắm hồ cá", GROUP_CFG, hub, voiced.AI(api.url, "", "m")), "Xong.")
+        tools = api.chats()[1][3]["messages"][-3:]
+        self.assertEqual(tools[0]["content"], "Đã bật Đèn phòng lạnh.")
+        self.assertTrue(tools[1]["content"].startswith("LỖI"), tools[1])
+        self.assertIn("Lỗ 3 của Ổ cắm Hồ Cá cần PIN", tools[1]["content"])
+        self.assertEqual(tools[2]["content"], "Đã tắt Đèn phòng lạnh Nút 2.")
+        self.assertEqual([c[2]["device"] for c in hub.calls if c[1] == "/cmd"],
+                         ["tuya_lanh_1", "tuya_lanh_2", "tuya_ca_1", "tuya_ca_2", "tuya_ca_3", "tuya_lanh_2"])
 
 
 if __name__ == "__main__":

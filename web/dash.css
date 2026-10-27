@@ -459,6 +459,11 @@ button.pt { text-align: left; }
 .setrow .ks i { display: inline-flex; align-items: center; gap: 3px; font-style: normal; font-size: 12px; }
 .setrow .ks .ic { width: 15px; height: 15px; }
 .setrow small { color: var(--ink2); }
+/* Bảng thiết bị Tuya: dòng đang sửa sáng lên, trình sửa mở ngay bên dưới */
+.setrow.sel { outline: 1px solid var(--amber); }
+.setrow small { text-align: right; }
+.tedit { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 10px; padding: 12px; border-radius: 14px; background: rgba(255, 255, 255, .03); }
+.tedit .kv { grid-column: 1 / -1; }
 .grip { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--glass3); touch-action: none; cursor: grab; }
 .w.dragging { z-index: 30; pointer-events: none; box-shadow: 0 26px 60px rgba(0, 0, 0, .55); transform: scale(1.02); }
 .w.ph { background: rgba(246, 185, 59, .08); border: 1.5px dashed rgba(246, 185, 59, .6); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -641,5 +646,6 @@ button.sub { text-align: left; text-decoration: underline dotted; text-underline
 #mic:disabled { opacity: .5; }
 /* Nút đọc tình hình (voice.js), công tắc Đọc thông báo, các bước cài HTTPS (setup-ai.js, setup-https.js) */
 #brief:disabled { opacity: .5; }
+#mic.ear { box-shadow: inset 0 0 0 2px var(--green); }   /* đang nghe gọi tên */
 .setrow input[type=checkbox] { flex: none; width: 22px; height: 22px; accent-color: var(--amber); }
 [data-setup] ol.note { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }

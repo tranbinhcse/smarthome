@@ -121,3 +121,30 @@ func TestDrawKeepsEveryScrollPosition(t *testing.T) {
 		t.Error("draw() đặt lại vị trí cuộn trước masonry(): cột phải đang co lại nên vị trí bị cắt về 0")
 	}
 }
+
+// Biểu đồ trống dù có số (2026-10-27): /api/history trả t theo giây (voiced cũng đọc như vậy), chart.js vẽ theo
+// mili giây; dữ liệu mẫu dùng mili giây nên chỉ hỏng với dữ liệu thật. Mọi trang chỉ lấy lịch sử qua chHistory()
+// trong chart.js, nơi duy nhất đổi đơn vị. Quét mọi file trong web/.
+func TestHistoryFetchedOnlyThroughChHistory(t *testing.T) {
+	files, _ := filepath.Glob("web/*")
+	n := 0
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".js") && !strings.HasSuffix(f, ".html") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n++
+		c := strings.Count(string(b), "/api/history")
+		if f == filepath.Join("web", "chart.js") {
+			if c != 1 || !regexp.MustCompile(`function chHistory\([^)]*\) \{[^\n]*/api/history[^\n]*t: p\.t \* 1e3`).Match(b) {
+				t.Errorf("chart.js: chHistory() phải là chỗ duy nhất gọi /api/history và đổi t từ giây sang mili giây")
+			}
+		} else if c > 0 {
+			t.Errorf("%s gọi /api/history %d lần: dùng chHistory() để có t theo mili giây", f, c)
+		}
+	}
+	t.Logf("đã quét %d file .js/.html trong web/", n)
+}

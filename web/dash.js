@@ -945,7 +945,7 @@ function hist(id, hours = 24) {
   if (!h || (h.at && Date.now() - h.at > 300e3)) {
     HIST[k] = {pts: h?.pts || [], at: 0};
     const e = cfg.entities.find(x => x.id === id);
-    (DEMO ? Promise.resolve(demoHist(id, e?.unit, hours, num(id))) : api(`/api/history?id=${encodeURIComponent(id)}&hours=${hours}`).then(r => r.json()))
+    (DEMO ? Promise.resolve(demoHist(id, e?.unit, hours, num(id))) : chHistory(id, hours))
       .then(p => { HIST[k] = {pts: p || [], at: Date.now()}; soon(); }, () => { HIST[k] = {pts: [], at: Date.now()}; });
   }
   return HIST[k].pts;
