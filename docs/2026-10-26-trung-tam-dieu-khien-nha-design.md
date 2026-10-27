@@ -464,6 +464,19 @@ Loa ◄─ đọc câu trả lời / cảnh báo bằng TTS tiếng Việt ◄�
 | faster-whisper small int8 | 1,3–4,5 s | 0,81 | 2 / 0 / 4 |
 | faster-whisper large-v3-turbo int8 | 5,9–6,3 s | 2,86 | 2 / 1 / 3 |
 
+**Đổi sang gipformer 1.5 + từ khoá ưu tiên (2026-10-27).** Chủ nhà thấy nhận giọng tiếng Việt kém (nhầm tên trong nhà: "sân sau" → "xanh seo", "phòng lạnh" → "phạm lãnh"). So trên 120 đoạn: 30 câu lệnh dùng tên thật trong nhà, VieNeu đọc bằng giọng Hải Đăng và Trúc Ly, mỗi câu một bản sạch và một bản thêm ồn SNR 12 dB; 4 luồng; RAM là tối đa của tiến trình.
+
+| Chuyển giọng nói thành chữ | Sai từ sạch / ồn | Câu đúng hoàn toàn | ms / câu | RAM |
+|---|---|---|---|---|
+| Zipformer vi 30M int8 (bản cũ) | 5,6% / 7,9% | 95/120 | 19 | 144 MB |
+| Zipformer 30M + từ khoá | 2,6% / 3,0% | 106/120 | 19 | 145 MB |
+| gipformer 1.5 68M int8 | 4,6% / 4,3% | 96/120 | 21 | 194 MB |
+| **gipformer 1.5 + từ khoá (đã chọn, mã voiced thật)** | **2,6% / 2,3%** | **105/120** | **25** | **206 MB** |
+
+- Từ khoá: tên phòng, thiết bị (cả tên nhóm của thiết bị nhiều nút), ngữ cảnh lấy từ `/api/assistant/config` (giữ 60 giây) + động từ lệnh (BẬT, TẮT, BẬT ĐÈN...). Truyền theo từng câu (`create_stream(hotwords=...)`, `modified_beam_search`, mức 3,0; đã thử 1,5 / 2,0 / 3,0). Tên có chữ số bị bỏ vì mô hình viết số bằng chữ.
+- gipformer 1.5 ([g-group-ai-lab/gipformer1.5-68M-rnnt](https://huggingface.co/g-group-ai-lab/gipformer1.5-68M-rnnt), MIT, ghim commit) được chọn dù trên bộ thử giọng máy chỉ nhỉnh hơn Zipformer-30M có từ khoá: bảng công khai của tác giả cho thấy giọng vùng miền thật sai ít hơn rõ (điện thoại giọng Bắc/Trung/Nam 25–33% so với 38–45%). ChunkFormer-large-vie bị loại: CC BY-NC (cấm thương mại), chỉ chạy PyTorch.
+- Chưa đo bằng giọng thật của chủ nhà qua mic iPad. Lỗi còn lại: dấu ("đèn" → "đen"), "sân" → "sơn". Nhiều câu thật nhận ra chữ rỗng: cần xem khâu thu âm trên iPad, không phải do mô hình.
+
 | Đọc thành tiếng (VieNeu-TTS v3 Turbo, giọng Hải Đăng) | Câu 0,9 s | Câu 1,1 s | Câu 3,6–3,8 s | Nạp mô hình |
 |---|---|---|---|---|
 | **ONNX int8 (đã chọn)** | 0,40 s | 0,37 s | 1,19–1,39 s | 1,5 s |

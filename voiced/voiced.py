@@ -140,6 +140,24 @@ def grouped(cfg):
     return {**cfg, "devices": devs}
 
 
+
+# Từ khoá ưu tiên cho nhận giọng (hotwords của sherpa-onnx): mô hình hay nghe nhầm đúng các từ này ("sân sau" → "xanh seo",
+# "tắt" → "thắp"). Đo 27/10 trên 120 câu lệnh: số lỗi giảm khoảng một nửa (mục 15.2.1 thiết kế).
+COMMAND_WORDS = ["BẬT", "TẮT", "BẬT ĐÈN", "TẮT ĐÈN", "TẮT BÁO ĐỘNG", "ĐÈN", "CẦU DAO", "Ổ CẮM"]
+
+
+def hotwords(cfg):
+    """Từ khoá cho create_stream(hotwords=...), ngăn bằng "/": tên phòng, thiết bị (cả tên nhóm), ngữ cảnh và động từ lệnh,
+    viết hoa như từ vựng của mô hình. Bỏ tên có chữ số hay ký tự lạ: mô hình viết số bằng chữ ("Nút 1" nghe là "nút một")."""
+    cfg = grouped(cfg)
+    out = []
+    for n in [x.get("name", "") for k in ("zones", "devices", "scenes") for x in cfg.get(k, [])] + COMMAND_WORDS:
+        w = " ".join(n.upper().split())
+        if w and all(c.isalpha() or c == " " for c in w) and w not in out:
+            out.append(w)
+    return "/".join(out)
+
+
 def named(items, ws):
     """Mục có cả tên nằm trọn trong câu; nhiều mục khớp lấy tên dài nhất, hoà thì None (không đoán)."""
     hits = [(len(set(words(x["name"]))), x) for x in items if words(x["name"]) and set(words(x["name"])) <= ws]
@@ -645,13 +663,17 @@ def vieneu_synth():
 def sherpa_stt():
     import sherpa_onnx
     d = MODELS / "stt"
+    # gipformer 1.5 (68M, MIT, fetch_models.py). modified_beam_search để dùng từ khoá ưu tiên theo từng câu; mức 3,0 tốt nhất
+    # trong các mức đã đo (1,5 / 2,0 / 3,0), chỉnh bằng VOICED_HOTWORDS_SCORE.
     r = sherpa_onnx.OfflineRecognizer.from_transducer(
         encoder=str(d / "encoder.int8.onnx"), decoder=str(d / "decoder.onnx"), joiner=str(d / "joiner.int8.onnx"),
-        tokens=str(d / "tokens.txt"), num_threads=int(os.environ.get("VOICED_THREADS", "4")))
+        tokens=str(d / "tokens.txt"), num_threads=int(os.environ.get("VOICED_THREADS", "4")),
+        decoding_method="modified_beam_search", hotwords_score=float(os.environ.get("VOICED_HOTWORDS_SCORE", "3.0")),
+        modeling_unit="bpe", bpe_vocab=str(d / "bpe.vocab"))
     lock = threading.Lock()
-    def stt(rate, samples):
+    def stt(rate, samples, hot=""):
         with lock:
-            s = r.create_stream()
+            s = r.create_stream(hotwords=hot) if hot else r.create_stream()
             s.accept_waveform(rate, samples)  # sherpa tự đổi tần số về 16 kHz
             r.decode_stream(s)
             return s.result.text
@@ -674,6 +696,19 @@ class App:
         self.listeners, self.lock = set(), threading.Lock()
         self.persona, self.phrases, self.warming = Persona(), [], None
         self.now = lambda: datetime.now(VN)
+        self.hot_words, self.hot_at = "", -1e9
+
+    def hot(self):
+        """Từ khoá theo cấu hình hub, giữ 60 giây: đổi tên phòng trên dashboard thì chậm nhất một phút sau có hiệu lực."""
+        if time.monotonic() - self.hot_at > 60:
+            self.hot_at = time.monotonic()
+            try:
+                code, cfg = self.hub("GET", "/config")
+                if code == 200:
+                    self.hot_words = hotwords(cfg)
+            except OSError:
+                pass   # mất hub: dùng từ khoá cũ, vẫn nhận giọng được
+        return self.hot_words
 
     def load_voice(self):
         """Đọc nhóm "voice" (giọng, xưng hô, giờ yên lặng). Trả True khi giọng hay cách gọi đổi (cần tạo lại câu đọc sẵn)."""
@@ -793,7 +828,7 @@ def handler(app):
                 else:
                     rate, a = read_wav(body)
                     # chạm rồi gửi ngay: âm thanh quá ngắn làm STT lỗi, coi như chưa nghe gì
-                    heard = app.stt(rate, a).strip().lower() if len(a) >= rate * 0.3 else ""
+                    heard = app.stt(rate, a, app.hot()).strip().lower() if len(a) >= rate * 0.3 else ""
             except Exception:
                 return self.send(400, "cần WAV PCM 16-bit hoặc JSON {\"text\": ...}".encode(), "text/plain; charset=utf-8")
             if listen:

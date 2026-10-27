@@ -378,12 +378,29 @@ def wav_bytes(rate=48000, channels=1, seconds=0.5):
     return b.getvalue()
 
 
+class TestHotwords(unittest.TestCase):
+    def test_names_from_config(self):
+        cfg = {"zones": [{"id": "kho", "name": "Phòng kho"}, {"id": "sau", "name": "Sân  sau"}, {"id": "t1", "name": "Tủ điện tầng 1"}],
+               "devices": [{"id": "a_1", "name": "Nút 1", "group": "Đèn phòng lạnh"}, {"id": "a_2", "name": "Nút 2", "group": "Đèn phòng lạnh"},
+                           {"id": "k", "name": "Đèn Kho"}, {"id": "k2", "name": "đèn kho"}, {"id": "c", "name": "Camera 01"},
+                           {"id": "cb", "name": "CB Tổng Bảng Hiệu"}],
+               "scenes": [{"id": "x", "name": "Ra khỏi nhà"}]}
+        h = voiced.hotwords(cfg).split("/")
+        for w in ("PHÒNG KHO", "SÂN SAU", "ĐÈN PHÒNG LẠNH", "ĐÈN KHO", "CB TỔNG BẢNG HIỆU", "RA KHỎI NHÀ", "BẬT", "TẮT", "BẬT ĐÈN", "TẮT ĐÈN"):
+            self.assertIn(w, h)
+        # tên có chữ số (Nút 1, Camera 01, Tủ điện tầng 1) bỏ: mô hình viết số bằng chữ; viết hoa như từ vựng của mô hình, không trùng
+        self.assertEqual([w for w in h if re.search(r"\d", w) or w != w.upper()], [])
+        self.assertEqual(len(h), len(set(h)))
+        self.assertEqual(voiced.hotwords({"zones": [], "devices": []}).split("/"), voiced.COMMAND_WORDS)
+
+
 class TestServer(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.heard = []
-        def stt(rate, samples):
+        self.heard, self.hot = [], []
+        def stt(rate, samples, hot=""):
             self.heard.append((rate, samples.shape))
+            self.hot.append(hot)
             return "BẬT ĐÈN KHO"
         self.spoken = []
         def synth(text, path, voice):
@@ -446,6 +463,16 @@ class TestServer(unittest.TestCase):
         self.assertEqual(urllib.request.urlopen(self.base + r["audio"][0]).read()[:4], b"RIFF")
         r = self.post(json.dumps({"text": "ra khỏi nhà"}).encode(), "application/json")
         self.assertEqual(r["reply"], "Đã chạy Ra khỏi nhà.")
+
+    def test_stt_gets_hotwords_from_hub_config(self):
+        # Từ khoá ưu tiên lấy từ cấu hình hub ở mỗi câu (giữ 60 giây), để mô hình nghe đúng tên trong nhà.
+        self.post(wav_bytes(), "audio/wav")
+        self.assertIn("ĐÈN KHO", self.hot[0].split("/"))
+        self.assertIn("BẬT", self.hot[0].split("/"))
+        n = sum(1 for c in self.app.hub.calls if c[1] == "/config")
+        self.post(wav_bytes(), "audio/wav")
+        self.assertEqual(self.hot[1], self.hot[0])
+        self.assertEqual(sum(1 for c in self.app.hub.calls if c[1] == "/config"), n + 1)  # câu sau chỉ gọi /config cho answer()
 
     def test_too_short_audio_is_not_sent_to_stt(self):
         # Chạm nút rồi gửi ngay: WAV rỗng/ngắn làm sherpa-onnx lỗi ("Invalid input shape {0,80}") → phải trả "chưa nghe rõ".
@@ -579,7 +606,7 @@ class TestServer(unittest.TestCase):
         self.app.hub.voice = {"name": "Mây", "owner": "anh Bình"}
         self.app.load_voice()
         heard = {"v": ""}
-        self.app.stt = lambda rate, a: heard["v"]
+        self.app.stt = lambda rate, a, hot="": heard["v"]
         listen = lambda text, q="?listen=1": (heard.__setitem__("v", text), self.post(wav_bytes(), "audio/wav", "/voice/ask" + q))[1]
         log = io.StringIO()
         with contextlib.redirect_stdout(log):
