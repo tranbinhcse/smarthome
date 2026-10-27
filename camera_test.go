@@ -19,8 +19,8 @@ const nvrPass = "bimat-nvr-123"
 
 var jpeg = []byte("\xff\xd8\xff\xe0 anh chup \xff\xd9")
 
-// Đầu ghi giả: đòi Digest, trả JPEG cho kênh 3, XML lỗi cho kênh khác.
-func fakeNVR(t *testing.T, paths *[]string) *httptest.Server {
+// Đầu ghi giả: đòi Digest, trả JPEG ở đường ok, XML lỗi notSupport cho đường khác.
+func fakeNVR(t *testing.T, paths *[]string, ok string) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a := r.Header.Get("Authorization")
 		if a == "" {
@@ -32,10 +32,10 @@ func fakeNVR(t *testing.T, paths *[]string) *httptest.Server {
 			t.Errorf("Authorization sai: %s", a)
 		}
 		*paths = append(*paths, r.URL.Path)
-		if r.URL.Path != "/ISAPI/Streaming/channels/301/picture" {
+		if r.URL.Path != ok {
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(403)
-			io.WriteString(w, "<ResponseStatus><statusString>Invalid Operation</statusString></ResponseStatus>")
+			io.WriteString(w, "<ResponseStatus><statusString>Invalid Operation</statusString><subStatusCode>notSupport</subStatusCode></ResponseStatus>")
 			return
 		}
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -71,7 +71,7 @@ func get(mux http.Handler, u string, ck *http.Cookie) *httptest.ResponseRecorder
 // Ảnh chụp đi qua hubd: cần PIN, hubd tự xác thực với đầu ghi, trình duyệt không thấy tài khoản hay địa chỉ đầu ghi.
 func TestCamSnapshotProxy(t *testing.T) {
 	var paths []string
-	nvr := fakeNVR(t, &paths)
+	nvr := fakeNVR(t, &paths, "/ISAPI/Streaming/channels/301/picture")
 	host := strings.TrimPrefix(nvr.URL, "http://")
 	t.Setenv("NVR_HOST", host)
 	t.Setenv("NVR_USER", "viewer")
@@ -101,8 +101,32 @@ func TestCamSnapshotProxy(t *testing.T) {
 			t.Errorf("lộ thông tin đầu ghi ra trình duyệt: %q", dump)
 		}
 	}
-	if len(paths) != 2 || paths[0] != "/ISAPI/Streaming/channels/301/picture" {
-		t.Errorf("đường dẫn ISAPI: %v", paths)
+	// cam4 không có ảnh ở đường nào: thử đủ ba đường rồi mới báo lỗi
+	want := []string{"/ISAPI/Streaming/channels/301/picture", "/ISAPI/Streaming/channels/401/picture",
+		"/ISAPI/ContentMgmt/StreamingProxy/channels/401/picture", "/ISAPI/Streaming/channels/402/picture"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Errorf("đường dẫn ISAPI: %v, muốn %v", paths, want)
+	}
+}
+
+// Đầu ghi chỉ cho lấy ảnh kênh IP qua StreamingProxy (đường của camera đứng riêng trả notSupport, gặp thật trên
+// đầu ghi của nhà 2026-10-27): hub chuyển sang đường đó và lần sau gọi thẳng.
+func TestCamSnapshotFallsBackToNVRProxyPath(t *testing.T) {
+	var paths []string
+	nvr := fakeNVR(t, &paths, "/ISAPI/ContentMgmt/StreamingProxy/channels/301/picture")
+	t.Setenv("NVR_HOST", strings.TrimPrefix(nvr.URL, "http://"))
+	t.Setenv("NVR_USER", "viewer")
+	t.Setenv("NVR_PASS", nvrPass)
+	mux, ck := camMux(t)
+	for i := 0; i < 2; i++ {
+		if w := get(mux, "/api/cam/cam3/snapshot", ck); w.Code != 200 || w.Body.String() != string(jpeg) {
+			t.Fatalf("lần %d: code=%d body=%q", i+1, w.Code, w.Body)
+		}
+	}
+	want := []string{"/ISAPI/Streaming/channels/301/picture",
+		"/ISAPI/ContentMgmt/StreamingProxy/channels/301/picture", "/ISAPI/ContentMgmt/StreamingProxy/channels/301/picture"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Errorf("đường dẫn ISAPI: %v, muốn %v", paths, want)
 	}
 }
 
@@ -264,7 +288,7 @@ func must[T any](v T, err error) T {
 // Cấu hình nhập trên trang Cài đặt (nhóm nvr) thắng .env cũ; enabled=false tắt camera.
 func TestCamSnapshotUsesSettings(t *testing.T) {
 	var paths []string
-	nvr := fakeNVR(t, &paths)
+	nvr := fakeNVR(t, &paths, "/ISAPI/Streaming/channels/301/picture")
 	t.Setenv("NVR_HOST", "127.0.0.1:1")
 	t.Setenv("NVR_USER", "cu")
 	t.Setenv("NVR_PASS", "cu")

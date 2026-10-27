@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -39,7 +40,13 @@ type cams struct {
 
 	mu      sync.Mutex
 	clients map[string]*http.Client // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
+	snapAt  atomic.Int32            // chỉ số trong snapPaths mà đầu ghi trả ảnh lần gần nhất
 }
+
+// Đường lấy ảnh chụp, thử lần lượt (đầu ghi trả 403/404 notSupport thì thử đường kế): camera đứng riêng và đầu ghi
+// đời mới; kênh camera IP qua proxy của đầu ghi; luồng phụ.
+var snapPaths = []string{"/ISAPI/Streaming/channels/%d01/picture", "/ISAPI/ContentMgmt/StreamingProxy/channels/%d01/picture",
+	"/ISAPI/Streaming/channels/%d02/picture"}
 
 func newCams(devs []Device, db *DB) *cams {
 	c := &cams{db: db, byID: map[string]Device{}, token: os.Getenv("HUBD_CAMERA_TOKEN"), clients: map[string]*http.Client{}}
@@ -110,21 +117,34 @@ func (c *cams) snapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s/ISAPI/Streaming/channels/%d01/picture", n.Host, d.Channel), nil)
-	res, err := c.client(n).Do(req)
-	if err != nil {
-		log.Printf("ảnh camera %s: %v", d.ID, err)
+	start := int(c.snapAt.Load())
+	var res *http.Response
+	for i := range snapPaths {
+		k := (start + i) % len(snapPaths)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+n.Host+fmt.Sprintf(snapPaths[k], d.Channel), nil)
+		x, err := c.client(n).Do(req)
+		if err != nil {
+			log.Printf("ảnh camera %s: %v", d.ID, err)
+			break
+		}
+		if ct := x.Header.Get("Content-Type"); x.StatusCode == 200 && strings.HasPrefix(ct, "image/") {
+			c.snapAt.Store(int32(k))
+			res = x
+			break
+		}
+		// chỉ chuyển ảnh; lỗi XML của đầu ghi ghi log, không đưa ra trình duyệt
+		b, _ := io.ReadAll(io.LimitReader(x.Body, 2048))
+		x.Body.Close()
+		if x.StatusCode != 403 && x.StatusCode != 404 || i == len(snapPaths)-1 { // notSupport thì thử đường kế
+			log.Printf("ảnh camera %s: HTTP %d %s %s", d.ID, x.StatusCode, x.Header.Get("Content-Type"), isapiReason(b))
+			break
+		}
+	}
+	if res == nil {
 		http.Error(w, "đầu ghi không trả ảnh", 502)
 		return
 	}
 	defer res.Body.Close()
-	// chỉ chuyển ảnh; lỗi XML của đầu ghi ghi log, không đưa ra trình duyệt
-	if ct := res.Header.Get("Content-Type"); res.StatusCode != 200 || !strings.HasPrefix(ct, "image/") {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
-		log.Printf("ảnh camera %s: HTTP %d %s %s", d.ID, res.StatusCode, ct, isapiReason(b))
-		http.Error(w, "đầu ghi không trả ảnh", 502)
-		return
-	}
 	w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
 	w.Header().Set("Cache-Control", "private, max-age=30")
 	io.Copy(w, io.LimitReader(res.Body, 8<<20))
