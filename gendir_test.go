@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -69,5 +70,37 @@ func TestWatchFilesReportsChange(t *testing.T) {
 	case <-changed:
 	case <-time.After(time.Second):
 		t.Fatal("file đổi mà không báo")
+	}
+}
+
+// Ổ cắm Hồ Cá hiện hai thẻ (2026-10-27): config.yaml còn khai nguyên ổ (tuya_x), quét QR sinh từng lỗ (tuya_x_1, _2)
+// cùng command_topic. Thiết bị tách ra thay thiết bị gốc; thiết bị khác dùng chung topic (khai tay) vẫn giữ.
+func TestGeneratedSplitDeviceReplacesWholeDevice(t *testing.T) {
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config.yaml")
+	os.WriteFile(main, []byte(`devices:
+  - {id: tuya_x, name: "Ổ cắm Hồ Cá", kind: socket, command_topic: tuya/x/cmd, protected: true}
+  - {id: bom, name: "Bơm hồ cá", kind: socket, command_topic: tuya/x/cmd}
+  - {id: tuya_x2, name: "Ổ khác", kind: socket, command_topic: tuya/x2/cmd}
+  - {id: cam_a, name: "Camera", kind: camera}
+`), 0o644)
+	gen := filepath.Join(dir, "gen")
+	os.Mkdir(gen, 0o755)
+	os.WriteFile(filepath.Join(gen, "tuya.yaml"), []byte(`devices:
+  - {"id": "tuya_x_1", "name": "Lỗ 1", "kind": "socket", "command_topic": "tuya/x/cmd", "group": "Ổ cắm Hồ Cá"}
+  - {"id": "tuya_x_2", "name": "Lỗ 2", "kind": "socket", "command_topic": "tuya/x/cmd", "group": "Ổ cắm Hồ Cá"}
+  - {"id": "cam_a_1", "name": "Camera sinh", "kind": "camera"}
+`), 0o644)
+	t.Setenv("HUBD_GEN_DIR", gen)
+	cfg, _, err := LoadConfig(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, d := range cfg.Devices {
+		got = append(got, d.ID)
+	}
+	if want := []string{"bom", "tuya_x2", "cam_a", "tuya_x_1", "tuya_x_2", "cam_a_1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("thiết bị = %v, muốn %v", got, want)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -29,9 +30,27 @@ func mergeGenerated(cfg *Config, dir string) {
 			log.Printf("bỏ qua cấu hình sinh %s: %v", f, err)
 			continue
 		}
-		cfg.Devices = upsert(cfg.Devices, g.Devices, func(d Device) string { return d.ID })
+		cfg.Devices = upsert(dropSplit(cfg.Devices, g.Devices), g.Devices, func(d Device) string { return d.ID })
 		cfg.Entities = upsert(cfg.Entities, g.Entities, func(e Entity) string { return e.ID })
 	}
+}
+
+// dropSplit bỏ thiết bị đã được file sinh tách thành từng kênh: id <gốc>_<n> cùng command_topic (ổ nhiều lỗ, công tắc
+// nhiều nút), không thì cả ổ lẫn từng lỗ cùng hiện. Thiết bị khác dùng chung topic (khai tay, tên khác) vẫn giữ.
+func dropSplit(base, gen []Device) []Device {
+	split := map[string]bool{}
+	for _, g := range gen {
+		if i := strings.LastIndexByte(g.ID, '_'); i > 0 && g.CommandTopic != "" {
+			split[g.ID[:i]+"\n"+g.CommandTopic] = true
+		}
+	}
+	out := base[:0:0]
+	for _, d := range base {
+		if !split[d.ID+"\n"+d.CommandTopic] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func upsert[T any](base, add []T, id func(T) string) []T {
