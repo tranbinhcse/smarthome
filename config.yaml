@@ -44,10 +44,23 @@ entities:
   - {"id": "tuya_ebba01d29a86b4f29dlrgx.w", "name": "Công suất", "unit": "W", "topic": "tuya/ebba01d29a86b4f29dlrgx/dps", "field": "19", "scale": 0.1, "zone": "tudien2", "device": "tuya_ebba01d29a86b4f29dlrgx"}
   - {"id": "tuya_ebba01d29a86b4f29dlrgx.v", "name": "Điện áp", "unit": "V", "topic": "tuya/ebba01d29a86b4f29dlrgx/dps", "field": "20", "scale": 0.1, "zone": "tudien2", "device": "tuya_ebba01d29a86b4f29dlrgx"}
   # END tuya-entities
-  # Năng lượng: Deye + 3 pack JK qua node RS485 (chưa lắp — hiện "—" tới khi có dữ liệu)
-  - { id: deye.pv,   name: "Điện mặt trời", unit: "W", topic: nangluong/deye/pv_power,   zone: kythuat }
-  - { id: deye.load, name: "Tải tiêu thụ",  unit: "W", topic: nangluong/deye/load_power, zone: kythuat }
-  - { id: deye.grid, name: "Điện lưới",     unit: "W", topic: nangluong/deye/grid_power, zone: kythuat }
+  # Năng lượng: inverter + 3 pack JK qua node RS485 (chưa lắp — hiện "—" tới khi có dữ liệu).
+  # Inverter: lược đồ chung nangluong/inverter/<khoá> cho mọi hãng (firmware/inverter/README.md);
+  # id giữ tên deye.* vì dashboard dùng. grid: + mua / − bán; battery: + sạc / − xả.
+  - { id: deye.pv,              name: "Điện mặt trời",         unit: "W",   topic: nangluong/inverter/pv_power,        zone: kythuat }
+  - { id: deye.load,            name: "Tải tiêu thụ",          unit: "W",   topic: nangluong/inverter/load_power,      zone: kythuat }
+  - { id: deye.grid,            name: "Điện lưới",             unit: "W",   topic: nangluong/inverter/grid_power,      zone: kythuat }
+  - { id: deye.battery,         name: "Pin sạc/xả (inverter)", unit: "W",   topic: nangluong/inverter/battery_power,   zone: kythuat }
+  - { id: deye.soc,             name: "SOC pin (inverter)",    unit: "%",   topic: nangluong/inverter/battery_soc,     zone: kythuat }
+  - { id: deye.grid_v,          name: "Điện áp lưới",          unit: "V",   topic: nangluong/inverter/grid_voltage,    zone: kythuat }
+  - { id: deye.grid_hz,         name: "Tần số lưới",           unit: "Hz",  topic: nangluong/inverter/grid_frequency,  zone: kythuat }
+  - { id: deye.temp,            name: "Nhiệt độ inverter",     unit: "°C",  topic: nangluong/inverter/temperature,     zone: kythuat }
+  - { id: deye.pv_today,        name: "Điện mặt trời hôm nay", unit: "kWh", topic: nangluong/inverter/pv_today,        zone: kythuat }
+  - { id: deye.load_today,      name: "Tiêu thụ hôm nay",      unit: "kWh", topic: nangluong/inverter/load_today,      zone: kythuat }
+  - { id: deye.buy_today,       name: "Mua lưới hôm nay",      unit: "kWh", topic: nangluong/inverter/buy_today,       zone: kythuat }
+  - { id: deye.sell_today,      name: "Bán lưới hôm nay",      unit: "kWh", topic: nangluong/inverter/sell_today,      zone: kythuat }
+  - { id: deye.charge_today,    name: "Sạc pin hôm nay",       unit: "kWh", topic: nangluong/inverter/charge_today,    zone: kythuat }
+  - { id: deye.discharge_today, name: "Xả pin hôm nay",        unit: "kWh", topic: nangluong/inverter/discharge_today, zone: kythuat }
   - { id: jk.soc,    name: "Pin lưu trữ",   unit: "%", topic: nangluong/jk/soc,          zone: kythuat }
 
 # Thiết bị Tuya: phần giữa BEGIN/END do tuya-bridge/gen_config.py sinh từ tuya/devices.json.

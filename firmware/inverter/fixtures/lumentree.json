@@ -1,0 +1,39 @@
+{
+ "source": "Dựng tay theo bảng thanh ghi (chưa phải dump thật): trưa nắng, PV 2100+1100 W, bán lưới 350 W, sạc pin 1000 W, tải 1850 W. Khi có máy thật: thay bằng dump + số trên màn hình inverter.",
+ "holding": {
+  "22": 2100,
+  "74": 1100,
+  "67": 1850,
+  "59": 65186,
+  "61": 64536,
+  "50": 86,
+  "15": 2312,
+  "17": 5001,
+  "24": 1452
+ },
+ "read": {
+  "0": 436,
+  "3": 356,
+  "2": 5,
+  "4": 223,
+  "5": 142
+ },
+ "expect": {
+  "pv_power": 3200,
+  "load_power": 1850,
+  "grid_power": -350,
+  "battery_power": 1000,
+  "battery_soc": 86,
+  "grid_voltage": 231.2,
+  "grid_frequency": 50.01,
+  "temperature": 45.2,
+  "pv_today": 43.6,
+  "load_today": 35.6,
+  "buy_today": 0.5,
+  "charge_today": 22.3,
+  "discharge_today": 14.2
+ },
+ "missing": {
+  "sell_today": "không tìm thấy thanh ghi bán lưới trong ngày trong các nguồn (syssi/esphome-lumentree, ngoviet/lumentreeHA)"
+ }
+}

@@ -1,0 +1,147 @@
+# Lumentree hybrid SUNT-3.6/4.0/5.5/6.0KW-H. Modbus RTU 9600 8N1, địa chỉ 1.
+# Số tức thời: holding (hàm 0x03, chỉ đọc trong 0–94); kWh trong ngày: input (hàm 0x04, ô 0–5).
+# CHỈ ĐỌC: chỉ có sensor. (Ví dụ esp32-example.yaml của syssi có number: ghi ô 40, 101–104 — không chép.)
+#
+# Nguồn thanh ghi:
+#   syssi/esphome-lumentree @5a15235, docs/protocol-design.md (bảng holding + "Today's Energy Totals" hàm 0x04),
+#     components/lumentree_ble/lumentree_ble.cpp — giải mã qua BLE, đã chạy trên SUNT-6.0KW-H
+#   kthemall/lumentree_rs485 @764d189, lumentree_sunt4k_esp8266.ino — đọc ô 59/61/67 qua RS485 trên SUNT 4K
+#   ngoviet/lumentreeHA @36e05b1, core/realtime_parser.py — dấu: 59 + mua / − bán; 61 + xả / − sạc (đảo khi hiển thị)
+#
+# Đấu dây (chỉ một người dùng thử, kthemall): cổng RJ45 "Remote CT": chân 3–4 = 485-B, 5–6 = 485-A, 7–8 = GND.
+#   Chân 1–2 là +12 V: KHÔNG nối vào ESP32/mạch RS485. Wi-Fi/BLE nằm sẵn trong máy, không chiếm cổng này.
+#
+# XÁC NHẬN khi lắp:
+#   - Cổng Remote CT đang trống (nếu có bộ CT từ xa của Lumentree cắm vào thì là hai master trên một bus: không cắm song song).
+#   - Hàm 0x04 (kWh trong ngày) mới kiểm qua BLE, chưa kiểm qua RS485.
+#   - Không tìm thấy thanh ghi "bán lưới hôm nay": sell_today không đăng (hubd hiện "—"); có thể là ô 6–7 hàm 0x04 (chưa xác minh).
+#   - Dấu ô 61 so với màn hình máy (một ví dụ cộng đồng dùng dấu ngược).
+
+uart:
+  - id: uart_inverter
+    tx_pin: ${inverter_tx_pin}
+    rx_pin: ${inverter_rx_pin}
+    baud_rate: 9600
+
+modbus:
+  - id: modbus_inverter
+    uart_id: uart_inverter
+
+modbus_controller:
+  - id: inverter
+    modbus_id: modbus_inverter
+    address: ${inverter_modbus_address}
+    update_interval: ${inverter_update_interval}
+
+sensor:
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: inv_pv1, internal: true, register_type: holding, address: 22, value_type: U_WORD }
+  - { platform: modbus_controller, modbus_controller_id: inverter, id: inv_pv2, internal: true, register_type: holding, address: 74, value_type: U_WORD }
+  - platform: combination
+    type: sum
+    name: Điện mặt trời
+    id: inv_pv_power
+    state_topic: nangluong/inverter/pv_power
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    sources: [ { source: inv_pv1 }, { source: inv_pv2 } ]
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Tải tiêu thụ
+    id: inv_load_power
+    state_topic: nangluong/inverter/load_power
+    register_type: holding
+    address: 67 # tổng tải nhà; 18 chỉ là cổng AC output (backup)
+    value_type: S_WORD
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Điện lưới
+    id: inv_grid_power
+    state_topic: nangluong/inverter/grid_power
+    register_type: holding
+    address: 59 # CT lưới; không dùng 54 (các nguồn mâu thuẫn)
+    value_type: S_WORD
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Pin sạc xả
+    id: inv_battery_power
+    state_topic: nangluong/inverter/battery_power
+    register_type: holding
+    address: 61
+    value_type: S_WORD
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    filters:
+      - multiply: -1 # Lumentree + xả → lược đồ + sạc
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: SOC pin
+    id: inv_battery_soc
+    state_topic: nangluong/inverter/battery_soc
+    register_type: holding
+    address: 50
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    device_class: battery
+    accuracy_decimals: 0
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Điện áp lưới
+    id: inv_grid_voltage
+    state_topic: nangluong/inverter/grid_voltage
+    register_type: holding
+    address: 15 # AC input
+    value_type: U_WORD
+    unit_of_measurement: V
+    device_class: voltage
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Tần số lưới
+    id: inv_grid_frequency
+    state_topic: nangluong/inverter/grid_frequency
+    register_type: holding
+    address: 17
+    value_type: U_WORD
+    unit_of_measurement: Hz
+    device_class: frequency
+    accuracy_decimals: 2
+    filters:
+      - multiply: 0.01
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter
+    name: Nhiệt độ inverter
+    id: inv_temperature
+    state_topic: nangluong/inverter/temperature
+    register_type: holding
+    address: 24 # IGBT
+    value_type: U_WORD
+    unit_of_measurement: °C
+    device_class: temperature
+    accuracy_decimals: 1
+    filters:
+      - offset: -1000
+      - multiply: 0.1
+
+  # kWh trong ngày: input register (hàm 0x04), 0,1 kWh/đơn vị.
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: PV hôm nay, id: inv_pv_today, state_topic: nangluong/inverter/pv_today, register_type: read, address: 0, value_type: U_WORD, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Tiêu thụ hôm nay, id: inv_load_today, state_topic: nangluong/inverter/load_today, register_type: read, address: 3, value_type: U_WORD, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Mua lưới hôm nay, id: inv_buy_today, state_topic: nangluong/inverter/buy_today, register_type: read, address: 2, value_type: U_WORD, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Sạc pin hôm nay, id: inv_charge_today, state_topic: nangluong/inverter/charge_today, register_type: read, address: 4, value_type: U_WORD, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }
+  - { platform: modbus_controller, modbus_controller_id: inverter, name: Xả pin hôm nay, id: inv_discharge_today, state_topic: nangluong/inverter/discharge_today, register_type: read, address: 5, value_type: U_WORD, unit_of_measurement: kWh, device_class: energy, accuracy_decimals: 1, filters: [ { multiply: 0.1 } ] }

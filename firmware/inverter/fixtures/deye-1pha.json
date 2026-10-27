@@ -1,0 +1,39 @@
+{
+ "source": "Dựng tay theo bảng thanh ghi (chưa phải dump thật): trưa nắng, PV 2100+1100 W, bán lưới 350 W, sạc pin 1000 W, tải 1850 W. Khi có máy thật: thay bằng dump + số trên màn hình inverter.",
+ "holding": {
+  "186": 2100,
+  "187": 1100,
+  "188": 0,
+  "189": 0,
+  "178": 1850,
+  "169": 65186,
+  "190": 64536,
+  "184": 86,
+  "150": 2312,
+  "79": 5001,
+  "91": 1452,
+  "108": 436,
+  "84": 356,
+  "76": 5,
+  "77": 4,
+  "70": 223,
+  "71": 142
+ },
+ "read": {},
+ "expect": {
+  "pv_power": 3200,
+  "load_power": 1850,
+  "grid_power": -350,
+  "battery_power": 1000,
+  "battery_soc": 86,
+  "grid_voltage": 231.2,
+  "grid_frequency": 50.01,
+  "temperature": 45.2,
+  "pv_today": 43.6,
+  "load_today": 35.6,
+  "buy_today": 0.5,
+  "sell_today": 0.4,
+  "charge_today": 22.3,
+  "discharge_today": 14.2
+ }
+}

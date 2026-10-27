@@ -61,10 +61,12 @@ Thử MQTT: `mosquitto_pub -h 192.168.1.254 -u node -P <NODE_MQTT_PASS trong .en
 ## Kiểm thử
 
 ```bash
-go test ./...                                   # rules, lịch sử, PIN, API
+go test ./...                                   # rules, lịch sử, PIN, API, firmware inverter
 cd tuya-bridge && python3 -m unittest discover  # bridge + gen_config với thiết bị giả
-cd scripts && python3 -m unittest test_tuya_qr_login  # mapping từ đăng nhập QR
+python3 -m unittest discover -s scripts         # đăng nhập QR Tuya, giả lập node năng lượng
 ```
+
+Inverter (Deye, LuxPower, Lumentree) đọc qua RS485 bằng node ESPHome: xem [firmware/inverter/README.md](firmware/inverter/README.md).
 
 ## Chưa làm / giới hạn
 
