@@ -1,0 +1,47 @@
+# Đêm, pin gần cạn: SOC 9%, một cell xuống 2,885 V.
+# Dòng: topic payload (giống node năng lượng gửi). Phát lại: scripts/jk-sim.sh <file>.
+# alerts: pin_yeu pin_cell_thap
+nangluong/jk/p0/soc 9
+nangluong/jk/p0/voltage 46.60
+nangluong/jk/p0/current -18.2
+nangluong/jk/p0/power -848
+nangluong/jk/p0/temp 29.5
+nangluong/jk/p0/cell_min 2885
+nangluong/jk/p0/cell_max 2925
+nangluong/jk/p0/cell_delta 40
+nangluong/jk/p0/cycles 412
+nangluong/jk/p0/alarms 0
+nangluong/jk/p0/errors
+nangluong/jk/p1/soc 10
+nangluong/jk/p1/voltage 46.70
+nangluong/jk/p1/current -17.9
+nangluong/jk/p1/power -836
+nangluong/jk/p1/temp 29.1
+nangluong/jk/p1/cell_min 2905
+nangluong/jk/p1/cell_max 2935
+nangluong/jk/p1/cell_delta 30
+nangluong/jk/p1/cycles 398
+nangluong/jk/p1/alarms 0
+nangluong/jk/p1/errors
+nangluong/jk/p2/soc 8
+nangluong/jk/p2/voltage 46.55
+nangluong/jk/p2/current -18.6
+nangluong/jk/p2/power -866
+nangluong/jk/p2/temp 29.8
+nangluong/jk/p2/cell_min 2895
+nangluong/jk/p2/cell_max 2930
+nangluong/jk/p2/cell_delta 35
+nangluong/jk/p2/cycles 405
+nangluong/jk/p2/alarms 0
+nangluong/jk/p2/errors
+nangluong/jk/soc 9.0
+nangluong/jk/power -2550
+nangluong/jk/voltage 46.62
+nangluong/jk/current -54.7
+nangluong/jk/temp 29.8
+nangluong/jk/cell_min 2885
+nangluong/jk/cell_max 2935
+nangluong/jk/cell_delta 40
+nangluong/jk/cycles 412
+nangluong/jk/alarms 0
+nangluong/jk/online 3

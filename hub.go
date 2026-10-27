@@ -102,12 +102,7 @@ var onRe = regexp.MustCompile(`(?i)^\s*(on|1|true)\s*$`)
 
 // Ingest nhận payload từ một topic đã ánh xạ sang khoá id (entity id, "dev:<id>", "online:<id>").
 func (h *Hub) Ingest(id, payload string, now time.Time) {
-	h.mu.Lock()
-	prev, had := h.val[id]
-	h.val[id] = payload
-	h.mu.Unlock()
-	b, _ := json.Marshal(map[string]string{"id": id, "value": payload})
-	h.fan(b)
+	prev, had := h.set(id, payload)
 
 	var v float64
 	var gap time.Duration
@@ -123,7 +118,7 @@ func (h *Hub) Ingest(id, payload string, now time.Time) {
 		}
 	default:
 		f, err := strconv.ParseFloat(strings.TrimSpace(payload), 64)
-		if err != nil {
+		if err != nil || math.IsNaN(f) { // ESPHome gửi "nan" khi mất cảm biến: chưa biết, không phải số đo
 			return
 		}
 		v, gap = f, 30*time.Second
@@ -134,10 +129,26 @@ func (h *Hub) Ingest(id, payload string, now time.Time) {
 	h.run(h.engine.Feed(id, v, now))
 }
 
+// set lưu giá trị và đẩy cho giao diện (SSE).
+func (h *Hub) set(id, payload string) (prev string, had bool) {
+	h.mu.Lock()
+	prev, had = h.val[id]
+	h.val[id] = payload
+	h.mu.Unlock()
+	b, _ := json.Marshal(map[string]string{"id": id, "value": payload})
+	h.fan(b)
+	return prev, had
+}
+
 func (h *Hub) Tick(now time.Time) { h.run(h.engine.Tick(now)) }
 
 func (h *Hub) run(acts []Action) {
 	for _, a := range acts {
+		if a.Alert != "" {
+			log.Printf("cảnh báo %s: %q", a.Alert, a.Text)
+			h.set("alert:"+a.Alert, a.Text)
+			continue
+		}
 		d, ok := h.devByID[a.Set]
 		switch {
 		case !ok:

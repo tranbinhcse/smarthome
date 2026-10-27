@@ -19,3 +19,6 @@ __pycache__/
 web/images/*.png
 .DS_Store
 !firmware/secrets.example.yaml
+
+# ESPHome: thư mục build khi dịch firmware/*.yaml
+.esphome/

@@ -1,0 +1,47 @@
+# Sạc gần đầy, pack 0 có cell 3,612 V và BMS báo CellOVP.
+# Dòng: topic payload (giống node năng lượng gửi). Phát lại: scripts/jk-sim.sh <file>.
+# alerts: pin_cell_cao pin_bms_loi
+nangluong/jk/p0/soc 99
+nangluong/jk/p0/voltage 56.90
+nangluong/jk/p0/current 4.2
+nangluong/jk/p0/power 239
+nangluong/jk/p0/temp 33.0
+nangluong/jk/p0/cell_min 3570
+nangluong/jk/p0/cell_max 3612
+nangluong/jk/p0/cell_delta 42
+nangluong/jk/p0/cycles 412
+nangluong/jk/p0/alarms 1
+nangluong/jk/p0/errors CellOVP
+nangluong/jk/p1/soc 99
+nangluong/jk/p1/voltage 56.88
+nangluong/jk/p1/current 4.0
+nangluong/jk/p1/power 228
+nangluong/jk/p1/temp 32.6
+nangluong/jk/p1/cell_min 3548
+nangluong/jk/p1/cell_max 3560
+nangluong/jk/p1/cell_delta 12
+nangluong/jk/p1/cycles 398
+nangluong/jk/p1/alarms 0
+nangluong/jk/p1/errors
+nangluong/jk/p2/soc 99
+nangluong/jk/p2/voltage 56.91
+nangluong/jk/p2/current 4.3
+nangluong/jk/p2/power 245
+nangluong/jk/p2/temp 33.4
+nangluong/jk/p2/cell_min 3552
+nangluong/jk/p2/cell_max 3566
+nangluong/jk/p2/cell_delta 14
+nangluong/jk/p2/cycles 405
+nangluong/jk/p2/alarms 0
+nangluong/jk/p2/errors
+nangluong/jk/soc 99.0
+nangluong/jk/power 712
+nangluong/jk/voltage 56.90
+nangluong/jk/current 12.5
+nangluong/jk/temp 33.4
+nangluong/jk/cell_min 3548
+nangluong/jk/cell_max 3612
+nangluong/jk/cell_delta 42
+nangluong/jk/cycles 412
+nangluong/jk/alarms 1
+nangluong/jk/online 3

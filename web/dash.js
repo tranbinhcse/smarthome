@@ -19,10 +19,9 @@ const KIND = {kg: 'light', light: 'light', dj: 'light', pc: 'socket', cz: 'socke
 const IR = new Set(['tv', 'speaker', 'fan', 'ac']);   // hồng ngoại: một chiều, không đọc được trạng thái thật
 const RICH = new Set([...IR, 'vacuum']);             // thẻ có nút điều khiển riêng
 const PASSIVE = new Set(['infra', 'router', 'camera']);   // chỉ báo trạng thái, không bật tắt
-// Số đo inverter Deye + pin JK. grid: + mua / − bán; jk.power: + sạc / − xả. *_today: kWh trong ngày.
-const ENERGY_IDS = new Set(['deye.pv', 'deye.grid', 'deye.load', 'jk.soc', 'jk.power', 'deye.pv_today', 'deye.load_today',
-  'deye.charge_today', 'deye.discharge_today', 'deye.buy_today', 'deye.sell_today',
-  'deye.battery', 'deye.soc', 'deye.grid_v', 'deye.grid_hz', 'deye.temp']); // chỉ lịch sử/luật, không phải cảm biến phòng
+// Số đo inverter Deye + pin JK (id deye.* / jk.*, gồm từng pack jk.p<n>.*): thuộc trang Điện năng, không phải cảm biến phòng
+// (SOC % không bị lấy làm độ ẩm của tum kỹ thuật). grid: + mua / − bán; jk.power: + sạc / − xả. *_today: kWh trong ngày.
+const isEnergy = e => /^(deye|jk)\./.test(e.id);
 const VAC = {cleaning: 'Đang lau', paused: 'Tạm dừng', returning: 'Đang về dock', docked: 'Đang sạc ở dock'};
 
 const ICON = {
@@ -98,6 +97,7 @@ const kindOf = d => KIND[d.kind] || 'switch';
 const isOn = d => /^\s*(on|1|true)\s*$/i.test(state['dev:' + d.id] || '');
 const known = d => state['dev:' + d.id] !== undefined;
 const offline = d => state['online:' + d.id] === 'offline';
+const alerts = () => Object.keys(state).filter(k => k.startsWith('alert:') && state[k]);   // luật có alert đang bật; giá trị = lời cảnh báo
 const counted = d => !['breaker', ...PASSIVE].includes(kindOf(d));   // tính vào "đang bật"
 const zone = id => cfg.zones.find(z => z.id === id);
 const floorOf = d => zone(d.zone)?.floor || 0;
@@ -106,7 +106,7 @@ const floorName = f => SCENE.floorNames[f] || `Tầng ${f}`;
 const rooms = f => cfg.zones.filter(z => z.floor === f && z.type !== 'panel');
 const devsIn = zid => cfg.devices.filter(d => d.zone === zid);
 const devsOnFloor = f => cfg.devices.filter(d => floorOf(d) === f);
-const sensorsIn = zid => cfg.entities.filter(e => e.zone === zid && !e.device && !ENERGY_IDS.has(e.id));
+const sensorsIn = zid => cfg.entities.filter(e => e.zone === zid && !e.device && !isEnergy(e));
 const readingsOf = d => cfg.entities.filter(e => e.device === d.id);
 const onIn = zid => devsIn(zid).filter(d => counted(d) && isOn(d));
 const lit = zid => devsIn(zid).some(d => kindOf(d) === 'light' && isOn(d));
@@ -120,7 +120,7 @@ const fw = w => isNaN(w) ? '—' : Math.abs(w) >= 1000 ? `${nf.format(Math.round
 const xs = (d, key) => state[`x:${d.id}:${key}`];   // trạng thái giả định theo lệnh gần nhất (hồng ngoại, robot)
 // Thiết bị trong phạm vi: cả nhà (f = 0) hoặc một tầng; tuỳ chọn lọc theo loại.
 const devsOf = (f, kind) => (f ? devsOnFloor(f) : cfg.devices).filter(d => !kind || kindOf(d) === kind);
-const sensorsOn = f => cfg.entities.filter(e => !e.device && !ENERGY_IDS.has(e.id) && (!f || zone(e.zone)?.floor === f) && zone(e.zone)?.type !== 'outdoor' && has(e));
+const sensorsOn = f => cfg.entities.filter(e => !e.device && !isEnergy(e) && (!f || zone(e.zone)?.floor === f) && zone(e.zone)?.type !== 'outdoor' && has(e));
 // Công suất một khu = tổng số đo W của các MCB gắn vào khu đó (entity có device + zone = khu).
 const areaW = zid => {
   const es = cfg.entities.filter(e => e.zone === zid && e.device && e.unit === 'W' && has(e));
@@ -165,9 +165,9 @@ function renderTop() {
     `<small>${WD.at(now.getDay())}, ${now.toLocaleDateString('vi-VN', {day: '2-digit', month: '2-digit', year: 'numeric'})}</small>`;
   $('#tabs').innerHTML = [0, ...floors()].map(f =>
     `<button class="${f === view.floor && !view.page ? 'sel' : ''}" data-go="${f || ''}">${f ? esc(floorName(f)) : 'Cả nhà'}</button>`).join('');
-  const lost = cfg.devices.filter(offline).length;
+  const lost = cfg.devices.filter(offline).length + alerts().length;
   $('#bell').innerHTML = icon('bell') + (lost ? '<i class="badge"></i>' : '');
-  $('#bell').title = lost ? `${lost} thiết bị cần chú ý` : 'Không có cảnh báo';
+  $('#bell').title = lost ? `${lost} mục cần chú ý` : 'Không có cảnh báo';
   $('#sky').innerHTML = icon(skyMode === 'auto' ? 'auto' : s.day ? 'sun' : 'moon');
   $('#sky').title = skyMode === 'auto' ? `Ngày/đêm tự động theo ${s.by}` : s.day ? 'Đang để ban ngày' : 'Đang để ban đêm';
 }
@@ -276,10 +276,10 @@ const soon = () => { raf = raf || requestAnimationFrame(() => { raf = 0; draw();
 
 function greetHtml() {
   const hr = new Date().getHours(), hi = hr < 4 ? 'Chào buổi tối!' : hr < 11 ? 'Chào buổi sáng!' : hr < 13 ? 'Chào buổi trưa!' : hr < 18 ? 'Chào buổi chiều!' : 'Chào buổi tối!';
-  const lost = cfg.devices.filter(offline).length, t = pageType();
+  const lost = cfg.devices.filter(offline).length + alerts().length, t = pageType();
   let h = hi, p = '', extra = '';
   if (t === 'home') {
-    p = lost ? `Có ${lost} thiết bị cần chú ý.` : 'Mọi thứ đang hoạt động tốt.';
+    p = lost ? `Có ${lost} mục cần chú ý.` : 'Mọi thứ đang hoạt động tốt.';
     extra = player(0);
   } else if (t === 'floor') {
     const f = view.floor, n = rooms(f).filter(z => lit(z.id)).length;
@@ -631,10 +631,11 @@ const W = {
       ${icon('camera', 'camic')}<span><i class="dot ${offline(d) ? 'bad' : 'ok'}"></i>${esc(zone(d.zone)?.name || d.name)}</span></button>`).join('')}</div>` : '';
   }},
   security: {t: 'An ninh', i: 'shield', c: 'green', r: () => {
-    const cs = cfg.devices.filter(d => kindOf(d) === 'camera'), lost = cfg.devices.filter(offline);
-    return `<div class="sec ${lost.length ? 'warn' : 'ok'}">${lost.length ? `${lost.length} thiết bị mất kết nối` : 'Bình thường'}</div>
+    const cs = cfg.devices.filter(d => kindOf(d) === 'camera'), lost = cfg.devices.filter(offline), al = alerts();
+    const msg = [al.length && `${al.length} cảnh báo`, lost.length && `${lost.length} thiết bị mất kết nối`].filter(Boolean).join(', ');
+    return `<div class="sec ${msg ? 'warn' : 'ok'}">${msg || 'Bình thường'}</div>
       <div class="ics"><button data-alerts title="Camera" aria-label="Camera"><span class="ib">${icon('camera')}</span><em class="lb">Camera</em><span class="n">${cs.length - cs.filter(offline).length}</span></button>
-      <button data-alerts title="Cảnh báo" aria-label="Cảnh báo"><span class="ib">${icon('warn')}</span><em class="lb">Cảnh báo</em><span class="n">${lost.length}</span></button>
+      <button data-alerts title="Cảnh báo" aria-label="Cảnh báo"><span class="ib">${icon('warn')}</span><em class="lb">Cảnh báo</em><span class="n">${lost.length + al.length}</span></button>
       <span title="Hệ báo cháy CBX chưa nối vào hub"><span class="ib">${icon('flame')}</span><em class="lb">Báo cháy</em></span></div>`;
   }},
   devices: {t: 'Thiết bị', i: 'cube', o: () => [['light', 'Đèn'], ['socket', 'Ổ cắm'], ['ac', 'Điều hoà'], ['fan', 'Quạt'], ['other', 'Khác']], m: f => { const ds = devsOf(f); return `${ds.length} thiết bị, ${ds.filter(d => !offline(d)).length} trực tuyến`; }, r: f => {
@@ -1000,9 +1001,10 @@ function ask({title, text, ok, danger = false, html = ''}) {
   });
 }
 function showAlerts() {
-  const lost = cfg.devices.filter(offline);
-  ask({title: lost.length ? `${lost.length} thiết bị cần chú ý` : 'Không có cảnh báo', text: lost.length ? 'Các thiết bị dưới đây đang mất kết nối với hub.' : 'Mọi thiết bị đang kết nối bình thường.',
-    html: lost.length ? `<div class="list">${lost.map(d => `<button class="li" data-go="${where(d)}"><span class="lic bad">${icon(kindOf(d))}</span>
+  const lost = cfg.devices.filter(offline), al = alerts(), n = lost.length + al.length;
+  ask({title: n ? `${n} mục cần chú ý` : 'Không có cảnh báo',
+    text: n ? [al.length && 'Cảnh báo từ luật tự động đang bật.', lost.length && 'Các thiết bị dưới đây đang mất kết nối với hub.'].filter(Boolean).join(' ') : 'Mọi thiết bị đang kết nối bình thường.',
+    html: n ? `<div class="list">${al.map(k => `<div class="li"><span class="lic bad">${icon('warn')}</span><span>${esc(state[k])}</span></div>`).join('')}${lost.map(d => `<button class="li" data-go="${where(d)}"><span class="lic bad">${icon(kindOf(d))}</span>
       <span>${esc(d.name)}<small>${esc(zone(d.zone)?.name || 'Chưa gán phòng')}</small></span></button>`).join('')}</div>` : ''});
 }
 const post = body => api('/api/cmd', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});

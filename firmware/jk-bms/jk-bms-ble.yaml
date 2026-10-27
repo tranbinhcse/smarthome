@@ -1,0 +1,23 @@
+# Dự phòng khi bus RS485 không đọc được đủ 3 pack: đọc qua Bluetooth (syssi/esphome-jk-bms, jk_bms_ble).
+# Thay thế jk-bms.yaml, cùng id và topic MQTT nên hubd, dashboard không phải sửa:
+#   packages:
+#     jk: !include jk-bms/jk-bms-ble.yaml
+# MAC từng pack để trong firmware/secrets.yaml (gitignore): jk_p0_mac, jk_p1_mac, jk_p2_mac.
+#
+# Giới hạn: ESP32 giữ tối đa 3 kết nối BLE (đủ 3 pack). Khi ESP32 đang giữ kết nối, app JK trên điện thoại
+# không vào được pack đó: muốn chỉnh bằng app thì tắt nguồn node một lúc.
+# CHỈ ĐỌC: không khai báo switch/number/button của jk_bms_ble.
+
+external_components:
+  - source: github://syssi/esphome-jk-bms@560b6594864b0cfc107b22a2d74398df91c89557
+    components: [jk_bms_ble]
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+
+packages:
+  p0: !include { file: jk-pack-ble.yaml, vars: { n: 0, mac: !secret jk_p0_mac } }
+  p1: !include { file: jk-pack-ble.yaml, vars: { n: 1, mac: !secret jk_p1_mac } }
+  p2: !include { file: jk-pack-ble.yaml, vars: { n: 2, mac: !secret jk_p2_mac } }
+  total: !include jk-total.yaml

@@ -1,0 +1,44 @@
+# JK BMS: 3 pack JK-PB nối song song, đọc qua mạng RS485 nội bộ giữa các pack. Package ESPHome.
+# Dùng trong firmware/node-nangluong.yaml:
+#   packages:
+#     jk: !include jk-bms/jk-bms.yaml        # dự phòng BLE: jk-bms/jk-bms-ble.yaml (cùng topic MQTT)
+# Node lo wifi, mqtt, logger, esp32. Đấu dây, lược đồ MQTT, cách tính tổng: README.md cùng thư mục.
+#
+# CHỈ ĐỌC: uart chỉ có chân RX, ESP32 nghe thụ động và không phát gì lên bus. Pack địa chỉ 0 (master)
+# tự hỏi pack 1, 2; ESP32 bắt cả câu hỏi lẫn câu trả lời. Không có switch/number nào nên cũng không có
+# đường ghi tham số BMS (TestJKFirmwareReadOnly giữ cả hai ràng buộc).
+
+substitutions:
+  jk_rx_pin: GPIO26   # nối chân RO (RXD) của mạch TTL→RS485 thứ hai; mạch thứ nhất dành cho Deye
+
+external_components:
+  - source: github://txubelaxu/esphome-jk-bms@10ce72518fcd543dd5e5f62a5b36fc895c26af9a
+    components: [jk_rs485_sniffer, jk_rs485_bms]
+
+uart:
+  - id: uart_jk
+    rx_pin: ${jk_rx_pin}
+    baud_rate: 115200
+    rx_buffer_size: 500
+
+jk_rs485_sniffer:
+  - id: jk_sniffer
+    protocol_version: JK02_32S
+    rx_timeout: 500ms
+    uart_id: uart_jk
+
+# Header của jk_rs485_bms luôn #include mã switch/number của nó, nên phải nạp hai nền tảng này để ESPHome chép
+# mã nguồn. Khai báo RỖNG: không có thực thể nào, tức không có lệnh ghi nào (test chỉ cho phép đúng 2 dòng này).
+switch:
+  - platform: jk_rs485_bms
+    jk_rs485_bms_id: jk_bms0
+number:
+  - platform: jk_rs485_bms
+    jk_rs485_bms_id: jk_bms0
+
+# n = địa chỉ DIP của pack (0 = master). Đổi ở đây nếu khảo sát Giai đoạn 0 thấy khác.
+packages:
+  p0: !include { file: jk-pack.yaml, vars: { n: 0 } }
+  p1: !include { file: jk-pack.yaml, vars: { n: 1 } }
+  p2: !include { file: jk-pack.yaml, vars: { n: 2 } }
+  total: !include jk-total.yaml

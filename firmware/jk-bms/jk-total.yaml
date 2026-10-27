@@ -1,0 +1,103 @@
+# Tổng của 3 pack, dùng chung cho bản RS485 và BLE (cùng id jk_p<n>_*). Cập nhật mỗi 10 s.
+# Pack mất kết nối (NAN) bị bỏ khỏi phép gộp; jk.online cho biết đang gộp bao nhiêu pack. Hàm: jk_total.h.
+
+substitutions:
+  # Dung lượng danh định từng pack (Ah), trọng số của SOC chung. Bằng nhau thì SOC chung = trung bình cộng.
+  # Ghi đúng theo nhãn pack khi khảo sát Giai đoạn 0.
+  jk_p0_ah: "280"
+  jk_p1_ah: "280"
+  jk_p2_ah: "280"
+  # Bit lỗi BMS được đếm vào "số lỗi". Bit nào báo thường trực mà vô hại (vd không gắn GPS) thì xoá khỏi mask.
+  jk_alarm_mask: "0xFFFFFFFF"
+
+esphome:
+  includes: [jk-bms/jk_total.h]   # ESPHome tính đường dẫn từ thư mục của file node (firmware/)
+
+sensor:
+  - platform: template   # Σ(SOC_i × Ah_i) / Σ Ah_i
+    id: jk_soc
+    name: "Pin SOC"
+    state_topic: nangluong/jk/soc
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: |-
+      return jkt::soc({id(jk_p0_soc).state, id(jk_p1_soc).state, id(jk_p2_soc).state},
+                    {${jk_p0_ah}, ${jk_p1_ah}, ${jk_p2_ah}});
+  - platform: template   # cộng dồn: + sạc, − xả
+    id: jk_power
+    name: "Pin công suất"
+    state_topic: nangluong/jk/power
+    unit_of_measurement: W
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return jkt::sum({id(jk_p0_power).state, id(jk_p1_power).state, id(jk_p2_power).state});
+  - platform: template   # cộng dồn
+    id: jk_current
+    name: "Pin dòng"
+    state_topic: nangluong/jk/current
+    unit_of_measurement: A
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: return jkt::sum({id(jk_p0_current).state, id(jk_p1_current).state, id(jk_p2_current).state});
+  - platform: template   # song song nên gần bằng nhau: lấy trung bình
+    id: jk_voltage
+    name: "Pin điện áp"
+    state_topic: nangluong/jk/voltage
+    unit_of_measurement: V
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: return jkt::mean({id(jk_p0_voltage).state, id(jk_p1_voltage).state, id(jk_p2_voltage).state});
+  - platform: template   # nóng nhất
+    id: jk_temp
+    name: "Pin nhiệt độ"
+    state_topic: nangluong/jk/temp
+    unit_of_measurement: °C
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: return jkt::largest({id(jk_p0_temp).state, id(jk_p1_temp).state, id(jk_p2_temp).state});
+  - platform: template   # cell thấp nhất trong cả 3 pack
+    id: jk_cell_min
+    name: "Pin cell thấp nhất"
+    state_topic: nangluong/jk/cell_min
+    unit_of_measurement: mV
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return jkt::smallest({id(jk_p0_cell_min).state, id(jk_p1_cell_min).state, id(jk_p2_cell_min).state});
+  - platform: template   # cell cao nhất trong cả 3 pack
+    id: jk_cell_max
+    name: "Pin cell cao nhất"
+    state_topic: nangluong/jk/cell_max
+    unit_of_measurement: mV
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return jkt::largest({id(jk_p0_cell_max).state, id(jk_p1_cell_max).state, id(jk_p2_cell_max).state});
+  - platform: template   # pack lệch nhiều nhất (cân bằng là việc trong từng pack, không so cell giữa các pack)
+    id: jk_cell_delta
+    name: "Pin chênh lệch cell"
+    state_topic: nangluong/jk/cell_delta
+    unit_of_measurement: mV
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return jkt::largest({id(jk_p0_cell_delta).state, id(jk_p1_cell_delta).state, id(jk_p2_cell_delta).state});
+  - platform: template   # pack nhiều chu kỳ nhất
+    id: jk_cycles
+    name: "Pin số chu kỳ"
+    state_topic: nangluong/jk/cycles
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return jkt::largest({id(jk_p0_cycles).state, id(jk_p1_cycles).state, id(jk_p2_cycles).state});
+  - platform: template   # tổng số lỗi đang bật
+    id: jk_alarms_total
+    name: "Pin số lỗi"
+    state_topic: nangluong/jk/alarms
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return jkt::sum({id(jk_p0_alarms).state, id(jk_p1_alarms).state, id(jk_p2_alarms).state});
+  - platform: template   # số pack đang có số đo (0–3)
+    id: jk_online
+    name: "Pin số pack kết nối"
+    state_topic: nangluong/jk/online
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return jkt::count({id(jk_p0_soc).state, id(jk_p1_soc).state, id(jk_p2_soc).state});

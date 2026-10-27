@@ -386,27 +386,34 @@ func TestInverterDecodeFixtures(t *testing.T) {
 }
 
 // Dashboard coi mọi entity không gắn thiết bị trong một zone là cảm biến phòng: nhiệt độ inverter
-// sẽ thành "nhiệt độ tum kỹ thuật", SOC % thành "độ ẩm". Mọi entity inverter phải nằm trong ENERGY_IDS.
+// sẽ thành "nhiệt độ tum kỹ thuật", SOC % thành "độ ẩm". Mọi entity inverter phải khớp isEnergy của web/dash.js.
 func TestInverterEntitiesHiddenFromRoomSensors(t *testing.T) {
 	js, err := os.ReadFile("web/dash.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?s)const ENERGY_IDS = new Set\(\[(.*?)\]\)`).FindSubmatch(js)
+	m := regexp.MustCompile(`const isEnergy = e => /(.+?)/\.test\(e\.id\)`).FindSubmatch(js)
 	if m == nil {
-		t.Fatal("không thấy ENERGY_IDS trong web/dash.js")
+		t.Fatal("không thấy isEnergy trong web/dash.js")
 	}
-	ids := map[string]bool{}
-	for _, q := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(m[1], -1) {
-		ids[string(q[1])] = true
+	isEnergy, err := regexp.Compile(string(m[1]))
+	if err != nil {
+		t.Fatalf("biểu thức isEnergy không dịch được: %v", err)
 	}
 	cfg, _, err := LoadConfig("config.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
+	n := 0
 	for _, e := range cfg.Entities {
-		if strings.HasPrefix(e.Topic, inverterTopic) && !ids[e.ID] {
-			t.Errorf("%s đọc %s nhưng không có trong ENERGY_IDS của web/dash.js", e.ID, e.Topic)
+		if strings.HasPrefix(e.Topic, inverterTopic) {
+			n++
+			if !isEnergy.MatchString(e.ID) {
+				t.Errorf("%s đọc %s nhưng isEnergy của web/dash.js không nhận là số đo năng lượng", e.ID, e.Topic)
+			}
 		}
+	}
+	if n == 0 {
+		t.Fatal("config.yaml không có entity inverter nào: test không còn kiểm gì")
 	}
 }
