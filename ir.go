@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"regexp"
 	"strconv"
 	"strings"
@@ -47,12 +48,13 @@ func (h *Hub) ir(d Device, code string) bool {
 	}
 	payload := code
 	if len(d.Codes) > 0 || d.Kind != "ac" {
-		payload = d.Codes[code]
+		codes := h.codes(d)
+		payload = codes[code]
 		if payload == "" && (code == "on" || code == "off") {
 			if on == (code == "on") {
 				return true // đã đúng trạng thái giả định: bấm nguồn lúc này sẽ đảo ngược
 			}
-			payload = d.Codes["power"]
+			payload = codes["power"]
 		}
 	}
 	if !irCodeRe.MatchString(code) || payload == "" || d.Protected && code == "off" {
@@ -61,6 +63,23 @@ func (h *Hub) ir(d Device, code string) bool {
 	h.publish(d.CommandTopic, payload)
 	h.assume(d.ID, code)
 	return true
+}
+
+// codes: mã trong config.yaml, cộng mã gán trên trang Cài đặt (nhóm nodes, khoá ir:<thiết bị>:<nút>, web/setup-nodes.js)
+// đè lên. Mã từ trang Cài đặt phải là chuỗi Pronto: nhóm cấu hình lưu gì cũng được, không để chuỗi tuỳ ý ra node.
+var prontoRe = regexp.MustCompile(`^[0-9A-Fa-f]{4}( [0-9A-Fa-f]{4})+$`)
+
+func (h *Hub) codes(d Device) map[string]string {
+	out := map[string]string{}
+	maps.Copy(out, d.Codes)
+	pre := "ir:" + d.ID + ":"
+	for k, v := range h.db.Setting("nodes") {
+		s, _ := v.(string)
+		if btn, ok := strings.CutPrefix(k, pre); ok && prontoRe.MatchString(strings.TrimSpace(s)) {
+			out[btn] = strings.TrimSpace(s)
+		}
+	}
+	return out
 }
 
 func (h *Hub) assume(id, code string) {

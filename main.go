@@ -51,6 +51,10 @@ func main() {
 		}
 	})
 
+	if u := os.Getenv("HUBD_MQTT_ADMIN_USER"); u != "" && os.Getenv("HUBD_MQTT_ADMIN_PASS") != "" {
+		hub.dynsec = mqttDynsec(cfg.MQTT.Broker, u, os.Getenv("HUBD_MQTT_ADMIN_PASS")) // tài khoản node ESP32 (nodes.go)
+	}
+
 	opts := mqtt.NewClientOptions().AddBroker(cfg.MQTT.Broker).SetClientID("hubd")
 	if cfg.MQTT.Username != "" {
 		opts.SetUsername(cfg.MQTT.Username).SetPassword(cfg.MQTT.Password)
@@ -165,6 +169,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mountAssistant(mux, hub, auth)
 	mountSettings(mux, hub, auth)
 	mountTuyaSetup(mux, hub, auth)
+	mountNodes(mux, hub, auth)
 	return mux
 }
 

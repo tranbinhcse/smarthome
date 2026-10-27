@@ -43,7 +43,8 @@ func TestHandleSharedJSONTopic(t *testing.T) {
 	}
 	got := h.Topics()
 	sort.Strings(got)
-	exp := []string{"khu1/nhiet", "tuya/cb/dps", "tuya/cb/online", "tuya/cb/state", "tuya/setup/status"} // + tiến độ quét QR, luôn đăng ký
+	// + tiến độ quét QR và topic chung của node ESP32 (nodes.go), luôn đăng ký
+	exp := []string{"+/ir/learned", "+/sensor/wifi/state", "+/status", "khu1/nhiet", "tuya/cb/dps", "tuya/cb/online", "tuya/cb/state", "tuya/setup/status"}
 	if len(got) != len(exp) {
 		t.Fatalf("Topics() = %v, muốn %v (mỗi topic đăng ký một lần)", got, exp)
 	}
