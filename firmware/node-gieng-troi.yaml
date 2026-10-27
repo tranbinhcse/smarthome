@@ -1,0 +1,87 @@
+# Node giếng trời (tầng tum, ngoài trời, hộp ABS IP65): SHT40 + VEML7700 + tấm cảm biến mưa
+# (danh-sach-mua.md mục B; bản này thay phương án Zigbee trong thiết kế mục 5).
+#
+# Đấu dây:
+#   I2C 3V3: SDA GPIO21, SCL GPIO22 — SHT40 (0x44) trong chắn bức xạ in 3D, VEML7700 (0x10) dưới nắp trong suốt.
+#   Tấm mưa (mạch LM393): VCC <- GPIO25 (chỉ cấp điện lúc đọc, tấm đỡ bị điện phân), AO -> GPIO34, GND.
+#   Phủ keo 3-chống lên mạch, không phủ lên mặt tấm mưa. Tấm vẫn mòn: thay định kỳ.
+#
+# Núm hiệu chỉnh:
+#   t_offset, rh_offset: so với nhiệt kế chuẩn đặt cạnh 24 giờ.
+#   glass_factor: nắp hộp che bớt sáng (lux thật / lux đọc được).
+#   rain_v: điện áp AO dưới ngưỡng này là ướt (tấm khô ~3,3 V). Nhỏ nước lên tấm, xem sensor mua_v rồi chỉnh.
+substitutions:
+  node: node-gieng-troi
+  friendly: Giếng trời
+  mqtt_password: !secret mqtt_pass_node_gieng_troi
+  t_offset: "0"
+  rh_offset: "0"
+  glass_factor: "1.0"
+  rain_v: "2.5"
+
+packages:
+  common: !include common.yaml
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+output:
+  - platform: gpio
+    pin: GPIO25
+    id: rain_power
+
+interval:
+  - interval: 15s
+    then:
+      - output.turn_on: rain_power
+      - delay: 200ms
+      - component.update: mua_v
+      - output.turn_off: rain_power
+
+sensor:
+  - platform: sht4x
+    update_interval: 30s
+    temperature:
+      name: nhiet_do
+      filters:
+        - offset: ${t_offset}
+        - or: [throttle: 300s, delta: 0.3]
+    humidity:
+      name: do_am
+      filters:
+        - offset: ${rh_offset}
+        - or: [throttle: 300s, delta: 2.0]
+
+  - platform: veml7700 # tới ~120k lux, không bão hoà như BH1750 ngoài nắng
+    update_interval: 30s
+    glass_attenuation_factor: ${glass_factor}
+    ambient_light:
+      name: lux
+      filters:
+        - or: [throttle: 300s, delta: 15%]
+
+  - platform: adc
+    id: mua_v
+    name: mua_v
+    pin: GPIO34
+    attenuation: 12db
+    update_interval: never # đọc trong interval ở trên, lúc tấm đang có điện
+
+  - platform: template # 0/1: hubd ghi lịch sử, viết luật mưa; dashboard đọc "1" là đang mưa
+    name: mua
+    accuracy_decimals: 0
+    update_interval: 15s
+    lambda: |-
+      return id(mua_bs).state ? 1 : 0;
+    filters:
+      - or: [throttle: 300s, delta: 1]
+
+binary_sensor:
+  - platform: template
+    id: mua_bs
+    internal: true
+    lambda: return id(mua_v).state < ${rain_v};
+    filters:
+      - delayed_on: 30s # hai lần đọc liên tiếp ướt
+      - delayed_off: 10min # tấm khô chậm; tránh báo tạnh rồi mưa lặp lại

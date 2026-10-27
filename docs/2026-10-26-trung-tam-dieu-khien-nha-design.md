@@ -230,6 +230,8 @@ scenes:
 - ESPHome CLI chạy trên PC: `esphome run node-xxx.yaml`. Lần đầu nạp qua USB, các lần sau nạp qua mạng (OTA, có mật khẩu).
 - Bỏ `api:`, dùng `mqtt:` trỏ IP trung tâm. Có `wifi:` với AP dự phòng, cộng `logger`.
 - Một gói chung `common.yaml` qua `packages:`. Mỗi node một file, chỉ bật module của khu đó.
+- Mã nguồn: `firmware/` ([README](../firmware/README.md)). Topic `node-<khu>/sensor/<tên>/state`, mỗi node một tài khoản MQTT.
+- Hồng ngoại (bổ sung 2026-10-27): node không khí gắn mắt thu + LED phát. Máy lạnh dùng `climate_ir`, thiết bị khác dùng mã học được lưu trong `config.yaml`; `hubd` giữ trạng thái giả định.
 
 **Xử lý số đo**
 

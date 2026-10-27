@@ -1,0 +1,12 @@
+# Node phòng ngủ 1 (tầng 1): không khí + hồng ngoại (máy lạnh). CO₂ ban đêm khi đóng cửa bật máy lạnh.
+# Node không khí thứ ba: CHƯA CHỐT đặt ở ngu1, ngu2 hay docsach, chủ nhà quyết.
+substitutions:
+  node: node-ngu1
+  friendly: Phòng ngủ 1
+  mqtt_password: !secret mqtt_pass_node_ngu1
+  ac_platform: coolix # CHƯA CHỐT hãng máy lạnh
+
+packages:
+  common: !include common.yaml
+  khongkhi: !include khongkhi.yaml
+  ir: !include ir.yaml

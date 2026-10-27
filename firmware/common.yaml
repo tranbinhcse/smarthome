@@ -1,0 +1,40 @@
+# Gói chung cho mọi node ESP32 (thiết kế mục 8). Node nạp bằng:
+#   packages: { common: !include common.yaml }
+# và khai báo substitutions: node (tên, cũng là tài khoản MQTT + tiền tố topic), friendly, mqtt_password.
+# Không dùng api: (không Home Assistant). Topic: <node>/sensor/<tên>/state, trạng thái kết nối <node>/status.
+esphome:
+  name: ${node}
+  friendly_name: ${friendly}
+
+esp32:
+  board: esp32dev # ESP32 DevKit WROOM-32, 30 chân
+
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap: # mất Wi-Fi nhà: node tự phát AP để nạp lại cấu hình/OTA
+    ssid: ${node}
+    password: !secret ap_password
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: ${node} # mỗi node một tài khoản: scripts/node_mqtt_user.py
+  password: ${mqtt_password}
+  topic_prefix: ${node}
+  discovery: false # hubd đọc topic theo config.yaml, không cần discovery
+
+sensor:
+  - platform: wifi_signal # Giai đoạn 0: sóng tại vị trí node phải >= -70 dBm
+    name: wifi
+    update_interval: 60s
+  - platform: uptime
+    name: uptime
+    update_interval: 300s

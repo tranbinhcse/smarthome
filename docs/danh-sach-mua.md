@@ -66,6 +66,15 @@ Giá ¥ là **tham khảo** (Taobao trôi giá liên tục, bấm vào xem giá 
 | Dây silicon + JST + ống co nhiệt | 1 bộ | [硅胶线 JST 热缩管 套装](https://s.taobao.com/search?q=硅胶线+JST+热缩管+套装) | 20–40 |
 | Dung dịch chuẩn TDS 342 ppm | 1 | [TDS校准液 342ppm](https://s.taobao.com/search?q=TDS校准液+342ppm) | 8–15 |
 
+### G. Hồng ngoại gắn vào node không khí × 3 (điều khiển TV, loa, quạt, máy lạnh — `firmware/ir.yaml`)
+| Món | SL | Keyword Taobao | ¥ ≈ |
+|---|---|---|---|
+| Mắt thu VS1838B (học mã remote) | 3 | [VS1838B 红外接收头](https://s.taobao.com/search?q=VS1838B+红外接收头) | chưa tra |
+| LED phát hồng ngoại 940 nm 5 mm | 6 | [940nm 红外发射管 5mm](https://s.taobao.com/search?q=940nm+红外发射管+5mm) | chưa tra |
+| Transistor S8050 + trở 1 kΩ, 10 Ω | 3 bộ | [S8050 三极管](https://s.taobao.com/search?q=S8050+三极管) | chưa tra |
+
+Phòng có thiết bị hồng ngoại mà không có node không khí (kho, ngu2, docsach): dùng ESP32 dự phòng làm node chỉ có hồng ngoại, hoặc mua thêm ESP32.
+
 ### Tạm tính Taobao
 - Toàn bộ điện tử + nguồn + vật tư: **~¥850–1.000 ≈ 3,1–3,6 tr ₫** (chưa ship/gom hàng).
 - So với Shopee ~8,1 tr → **rẻ hơn ~2–2,5×**.

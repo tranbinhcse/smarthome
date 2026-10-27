@@ -18,6 +18,7 @@ __pycache__/
 # ảnh nền gốc (PNG nặng), chỉ giữ bản .webp trong repo
 web/images/*.png
 .DS_Store
+!secrets.example.yaml
 !firmware/secrets.example.yaml
 
 # ESPHome: thư mục build khi dịch firmware/*.yaml

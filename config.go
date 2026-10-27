@@ -57,6 +57,8 @@ type Device struct {
 	OnlineTopic  string `yaml:"online_topic" json:"-"`
 	On           string `yaml:"on" json:"-"`
 	Off          string `yaml:"off" json:"-"`
+	// Codes: mã hồng ngoại học được (Pronto) theo mã nút dashboard (power, vol_up...). Xem firmware/README.md.
+	Codes map[string]string `yaml:"codes" json:"-"`
 }
 
 func (d Device) payload(to string) string {

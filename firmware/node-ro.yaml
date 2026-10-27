@@ -1,0 +1,216 @@
+# Node máy lọc RO (dưới bồn rửa, thiết kế mục 16 + danh-sach-mua.md mục C).
+# CHƯA CHỐT máy RO nào (quầy cafe hay phòng làm việc): đổi zone trong config.yaml của hubd, firmware giữ nguyên.
+#
+# Đấu dây:
+#   I2C 3V3: SDA GPIO21, SCL GPIO22 — ADS1115 (0x48).
+#   Mạch TDS "trước" (đầu dò ở đường nước vào): VCC <- GPIO25, AO -> ADS1115 A0.
+#   Mạch TDS "sau" (đầu dò NGAY SAU MÀNG RO, trước lõi khoáng/ORP): VCC <- GPIO26, AO -> ADS1115 A1.
+#     Đọc lần lượt, chỉ cấp điện mạch đang đọc: hai đầu dò cùng đường nước đọc cùng lúc sẽ nhiễu nhau.
+#   DS18B20 dán sát ống: DATA -> GPIO27, trở kéo lên 4,7 kΩ lên 3V3.
+#   YF-S401 ở đường nước vào, trước lõi lọc: nguồn 5V, tín hiệu qua cầu chia 10 kΩ/20 kΩ -> GPIO13.
+#   Tấm dò rò nước dưới máy (tấm mưa, mạch LM393): VCC <- GPIO32, AO -> GPIO35.
+#
+# Núm hiệu chỉnh:
+#   tds_in_k, tds_out_k: ngâm đầu dò vào dung dịch chuẩn 342 ppm, k mới = k cũ × 342 / số đọc.
+#   pulses_per_l: YF-S401 theo datasheet F = 98 × Q (L/phút) ≈ 5880 xung/L. Hứng 1 L thật để chỉnh.
+#   product_ratio: tỉ lệ nước thành phẩm / nước vào, đo một lần lúc lắp (hứng cả hai đầu ra cùng lúc).
+#   filter_life_l: số lít nước VÀO máy tới lúc thay lõi sớm nhất theo hãng (CHƯA CÓ, ghi ở Giai đoạn 0).
+#   leak_v: điện áp AO dưới ngưỡng này là có nước trên tấm.
+substitutions:
+  node: node-ro
+  friendly: Máy lọc RO
+  mqtt_password: !secret mqtt_pass_node_ro
+  tds_in_k: "1.0"
+  tds_out_k: "1.0"
+  pulses_per_l: "5880.0"
+  product_ratio: "1.0"
+  filter_life_l: "3000.0"
+  leak_v: "2.5"
+
+packages:
+  common: !include common.yaml
+
+preferences:
+  flash_write_interval: 5min # số lít lưu flash, sống qua mất điện mà không ghi mòn flash
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+ads1115:
+  - address: 0x48
+
+one_wire:
+  - platform: gpio
+    pin: GPIO27
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Asia/Ho_Chi_Minh
+
+output:
+  - { platform: gpio, pin: GPIO25, id: tds_in_power }
+  - { platform: gpio, pin: GPIO26, id: tds_out_power }
+  - { platform: gpio, pin: GPIO32, id: leak_power }
+
+globals:
+  - { id: lit_today, type: float, restore_value: true, initial_value: "0" } # lít nước vào máy hôm nay
+  - { id: lit_day, type: int, restore_value: true, initial_value: "0" } # ngày trong năm của lit_today
+  - { id: lit_filter, type: float, restore_value: true, initial_value: "0" } # lít từ lần thay lõi
+  - { id: last_pulses, type: int, initial_value: "0" }
+
+interval:
+  - interval: 30s
+    then:
+      - output.turn_on: tds_in_power
+      - delay: 1s
+      - component.update: tds_in_v
+      - output.turn_off: tds_in_power
+      - delay: 2s
+      - output.turn_on: tds_out_power
+      - delay: 1s
+      - component.update: tds_out_v
+      - output.turn_off: tds_out_power
+      - component.update: tds_nguon
+      - component.update: tds_sau_loc
+      - component.update: ti_le_loai_bo
+  - interval: 10s
+    then:
+      - output.turn_on: leak_power
+      - delay: 200ms
+      - component.update: leak_v_s
+      - output.turn_off: leak_power
+  - interval: 60s
+    then:
+      - lambda: |-
+          // sang ngày mới thì đếm lại; không có giờ (chưa có SNTP) thì cộng dồn tiếp
+          auto now = id(sntp_time).now();
+          if (now.is_valid() && now.day_of_year != id(lit_day)) {
+            id(lit_day) = now.day_of_year;
+            id(lit_today) = 0;
+          }
+      - component.update: da_loc_hom_nay
+      - component.update: loi_loc_con
+
+button:
+  - platform: template # sau khi thay lõi: mosquitto_pub -t node-ro/button/da_thay_loi/command -m PRESS
+    name: da_thay_loi
+    on_press:
+      - lambda: id(lit_filter) = 0;
+      - component.update: loi_loc_con
+
+sensor:
+  - platform: ads1115
+    id: tds_in_v
+    multiplexer: A0_GND
+    gain: 4.096
+    update_interval: never
+    internal: true
+  - platform: ads1115
+    id: tds_out_v
+    multiplexer: A1_GND
+    gain: 4.096
+    update_interval: never
+    internal: true
+
+  - platform: dallas_temp
+    id: water_t
+    name: nhiet_do_nuoc
+    update_interval: 30s
+
+  # TDS theo công thức mạch DFRobot (bậc ba theo điện áp), bù nhiệt về 25 °C bằng DS18B20.
+  - platform: template
+    id: tds_nguon
+    name: tds_nguon
+    unit_of_measurement: ppm
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      const float t = isnan(id(water_t).state) ? 25.0f : id(water_t).state;
+      const float v = id(tds_in_v).state / (1.0f + 0.02f * (t - 25.0f));
+      return (133.42f * v * v * v - 255.86f * v * v + 857.39f * v) * 0.5f * ${tds_in_k};
+    filters:
+      - filter_out: nan
+  - platform: template
+    id: tds_sau_loc
+    name: tds_sau_loc
+    unit_of_measurement: ppm
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      const float t = isnan(id(water_t).state) ? 25.0f : id(water_t).state;
+      const float v = id(tds_out_v).state / (1.0f + 0.02f * (t - 25.0f));
+      return (133.42f * v * v * v - 255.86f * v * v + 857.39f * v) * 0.5f * ${tds_out_k};
+    filters:
+      - filter_out: nan
+  - platform: template # (1 − TDS sau / TDS trước) × 100; < 90 % là màng yếu
+    id: ti_le_loai_bo
+    name: ti_le_loai_bo
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    update_interval: never
+    lambda: |-
+      const float a = id(tds_nguon).state, b = id(tds_sau_loc).state;
+      if (isnan(a) || isnan(b) || a < 1.0f) return NAN;
+      return (1.0f - b / a) * 100.0f;
+    filters:
+      - filter_out: nan
+
+  - platform: pulse_counter
+    pin: GPIO13
+    name: luu_luong # L/phút nước vào máy
+    unit_of_measurement: L/min
+    accuracy_decimals: 2
+    update_interval: 10s
+    filters:
+      - multiply: !lambda return 1.0f / ${pulses_per_l};
+    total:
+      id: pulses_total
+      internal: true
+      on_value:
+        - lambda: |-
+            const int now = (int) x, d = now - id(last_pulses);
+            id(last_pulses) = now;
+            if (d <= 0) return;
+            const float l = d / ${pulses_per_l};
+            id(lit_today) += l;
+            id(lit_filter) += l;
+
+  - platform: template # dashboard "Đã lọc hôm nay": nước thành phẩm = nước vào × product_ratio
+    id: da_loc_hom_nay
+    name: da_loc_hom_nay
+    unit_of_measurement: L
+    accuracy_decimals: 1
+    update_interval: never
+    lambda: return id(lit_today) * ${product_ratio};
+  - platform: template
+    id: loi_loc_con
+    name: loi_loc_con
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: return std::max(0.0f, (float) (100.0 * (1.0 - id(lit_filter) / ${filter_life_l})));
+
+  - platform: adc
+    id: leak_v_s
+    pin: GPIO35
+    attenuation: 12db
+    update_interval: never
+    internal: true
+  - platform: template # 0/1, luật hubd báo khẩn khi = 1
+    name: ro_nuoc
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      return id(leak_bs).state ? 1 : 0;
+    filters:
+      - or: [throttle: 300s, delta: 1]
+
+binary_sensor:
+  - platform: template
+    id: leak_bs
+    internal: true
+    lambda: return id(leak_v_s).state < ${leak_v};
+    filters:
+      - delayed_on: 10s

@@ -1040,19 +1040,20 @@ async function setMany(ds, to) {
 async function act(id, code, label, quiet = false) {
   const d = cfg.devices.find(x => x.id === id);
   if (!d) return false;
+  // Đọc trạng thái trước khi gửi: hub đẩy trạng thái giả định qua SSE, có thể về trước phản hồi và bị đảo hai lần.
+  const k = key => `x:${id}:${key}`, was = isOn(d), flip = state[k(code)] === '1' ? '0' : '1';
   if (!DEMO) {
     // Lệnh hồng ngoại / robot đi qua hub khi đã lắp module phát hồng ngoại hoặc nối robot vào hub.
     const r = await post({device: id, to: code});
     if (!r.ok) { if (!quiet) toast(`Hub chưa gửi được lệnh tới ${d.name}`); return false; }
   }
-  const k = key => `x:${id}:${key}`;
-  if (code === 'power') state['dev:' + id] = isOn(d) ? 'OFF' : 'ON';
+  if (code === 'power') state['dev:' + id] = was ? 'OFF' : 'ON';
   else if (/^(speed|mode|fan|temp|timer|suction|src)_/.test(code)) {   // đặt giá trị: speed_2, mode_cool, fan_auto, temp_24, timer_2
     const [key, v] = code.split('_');
     state[k(key)] = key === 'temp' ? String(Math.min(30, Math.max(16, Number(v)))) : v;
     if (key === 'speed') state['dev:' + id] = 'ON';
   }
-  else if (['play', 'swing', 'sleep', 'turbo'].includes(code)) state[k(code)] = state[k(code)] === '1' ? '0' : '1';
+  else if (['play', 'swing', 'sleep', 'turbo'].includes(code)) state[k(code)] = flip;
   else if (code === 'start') state[k('status')] = 'cleaning';
   else if (code === 'pause') state[k('status')] = 'paused';
   else if (code === 'dock') state[k('status')] = 'returning';

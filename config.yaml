@@ -109,6 +109,40 @@ entities:
   - { id: jk.p2.cycles,     name: "Pack 2 số chu kỳ",        unit: "",   topic: nangluong/jk/p2/cycles,        zone: kythuat }
   - { id: jk.p2.alarms,     name: "Pack 2 số lỗi",           unit: "",   topic: nangluong/jk/p2/alarms,        zone: kythuat }
   - { id: jk.p2.errors,     name: "Pack 2 lỗi",              unit: "",   topic: nangluong/jk/p2/errors,        zone: kythuat }
+  # Node ESP32 (firmware/, chưa lắp — hiện "—" tới khi có dữ liệu). Topic: node-<khu>/sensor/<tên>/state.
+  # Vị trí node CHƯA CHỐT (chủ nhà quyết): node không khí thứ ba ở ngu1/ngu2/docsach; máy RO nào gắn node-ro
+  # (đổi zone của ro.* là xong, firmware giữ nguyên).
+  # Firmware còn gửi pm1, pm10, nox, wifi, nhiet_do_nuoc, luu_luong: không khai báo ở đây vì dashboard gộp mọi
+  # µg/m³ thành PM2.5 và mọi °C trong phòng thành nhiệt độ phòng.
+  - { id: cafe.t,     name: "Nhiệt độ",      unit: "°C",    zone: cafe,    topic: node-cafe/sensor/nhiet_do/state }
+  - { id: cafe.h,     name: "Độ ẩm",         unit: "%",     zone: cafe,    topic: node-cafe/sensor/do_am/state }
+  - { id: cafe.co2,   name: "CO₂",           unit: "ppm",   zone: cafe,    topic: node-cafe/sensor/co2/state }
+  - { id: cafe.pm,    name: "Bụi mịn PM2.5", unit: "µg/m³", zone: cafe,    topic: node-cafe/sensor/pm25/state }
+  - { id: cafe.voc,   name: "Chỉ số VOC",    unit: "",      zone: cafe,    topic: node-cafe/sensor/voc/state }
+  - { id: cafe.lux,   name: "Ánh sáng",      unit: "lx",    zone: cafe,    topic: node-cafe/sensor/lux/state }
+  - { id: cafe.nguoi, name: "Có người",      unit: "",      zone: cafe,    topic: node-cafe/sensor/co_nguoi/state }
+  - { id: lv.t,       name: "Nhiệt độ",      unit: "°C",    zone: lamviec, topic: node-lamviec/sensor/nhiet_do/state }
+  - { id: lv.h,       name: "Độ ẩm",         unit: "%",     zone: lamviec, topic: node-lamviec/sensor/do_am/state }
+  - { id: lv.co2,     name: "CO₂",           unit: "ppm",   zone: lamviec, topic: node-lamviec/sensor/co2/state }
+  - { id: lv.pm,      name: "Bụi mịn PM2.5", unit: "µg/m³", zone: lamviec, topic: node-lamviec/sensor/pm25/state }
+  - { id: lv.voc,     name: "Chỉ số VOC",    unit: "",      zone: lamviec, topic: node-lamviec/sensor/voc/state }
+  - { id: lv.lux,     name: "Ánh sáng",      unit: "lx",    zone: lamviec, topic: node-lamviec/sensor/lux/state }
+  - { id: n1.t,       name: "Nhiệt độ",      unit: "°C",    zone: ngu1,    topic: node-ngu1/sensor/nhiet_do/state }
+  - { id: n1.h,       name: "Độ ẩm",         unit: "%",     zone: ngu1,    topic: node-ngu1/sensor/do_am/state }
+  - { id: n1.co2,     name: "CO₂",           unit: "ppm",   zone: ngu1,    topic: node-ngu1/sensor/co2/state }
+  - { id: n1.pm,      name: "Bụi mịn PM2.5", unit: "µg/m³", zone: ngu1,    topic: node-ngu1/sensor/pm25/state }
+  - { id: n1.voc,     name: "Chỉ số VOC",    unit: "",      zone: ngu1,    topic: node-ngu1/sensor/voc/state }
+  - { id: n1.lux,     name: "Ánh sáng",      unit: "lx",    zone: ngu1,    topic: node-ngu1/sensor/lux/state }
+  - { id: gt.t,       name: "Nhiệt độ",      unit: "°C",    zone: gieng_troi, topic: node-gieng-troi/sensor/nhiet_do/state }
+  - { id: gt.h,       name: "Độ ẩm",         unit: "%",     zone: gieng_troi, topic: node-gieng-troi/sensor/do_am/state }
+  - { id: gt.lux,     name: "Ánh sáng",      unit: "lx",    zone: gieng_troi, topic: node-gieng-troi/sensor/lux/state }
+  - { id: gt.mua,     name: "Mưa",           unit: "",      zone: gieng_troi, topic: node-gieng-troi/sensor/mua/state }
+  - { id: ro.tds_in,  name: "Nước nguồn",    unit: "ppm",   zone: cafe,    topic: node-ro/sensor/tds_nguon/state }
+  - { id: ro.tds,     name: "Nước sau lọc",  unit: "ppm",   zone: cafe,    topic: node-ro/sensor/tds_sau_loc/state }
+  - { id: ro.loai_bo, name: "Tỉ lệ loại bỏ", unit: "%",     zone: cafe,    topic: node-ro/sensor/ti_le_loai_bo/state }
+  - { id: ro.loc_l,   name: "Đã lọc hôm nay", unit: "L",    zone: cafe,    topic: node-ro/sensor/da_loc_hom_nay/state }
+  - { id: ro.loi,     name: "Lõi lọc còn",   unit: "%",     zone: cafe,    topic: node-ro/sensor/loi_loc_con/state }
+  - { id: ro.ro_nuoc, name: "Rò nước",       unit: "",      zone: cafe,    topic: node-ro/sensor/ro_nuoc/state }
 
 # Thiết bị Tuya: phần giữa BEGIN/END do tuya-bridge/gen_config.py sinh từ tuya/devices.json.
 # Gắn zone / protected: true bằng cách sửa tay NGOÀI đoạn sinh, hoặc dùng tuya/overrides (xem README).
@@ -124,6 +158,23 @@ devices:
   - {"id": "tuya_ebba01d29a86b4f29dlrgx", "name": "CB Tổng PK Tầng 2 ", "command_topic": "tuya/ebba01d29a86b4f29dlrgx/cmd", "state_topic": "tuya/ebba01d29a86b4f29dlrgx/state", "online_topic": "tuya/ebba01d29a86b4f29dlrgx/online", "kind": "breaker", "zone": "tudien2", "protected": true}
   - {"id": "tuya_ebef59cd6761b0a021jvww", "name": "Ổ cắm Hồ Cá", "command_topic": "tuya/ebef59cd6761b0a021jvww/cmd", "state_topic": "tuya/ebef59cd6761b0a021jvww/state", "online_topic": "tuya/ebef59cd6761b0a021jvww/online", "kind": "socket", "zone": "cafe", "protected": true}
   # END tuya-devices
+  # Hồng ngoại qua node ESP32 (firmware/ir.yaml). Bỏ # khi đã lắp module và chốt hãng máy lạnh / học xong mã.
+  # Máy lạnh có climate_ir: hub chuyển nguyên mã nút (temp_24, mode_cool...) tới <node>/ir/ac.
+  # Một node chỉ có một climate: hai máy lạnh cùng hãng trong phòng nhận chung tín hiệu, khai báo MỘT thiết bị.
+  # TV/loa/quạt: codes = chuỗi Pronto học được (firmware/README.md), hub gửi tới <node>/ir/send; nút chưa học bị từ chối.
+  # - { id: cafe_ml, name: "Máy lạnh", zone: cafe,    kind: ac, command_topic: node-cafe/ir/ac,    online_topic: node-cafe/status }
+  # - { id: lv_ml,   name: "Máy lạnh", zone: lamviec, kind: ac, command_topic: node-lamviec/ir/ac, online_topic: node-lamviec/status }
+  # - { id: n1_ml,   name: "Máy lạnh", zone: ngu1,    kind: ac, command_topic: node-ngu1/ir/ac,    online_topic: node-ngu1/status }
+  # - id: cafe_tv
+  #   name: "TV"
+  #   zone: cafe
+  #   kind: tv
+  #   command_topic: node-cafe/ir/send
+  #   online_topic: node-cafe/status
+  #   codes:
+  #     power:    "0000 006D 0022 0002 0157 00AC 0015 0016 ..."
+  #     vol_up:   "0000 006D ..."
+  #     vol_down: "0000 006D ..."
 
 # Luật tự động hoá (ví dụ, bỏ # để bật). Thiết bị protected không bao giờ bị luật tắt.
 # rules:
