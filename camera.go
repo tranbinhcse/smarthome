@@ -250,7 +250,7 @@ func nvrChannels(ctx context.Context, cl *http.Client, host string) ([]nvrChanne
 	}
 	if err != nil {
 		log.Printf("thử kết nối đầu ghi: %v", err)
-		return nil, errors.New("không kết nối được đầu ghi: kiểm tra IP, đầu ghi đã bật ISAPI chưa")
+		return nil, errors.New("không kết nối được đầu ghi: kiểm tra IP; đầu ghi đổi cổng web khác 80 thì nhập IP:cổng (vd 192.168.1.10:8080)")
 	}
 	defer res.Body.Close()
 	switch res.StatusCode {
