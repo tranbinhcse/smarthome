@@ -166,6 +166,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mountAssistant(mux, hub, auth)
 	mountSettings(mux, hub, auth)
 	mountTuyaSetup(mux, hub, auth)
+	mountNotify(mux, hub, auth)
 	return mux
 }
 

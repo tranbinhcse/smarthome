@@ -27,6 +27,7 @@ type Action struct {
 
 	Notify string `yaml:"notify"` // câu cảnh báo, publish lên hubd/alert
 	Level  string `yaml:"level"`  // urgent | warn | info (rỗng = info)
+	Kind   string `yaml:"kind"`   // loại thông báo (co2, bui, mua, nong...): tắt được từng loại trong Cài đặt (notify.go)
 
 	Alert string `yaml:"-"` // engine tự tạo cho luật có alert: id luật; Text rỗng = nhả cảnh báo
 	Text  string `yaml:"-"`
