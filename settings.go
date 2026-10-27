@@ -8,7 +8,7 @@ import (
 
 // Cấu hình nhập từ trang Cài đặt (Tuya, AI, đầu ghi camera, Spotify...): mỗi nhóm một object JSON trong SQLite.
 // Khoá có tên kết thúc bằng key/pass/password/token/secret là bí mật: API cho trình duyệt chỉ trả "<khoá>_set": true,
-// không bao giờ trả giá trị. Lưu là gộp: chuỗi rỗng ở khoá bí mật = giữ giá trị cũ, null = xoá khoá.
+// không bao giờ trả giá trị. Lưu là gộp: chuỗi rỗng ở khoá bí mật = giữ giá trị cũ (trừ khi đổi url), null = xoá khoá.
 var (
 	settingNS  = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 	secretKey  = regexp.MustCompile(`(?i)(key|pass|password|token|secret)$`)
@@ -28,6 +28,14 @@ func (d *DB) PutSetting(ns string, patch map[string]any) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	cur := d.Setting(ns)
+	if u, ok := patch["url"]; ok && u != cur["url"] {
+		// Bí mật gắn với url lưu cùng nó: đổi url mà không nhập lại thì xoá, không gửi khoá cũ tới máy chủ khác.
+		for k := range cur {
+			if v, _ := patch[k].(string); secretKey.MatchString(k) && v == "" {
+				delete(cur, k)
+			}
+		}
+	}
 	for k, v := range patch {
 		switch {
 		case v == nil:

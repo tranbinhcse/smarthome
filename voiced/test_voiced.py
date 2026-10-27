@@ -118,8 +118,8 @@ class TestRun(unittest.TestCase):
 class FakeOpenAI:
     """Endpoint giả tương thích OpenAI (GET /v1/models, POST /v1/chat/completions) chạy trên 127.0.0.1:
     trả lần lượt các message soạn sẵn, ghi lại (method, path, Authorization, body) của mọi request. Không gọi API thật."""
-    def __init__(self, *replies, models=("gpt-b", "gpt-a"), status=200):
-        self.replies, self.models, self.status, self.reqs = list(replies), models, status, []
+    def __init__(self, *replies, models=("gpt-b", "gpt-a"), status=200, location=None):
+        self.replies, self.models, self.status, self.reqs, self.location = list(replies), models, status, [], location
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -148,6 +148,8 @@ class FakeOpenAI:
             code, out = 404, {"error": {"message": "không có"}}
         b = json.dumps(out).encode()
         h.send_response(code)
+        if self.location:
+            h.send_header("Location", self.location)
         h.send_header("Content-Type", "application/json")
         h.send_header("Content-Length", str(len(b)))
         h.end_headers()
@@ -274,6 +276,30 @@ class TestCheck(AICase):
         chat = api.chats()[-1]
         self.assertEqual((chat[2], chat[3]["model"]), ("Bearer sk-moi", "gpt-a"))
         self.assertTrue(chat[3]["tools"])  # thử đúng kiểu gọi thật: có tool
+
+    def test_stored_key_stays_with_stored_url(self):
+        # Người có PIN đổi URL sang máy khác mà không nhập lại khoá: khoá đã lưu không được gửi đi.
+        home, other = self.fake(), self.fake()
+        stored = {"url": home.url, "api_key": "sk-cu"}
+        self.check(stored, {"url": other.url})
+        self.check(stored, {"url": home.url + "/"})  # cùng địa chỉ, khác dấu / cuối: vẫn dùng khoá đã lưu
+        self.assertEqual([r[2] for r in other.reqs], [None])
+        self.assertEqual([r[2] for r in home.reqs], ["Bearer sk-cu"])
+
+    def test_only_models_and_chat_paths_no_redirect(self):
+        # Chỉ gọi được {url}/models và {url}/chat/completions: URL có query/fragment bị từ chối, không đi theo chuyển hướng
+        # (tránh dùng nút Thử để gọi dịch vụ nội bộ như go2rtc, hubd bằng đường dẫn tuỳ ý).
+        inner = self.fake()
+        hop = self.fake(status=302, location=inner.url + "/models")
+        for url in (inner.url + "?x=", inner.url + "#a"):
+            r = self.check({}, {"url": url})
+            self.assertFalse(r["ok"], url)
+        r = self.check({}, {"url": hop.url, "model": "m"})
+        self.assertFalse(r["ok"])
+        self.assertEqual(inner.reqs, [])
+        self.assertNotIn("lỗi giả", r["message"])  # thân lỗi trả về chỉ lấy error.message của API kiểu OpenAI...
+        r = self.check({}, {"url": self.fake(status=404).url, "model": "gpt-x"})
+        self.assertIn("lỗi giả", r["message"])  # ...như "model không tồn tại"
 
     def test_endpoint_without_model_list(self):
         api = self.fake(say("OK"), models=None)

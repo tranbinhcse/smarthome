@@ -32,7 +32,7 @@ import wave
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import numpy as np
 
@@ -315,6 +315,30 @@ def base_url(url):
     return url.strip().rstrip("/").removesuffix("/chat/completions")
 
 
+def url_problem(url):
+    """Địa chỉ AI do người có PIN nhập: chỉ http(s), không ? hay # nên chỉ gọi được {url}/models và {url}/chat/completions
+    (không dùng được để gọi đường dẫn tuỳ ý của dịch vụ nội bộ như go2rtc, hubd)."""
+    u = urlsplit(url)
+    if u.scheme not in ("http", "https") or not u.hostname or "?" in url or "#" in url:
+        return "Địa chỉ API phải dạng http:// hoặc https://máy/đường-dẫn, không có ? hay #."
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **kw):
+        return None  # 3xx thành HTTPError: endpoint không chuyển hướng được sang dịch vụ nội bộ
+
+
+OPEN = urllib.request.build_opener(NoRedirect).open
+
+
+def api_error(e):
+    """error.message của API kiểu OpenAI (vd model không tồn tại); không trả nguyên thân phản hồi."""
+    try:
+        return ": " + str(json.loads(e.read())["error"]["message"])[:200]
+    except Exception:
+        return ""
+
+
 class AI:
     """API chat completions tương thích OpenAI (OpenAI, OpenRouter, Groq, Gemini, Ollama/LM Studio trong LAN...),
     chỉ dùng thư viện chuẩn. Lỗi mạng → OSError; HTTP lỗi → urllib.error.HTTPError (cũng là OSError)."""
@@ -327,11 +351,11 @@ class AI:
         return cls(s["url"], s.get("api_key"), s["model"]) if s.get("url") and s.get("model") else None
 
     def call(self, path, body=None):
-        if not self.url.startswith(("http://", "https://")):  # urllib còn mở được file://
-            raise ValueError("địa chỉ API phải bắt đầu bằng http:// hoặc https://")
+        if problem := url_problem(self.url):  # urllib còn mở được file://
+            raise ValueError(problem)
         headers = {"Content-Type": "application/json"} | ({"Authorization": "Bearer " + self.key} if self.key else {})
         req = urllib.request.Request(self.url + path, data=None if body is None else json.dumps(body).encode(), headers=headers)
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+        with OPEN(req, timeout=self.timeout) as r:
             return json.load(r)
 
     def chat(self, messages, tools):
@@ -388,13 +412,15 @@ def check_ai(stored, draft):
     """Nút "Thử kết nối": ô để trống dùng giá trị đã lưu. Lấy danh sách model; có model thì hỏi thử một câu kèm tool
     (đúng kiểu gọi thật). Kết quả không chứa khoá."""
     s = {**stored, **{k: str(draft[k]).strip() for k in ("url", "api_key", "model") if str(draft.get(k) or "").strip()}}
+    if base_url(s.get("url", "")) != base_url(stored.get("url", "")) and not str(draft.get("api_key") or "").strip():
+        s["api_key"] = ""  # khoá đã lưu chỉ gửi tới đúng địa chỉ đã lưu cùng nó
     def done(ok, models, *notes):
         return {"ok": ok, "models": models, "message": " ".join(notes)}
     if not s.get("url"):
         return done(False, [], "Nhập địa chỉ API trước.")
     ai = AI(s["url"], s.get("api_key"), s.get("model", ""), timeout=10)
-    if not ai.url.startswith(("http://", "https://")):
-        return done(False, [], "Địa chỉ API phải bắt đầu bằng http:// hoặc https://")
+    if problem := url_problem(ai.url):
+        return done(False, [], problem)
     models, notes = [], []
     try:
         models = ai.models()
@@ -413,7 +439,7 @@ def check_ai(stored, draft):
     try:
         ai.chat([{"role": "user", "content": "Trả lời đúng một chữ: OK"}], TOOLS)
     except urllib.error.HTTPError as e:
-        why = "" if e.code in (401, 403) else ": " + e.read()[:200].decode(errors="replace")
+        why = api_error(e) if e.code >= 400 and e.code not in (401, 403) else ""
         return done(False, models, *notes, f"Model {ai.model} lỗi HTTP {e.code}{why}")
     except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
         return done(False, models, *notes, f"Model {ai.model} chưa trả lời được: {e}")
