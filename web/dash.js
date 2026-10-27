@@ -230,6 +230,7 @@ function chipsHtml() {
 }
 function stageHtml() {
   if (view.page === 'settings') return settingsBox();
+  if (view.page === 'camera') return camWall();
   if (view.page === 'energy') { const fm = flowMap(); return (fm ? `<div class="ebox"><div class="wh">${icon('bolt', 'wi amber')}<h3>Dòng điện lúc này</h3></div>${fm}</div>` : '') + energyChart(); }
   const sc = sceneNow(), pos = sc.pos || [50, 50];
   return `<div class="cover" style="--ar:${(sc.w / sc.h).toFixed(4)};--px:${pos[0] / 100};--py:${pos[1] / 100}"><div id="chips"></div></div>`;
@@ -256,7 +257,7 @@ function draw() {
   if (!volDrag) $('#greet').innerHTML = greetHtml();   // đang kéo âm lượng thì không vẽ đè
   const c = $('#chips');
   if (c) c.innerHTML = chipsHtml();
-  if (view.page && !document.activeElement?.matches?.('#stage input, #stage select')) $('#stage').innerHTML = stageHtml();
+  if (view.page && !document.activeElement?.matches?.('#stage input, #stage select')) liveFill($('#stage'), stageHtml());
   const [side, bottom, scroll] = zonesHtml();
   // trang Cài đặt: đang gõ trong một ô thì không vẽ đè cột phải (mất con trỏ, bàn phím iPad đóng lại)
   if (!(view.page === 'settings' && document.activeElement?.matches?.('#side input, #side select, #side textarea'))) $('#side').innerHTML = side;
@@ -306,6 +307,10 @@ function greetHtml() {
   } else if (t === 'settings') {
     h = 'Cài đặt';
     p = 'Giao diện, phòng, thiết bị và ngữ cảnh của hub.';
+  } else if (t === 'camera') {
+    const cs = cfg.devices.filter(d => kindOf(d) === 'camera');
+    h = 'Camera';
+    p = cs.length ? `${cs.filter(d => !offline(d)).length}/${cs.length} camera đang ghi hình. Chạm một ô để phóng to.` : '';
   } else {
     const [w] = totalPower(), pv = num('deye.pv'), soc = num('jk.soc');
     h = 'Điện năng';
@@ -376,6 +381,7 @@ function zonesHtml() {
   if (t === 'room') return roomZones(zone(view.room));
   if (t === 'energy') return energyZones();
   if (t === 'settings') return settingsZones();
+  if (t === 'camera') return ['', ''];   // lưới camera chiếm cả trang
   const L = layout[t], f = view.floor;
   const one = (id, zn) => {
     const d = W[id], hidden = L.hidden.includes(id);
@@ -507,19 +513,23 @@ function openSheet(key) {
   m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); };   // đóng bảng thì ngắt luồng camera
   m.showModal();
 }
-// Vẽ bảng đang mở. Khung xem camera ([data-live] = WebSocket go2rtc qua hub) được giữ nguyên khi vẽ lại (mỗi tin SSE),
-// không thì luồng bị ngắt rồi nối lại liên tục. Trình phát là video-rtc.js của go2rtc: thử WebRTC, không được thì MSE.
-function fillSheet(m) {
-  const live = m.querySelector('[data-live]');
-  m.innerHTML = sheetHtml(sheet);
-  const slot = live && [...m.querySelectorAll('[data-live]')].find(e => e.dataset.live === live.dataset.live);
-  if (slot) slot.replaceWith(live);
-  for (const el of m.querySelectorAll('[data-live]:empty')) import('/api/cam-js/video-rtc.js').then(({VideoRTC}) => {
+function fillSheet(m) { liveFill(m, sheetHtml(sheet)); }
+// Vẽ lại một vùng có khung xem camera ([data-live] = WebSocket go2rtc qua hub): khung đang phát được giữ nguyên khi vẽ lại
+// (mỗi tin SSE), không thì luồng bị ngắt rồi nối lại liên tục. Trình phát là video-rtc.js của go2rtc: thử WebRTC, không được
+// thì MSE; khung bị khuất (ô khác đang phóng to) thì tự ngắt sau 5 giây, hiện lại thì nối lại.
+function liveFill(box, html) {
+  const live = new Map([...box.querySelectorAll('[data-live]')].map(e => [e.dataset.live, e]));
+  box.innerHTML = html;
+  for (const slot of box.querySelectorAll('[data-live]')) { const old = live.get(slot.dataset.live); if (old) slot.replaceWith(old); }
+  for (const el of box.querySelectorAll('[data-live]:empty')) import('/api/cam-js/video-rtc.js').then(({VideoRTC}) => {
     if (!customElements.get('video-rtc')) customElements.define('video-rtc', VideoRTC);
     if (!el.isConnected || el.firstChild) return;
     const v = document.createElement('video-rtc');
     v.mode = 'webrtc,mse';
     v.media = 'video';   // không lấy tiếng
+    v.visibilityThreshold = 0.01;
+    v.addEventListener('playing', () => el.classList.add('on'), true);   // sự kiện của <video> bên trong không nổi bọt: bắt ở pha capture
+    setTimeout(() => el.classList.add('wait'), 20000);   // 20 giây chưa có hình: báo không mở được luồng (.on vẫn thắng)
     el.append(v);
     v.src = new URL(el.dataset.live, location.href);
   }, () => {});
@@ -653,7 +663,7 @@ const W = {
       : '<p class="empty">Không phòng nào đang bật đèn.</p>';
   }},
   climate: {t: 'Không khí', i: 'leaf', c: 'green', o: () => CLIM_OPTS, hx: airTabs, r: f => airWidget(f, 'climate')},
-  cameras: {t: 'Camera', i: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
+  cameras: {t: 'Camera', i: 'camera', go: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
     const cs = devsOf(f, 'camera').filter(d => !hid('cameras', d.id));
     return cs.length ? `<div class="cams" data-keep="cameras">${cs.map(d => `<button class="cam" data-sheet="cam:${esc(d.id)}" style="${camBg(d)}" title="${SNAP[d.id] ? 'Ảnh chụp từ đầu ghi, mỗi phút một ảnh' : 'Ảnh minh hoạ phòng, chưa có hình từ đầu ghi'}">
       ${icon('camera', 'camic')}<span><i class="dot ${offline(d) ? 'bad' : 'ok'}"></i>${esc(zone(d.zone)?.name || d.name)}</span></button>`).join('')}</div>` : '';
@@ -758,6 +768,19 @@ function camPanel(id) {
     <div class="camview" style="${camBg(d)}"${DEMO ? '' : ` data-live="/api/cam/${encodeURIComponent(d.id)}/ws"`}></div>
     <p class="note">${DEMO ? 'Dữ liệu mẫu: ảnh minh hoạ của phòng.' : 'Hình trực tiếp (luồng phụ) từ đầu ghi ở tum kỹ thuật, đi qua hub.'}</p>
     <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
+}
+// Trang Camera (#/camera): lưới như app xem camera, mỗi ô một luồng phụ trực tiếp. Chạm một ô để phóng to hết khung
+// (các ô khác bị ẩn nên tự ngắt luồng), chạm lần nữa về lưới. Camera đầu ghi báo mất kết nối thì không mở luồng.
+let camBig = '';
+function camWall() {
+  const cs = cfg.devices.filter(d => kindOf(d) === 'camera');
+  if (!cs.length) return `<div class="ebox"><p class="empty">Chưa có camera. Nhập đầu ghi ở Cài đặt, mục Camera.</p></div>`;
+  const cols = cs.length <= 1 ? 1 : cs.length <= 4 ? 2 : cs.length <= 9 ? 3 : 4;
+  return `<div class="camwall${camBig ? ' one' : ''}" style="--cols:${cols}" data-keep="camwall">${cs.map(d => { const big = d.id === camBig, z = zone(d.zone);
+    return `<div class="camtile${big ? ' big' : ''}${offline(d) ? ' lost' : ''}" style="${camBg(d)}">
+      ${offline(d) || DEMO ? '' : `<div class="camlive" data-live="/api/cam/${encodeURIComponent(d.id)}/ws"></div>`}
+      <button class="camhit" data-camtile="${esc(d.id)}" aria-label="${big ? 'Thu nhỏ' : 'Phóng to'} ${esc(d.name)}"></button>
+      <span class="camname"><i class="dot ${offline(d) ? 'bad' : 'ok'}"></i>${esc(d.name)}${z ? ` · ${esc(z.name)}` : ''}</span></div>`; }).join('')}</div>`;
 }
 // Mức gió quạt: ba vạch tăng dần, vạch vượt mức thì mờ.
 const spd = n => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${[15, 11, 7].map((y, i) => `<path d="M${6 + i * 6} 19V${y}" stroke-width="3"${i >= n ? ' opacity=".3"' : ''}/>`).join('')}</svg>`;
@@ -1144,6 +1167,7 @@ addEventListener('pointercancel', endDrag);
 function parseHash() {
   if (location.hash.startsWith('#/dien')) return {floor: 0, room: '', page: 'energy'};
   if (location.hash.startsWith('#/caidat')) return {floor: 0, room: '', page: 'settings'};
+  if (location.hash.startsWith('#/camera')) return {floor: 0, room: '', page: 'camera'};
   const m = location.hash.match(/^#\/t(\d+)(?:\/([\w-]+))?/);
   const f = m ? +m[1] : 0, r = m && m[2] || '';
   if (!floors().includes(f)) return {floor: 0, room: '', page: ''};
@@ -1162,7 +1186,8 @@ function go(f, room = '', from = null, page = '') {
   if (from) { const r = from.getBoundingClientRect(); v.style.setProperty('--ox', `${r.left + r.width / 2}px`); v.style.setProperty('--oy', `${r.top + r.height / 2}px`); }
   view = {floor: f, room, page};
   editing = false;
-  const h = '#/' + (page ? {energy: 'dien', settings: 'caidat'}[page] : f ? `t${f}` + (room ? `/${room}` : '') : '');
+  camBig = '';
+  const h = '#/' + (page ? {energy: 'dien', settings: 'caidat', camera: 'camera'}[page] : f ? `t${f}` + (room ? `/${room}` : '') : '');
   if (location.hash !== h) history.pushState(null, '', h);
   draw();
   animate(v, 'go-' + dir);
@@ -1344,6 +1369,7 @@ document.addEventListener('click', async e => {
     return draw();
   }
   if ((el = pick('[data-airtab]'))) { airTab = el.dataset.airtab; return draw(); }
+  if ((el = pick('[data-camtile]'))) { camBig = camBig === el.dataset.camtile ? '' : el.dataset.camtile; return draw(); }
   if ((el = pick('[data-ssave]'))) return saveSetting(el.dataset.ssave);
   if (pick('[data-devedit]')) { devEdit = !devEdit; for (const k of Object.keys(DEVD)) delete DEVD[k]; return draw(); }
   if (pick('[data-devsave]')) return saveDevices();
@@ -1366,6 +1392,7 @@ document.addEventListener('click', async e => {
   if ((el = pick('[data-go]'))) {
     if (el.dataset.go === 'dien') return go(0, '', el, 'energy');
     if (el.dataset.go === 'caidat') return go(0, '', el, 'settings');
+    if (el.dataset.go === 'camera') return go(0, '', el, 'camera');
     const [f, r] = el.dataset.go.split('/');
     return go(Number(f) || 0, r || '', el);
   }

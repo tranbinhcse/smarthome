@@ -470,6 +470,29 @@ a.m-btn { display: inline-flex; align-items: center; justify-content: center; te
 .ch-plot.hov .ch-tip { display: block; } .ch-tip b { display: block; font-size: 15px; color: var(--ink); }
 .ch-empty { padding: 30px 0; text-align: center; }
 .stage.energy { place-items: stretch; grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
+
+/* Trang Camera: lưới chiếm cả ngang trang như app xem camera; ô phóng to lấp hết khung, các ô khác ẩn */
+.v-camera .stage { grid-column: 1 / -1; grid-row: 2 / 4; place-items: stretch; grid-template-rows: minmax(0, 1fr); }
+.v-camera .side, .v-camera .bottom { display: none; }
+.camwall { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 8px; align-content: start; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.camwall::-webkit-scrollbar { display: none; }
+.camtile { position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; background: #0b1118 center / cover no-repeat; border: 1px solid var(--line); }
+.camwall.one { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); align-content: stretch; }
+.camwall.one .camtile:not(.big) { display: none; }
+.camwall.one .camtile.big { aspect-ratio: auto; }
+.camlive, .camlive video-rtc { position: absolute; inset: 0; }
+.camlive video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.big .camlive video { object-fit: contain; background: #000; }
+.camlive::after, .camtile.lost::after { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 4px 12px; border-radius: 999px;
+  font-size: 12.5px; white-space: nowrap; color: var(--ink2); background: rgba(0, 0, 0, .55); pointer-events: none; }
+.camlive::after { content: 'Đang kết nối...'; }
+.camlive.wait::after { content: 'Không mở được luồng'; color: var(--alert); }
+.camlive.on::after { content: none; }
+.camtile.lost::after { content: 'Mất kết nối'; color: var(--alert); }
+.camhit { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: none; cursor: zoom-in; }
+.big .camhit { cursor: zoom-out; }
+.camname { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 16px); display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 999px; font-size: 12.5px; background: rgba(0, 0, 0, .55); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ebox.chbox { height: auto; justify-content: flex-start; gap: 10px; }
 .ebox .wh .more { margin-left: auto; }
 
@@ -515,8 +538,12 @@ a.m-btn { display: inline-flex; align-items: center; justify-content: center; te
   .bname, .clock { display: none; }
   .topr { gap: 6px; } .rbtn { width: 40px; height: 40px; }
   /* ảnh nhà chỉ là nền (nhãn tầng/phòng ẩn trên màn hẹp): bỏ khoảng trống, vào phòng qua tab tầng và widget Các phòng */
-  .stage:not(.energy) { display: none; }
-  .stage.energy { height: auto; }
+  .stage:not(.energy):not(.camera) { display: none; }
+  .stage.energy, .stage.camera { height: auto; }
+  /* camera: tối đa 2 cột, cuộn cả trang; ô phóng to giữ tỉ lệ 16:9 */
+  .v-camera .stage { grid-row: auto; }
+  .camwall { grid-template-columns: repeat(min(var(--cols), 2), minmax(0, 1fr)); overflow: visible; }
+  .camwall.one .camtile.big { aspect-ratio: 16 / 9; }
   /* hàng dưới xếp dọc: bỏ giới hạn chiều cao của bản iPad */
   .bottom:not(.scroll), .bottom:not(.scroll) .w { max-height: none; overflow: visible; }
   .bottom .w.big2 { grid-column: auto; }
