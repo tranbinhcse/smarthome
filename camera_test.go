@@ -450,3 +450,31 @@ func TestCamLiveBlockedAfterRejectedPassword(t *testing.T) {
 		t.Fatalf("tài khoản mới vẫn bị chặn: go2rtc=%d", g2Hits)
 	}
 }
+
+// Đổi IP đầu ghi mà không nhập lại mật khẩu thì bỏ mật khẩu đã lưu: ảnh chụp, hikbridge và RTSP (go2rtc có thể gửi
+// Basic) không mang mật khẩu cũ tới máy khác. Cùng đầu ghi thì giữ.
+func TestNVRHostChangeDropsSavedPassword(t *testing.T) {
+	t.Setenv("NVR_HOST", "")
+	mux, h, _ := assistantMux(t, Config{})
+	ck := call(mux, "POST", "/api/login", `{"pin":"1234"}`, "").Result().Cookies()
+	pass := func(b string) (any, bool) {
+		if w := call(mux, "PUT", "/api/settings/nvr", b, "", ck...); w.Code != 204 {
+			t.Fatalf("lưu %s: code=%d", b, w.Code)
+		}
+		p, ok := h.db.Setting("nvr")["nvr_pass"]
+		return p, ok
+	}
+	pass(`{"nvr_host":"192.168.1.64","nvr_user":"viewer","nvr_pass":"cu"}`)
+	if p, _ := pass(`{"nvr_host":" 192.168.1.64 ","nvr_user":"xem","nvr_pass":""}`); p != "cu" {
+		t.Fatalf("cùng đầu ghi mà mất mật khẩu: %v", p)
+	}
+	for _, b := range []string{`{"nvr_host":"10.6.6.6"}`, `{"nvr_host":"10.6.6.7","nvr_pass":""}`} {
+		pass(`{"nvr_pass":"cu"}`)
+		if _, ok := pass(b); ok {
+			t.Fatalf("%s: mật khẩu cũ còn dùng cho đầu ghi khác", b)
+		}
+	}
+	if p, _ := pass(`{"nvr_host":"10.6.6.8","nvr_pass":"moi"}`); p != "moi" {
+		t.Fatalf("đổi IP kèm mật khẩu mới: %v", p)
+	}
+}

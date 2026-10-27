@@ -3,7 +3,7 @@
 // Gán kênh đổi thì hubd sinh lại thiết bị camera (camera.yaml) và tự khởi động lại.
 (() => {
   const U = window.SETUP_UI, NS = 'nvr';
-  let found = null, busy = false, restart = false;   // found: {channels} hoặc {error} của lần thử gần nhất
+  let found = null, busy = false, restart = null;   // found: {channels} hoặc {error} của lần thử gần nhất; restart: cfg lúc lưu
   const saved = () => U.SAVED[NS] || {};
   const on = () => (U.DRAFT[NS]?.enabled ?? saved().enabled) !== false;
   // danh sách camera hubd sẽ sinh (camDevices trong camera.go): đổi thì hubd khởi động lại
@@ -33,11 +33,10 @@
       (chs.length ? `<p class="note">Gán kênh vào khu (camera mới hiện trên trang chủ và trang khu đó):</p>` + chs.map(([n, name]) =>
         `<div class="setrow"><span>${U.icon('camera')}Kênh ${n}${name ? ' · ' + U.esc(name) : ''}</span></div>
         <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px">${U.sselect(NS, `ch${n}_zone`, 'Khu', zones)}${U.sinput(NS, `ch${n}_name`, 'Tên hiển thị', {ph: name || `Camera kênh ${n}`})}</div>`).join('') : '') +
-      (restart ? `<p class="note busy">Hub đang khởi động lại để cập nhật camera (vài giây).</p><div class="kv"><button class="pill" data-sact="camera:reload">Tải lại trang</button></div>` : '');
+      (restart === cfg ? '<p class="note busy">Hub đang khởi động lại để cập nhật camera, trang tự cập nhật sau vài giây.</p>' : '');   // dash.js nạp cfg mới khi nối lại
   }
 
   async function act(what) {
-    if (what === 'reload') return location.reload();
     if (U.DEMO) return U.toast('Chế độ dữ liệu mẫu không kết nối đầu ghi thật');
     if (what === 'toggle') {
       const r = await U.api(`/api/settings/${NS}`, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({enabled: !on()})});
@@ -45,11 +44,13 @@
       if (U.DRAFT[NS]) delete U.DRAFT[NS].enabled;
       const before = gen(saved());
       await U.loadSetting(NS);
-      restart ||= gen(saved()) !== before;
+      if (gen(saved()) !== before) { restart = cfg; U.soon(); }
       return U.toast(on() ? 'Đã bật camera' : 'Đã tắt camera');
     }
     const host = String(U.sval(NS, 'nvr_host')).trim();
     if (host && !/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(host)) return U.toast('IP đầu ghi chỉ ghi IP (vd 192.168.1.64), không có http://');
+    // hubd bỏ mật khẩu đã lưu khi đổi IP (không gửi mật khẩu cũ tới máy khác): nhắc nhập lại thay vì lưu mất mật khẩu
+    if (what === 'save' && host !== String(saved().nvr_host || '').trim() && saved().nvr_pass_set && !U.sval(NS, 'nvr_pass')) return U.toast('Đổi IP đầu ghi thì nhập lại mật khẩu');
     if (what === 'test') {
       busy = true; U.soon();
       const r = await U.api('/api/setup/nvr/test', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -65,7 +66,7 @@
       }
       const before = gen(saved());
       await U.saveSetting(NS);
-      if (gen(saved()) !== before) { restart = true; U.soon(); }
+      if (gen(saved()) !== before) { restart = cfg; U.soon(); }
     }
   }
 

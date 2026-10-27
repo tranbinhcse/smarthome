@@ -67,7 +67,7 @@ Bật lần đầu:
    docker compose kill -s SIGHUP mosquitto   # nạp lại file mật khẩu, không ngắt kết nối
    ```
 3. `.env`: thêm dòng `COMPOSE_PROFILES=camera`; `.env` cũ chưa có `HUBD_CAMERA_TOKEN` thì chạy lại `scripts/init-secrets.sh` (chỉ thêm token, không đổi khoá cũ). `docker compose up -d --build`.
-4. Dashboard → Cài đặt → **Camera (đầu ghi Hikvision)**: nhập IP đầu ghi, tài khoản chỉ xem, mật khẩu; bấm **Thử kết nối** để xem các kênh đầu ghi trả về; chọn khu cho từng kênh (để "Không dùng" nếu bỏ qua), sửa tên hiển thị nếu muốn; **Lưu**. hubd ghi thiết bị `cam_ch<kênh>` vào `HUBD_GEN_DIR/camera.yaml` rồi tự khởi động lại; tải lại trang để thấy camera. Nút gạt **Bật camera** tắt/bật cả tích hợp.
+4. Dashboard → Cài đặt → **Camera (đầu ghi Hikvision)**: nhập IP đầu ghi, tài khoản chỉ xem, mật khẩu; bấm **Thử kết nối** để xem các kênh đầu ghi trả về; chọn khu cho từng kênh (để "Không dùng" nếu bỏ qua), sửa tên hiển thị nếu muốn; **Lưu**. hubd ghi thiết bị `cam_ch<kênh>` vào `HUBD_GEN_DIR/camera.yaml` rồi tự khởi động lại; tải lại trang để thấy camera. Nút gạt **Bật camera** tắt/bật cả tích hợp. Đổi IP đầu ghi thì phải nhập lại mật khẩu: hubd bỏ mật khẩu đã lưu để không gửi nó tới máy khác.
 5. Xem `docker compose logs -f hikbridge` có dòng `đã nối alertStream`. Thêm entity sự kiện trong `config.yaml` nếu cần cho luật (thiết bị camera sinh ra có id `cam_ch<kênh>`).
 
 Cách cũ vẫn chạy: trang Cài đặt chưa có IP đầu ghi thì hubd dùng `NVR_HOST`/`NVR_USER`/`NVR_PASS` trong `.env`; `HUBD_CAMERA_TOKEN` trống thì hikbridge đọc thẳng `NVR_*`. Khối camera để `#` trong `config.yaml` cũng vẫn bỏ `#` dùng được, nhưng đừng gán cùng kênh ở cả hai nơi (sẽ ra hai thẻ).

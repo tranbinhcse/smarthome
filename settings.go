@@ -80,6 +80,9 @@ func mountSettings(mux *http.ServeMux, h *Hub, a *Auth) {
 			http.Error(w, "cần một object JSON", 400)
 			return
 		}
+		if n == "nvr" {
+			nvrPatch(h.db, patch) // đổi IP đầu ghi: không giữ mật khẩu cũ (camera.go)
+		}
 		if err := h.db.PutSetting(n, patch); err != nil {
 			http.Error(w, "không lưu được", 500)
 			return

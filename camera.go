@@ -191,6 +191,16 @@ func (c *cams) proxy(w http.ResponseWriter, r *http.Request, path, query string)
 	}).ServeHTTP(w, r)
 }
 
+// nvrPatch: đổi IP đầu ghi mà không nhập mật khẩu mới thì bỏ mật khẩu đã lưu, để không gửi nó tới máy khác
+// (cùng quy tắc với nút Thử kết nối). Gọi trước khi lưu nhóm "nvr" (settings.go).
+func nvrPatch(db *DB, patch map[string]any) {
+	h, ok := patch["nvr_host"].(string)
+	old, _ := db.Setting("nvr")["nvr_host"].(string)
+	if p, _ := patch["nvr_pass"].(string); ok && p == "" && strings.TrimSpace(h) != strings.TrimSpace(old) {
+		patch["nvr_pass"] = nil
+	}
+}
+
 // test: nút "Thử kết nối". Ô để trống lấy cấu hình đang dùng, nhưng mật khẩu đã lưu chỉ gửi tới đúng đầu ghi đã lưu.
 func (c *cams) test(w http.ResponseWriter, r *http.Request) {
 	var b struct {
