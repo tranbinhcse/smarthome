@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -96,5 +97,18 @@ func TestAssistantReadsVoiceSettings(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(*pub, "\n"), "hubd/settings/voice changed") {
 		t.Fatalf("lưu phải báo voiced đọc lại: %v", *pub)
+	}
+}
+
+// Sắp xếp thiết bị chỉ gửi trường vừa đổi. Đổi tên một thiết bị không được làm mất phòng đã gán trước đó (2026-10-27):
+// object của từng thiết bị trộn theo trường, null xoá đúng trường đó.
+func TestSettingsMergeDeviceFields(t *testing.T) {
+	db := newDB(t)
+	db.PutSetting("devices", map[string]any{"a": map[string]any{"zone": "cafe", "name": "Đèn"}})
+	db.PutSetting("devices", map[string]any{"a": map[string]any{"name": "Đèn trần", "kind": "light"}, "b": map[string]any{"zone": "kho"}})
+	db.PutSetting("devices", map[string]any{"a": map[string]any{"kind": nil}})
+	want := map[string]any{"a": map[string]any{"zone": "cafe", "name": "Đèn trần"}, "b": map[string]any{"zone": "kho"}}
+	if got := db.Setting("devices"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("devices = %v, muốn %v", got, want)
 	}
 }

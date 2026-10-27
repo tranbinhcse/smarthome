@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -63,5 +64,28 @@ func TestSavingDeviceLayoutRestartsHub(t *testing.T) {
 	}
 	if z := h.db.Setting("devices")["tuya_a_1"].(map[string]any)["zone"]; z != "cafe" {
 		t.Fatalf("chưa lưu: %v", z)
+	}
+}
+
+// Bảng Tuya trong Cài đặt đổi được loại thiết bị và tên của thiết bị nhiều nút (group). Loại phải là một từ khoá
+// thường; tên nhóm chỉ áp cho thiết bị vốn đã có nhóm, không tự gom thiết bị một kênh vào nhóm.
+func TestDeviceOverridesKindAndGroup(t *testing.T) {
+	cfg := Config{Devices: []Device{
+		{ID: "tuya_a_1", Name: "Nút 1", Kind: "light", Group: "Đèn Kho"},
+		{ID: "tuya_a_2", Name: "Nút 2", Kind: "light", Group: "Đèn Kho"},
+		{ID: "tuya_b", Name: "Ổ bàn", Kind: "socket"},
+	}}
+	applyDeviceOverrides(&cfg, map[string]any{
+		"tuya_a_1": map[string]any{"kind": "socket", "group": "  Ổ bếp  "},
+		"tuya_a_2": map[string]any{"kind": "Loại Lạ!", "group": "Ổ bếp"},
+		"tuya_b":   map[string]any{"kind": "fan", "group": "Nhóm lạ"},
+	})
+	got := []string{}
+	for _, d := range cfg.Devices {
+		got = append(got, d.ID+"|"+d.Kind+"|"+d.Group)
+	}
+	want := []string{"tuya_a_1|socket|Ổ bếp", "tuya_a_2|light|Ổ bếp", "tuya_b|fan|"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thiết bị = %v, muốn %v", got, want)
 	}
 }

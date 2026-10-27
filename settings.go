@@ -43,7 +43,21 @@ func (d *DB) PutSetting(ns string, patch map[string]any) error {
 		case v == "" && secretKey.MatchString(k):
 			// ô mật khẩu để trống: giữ giá trị đã lưu
 		default:
-			cur[k] = v
+			// object (vd. từng thiết bị trong "devices") trộn theo trường: chỉ gửi trường vừa đổi không làm mất
+			// trường đã lưu trước; null xoá đúng trường đó
+			o, ok1 := cur[k].(map[string]any)
+			p, ok2 := v.(map[string]any)
+			if !ok1 || !ok2 {
+				cur[k] = v
+				continue
+			}
+			for f, fv := range p {
+				if fv == nil {
+					delete(o, f)
+				} else {
+					o[f] = fv
+				}
+			}
 		}
 	}
 	b, _ := json.Marshal(cur)
