@@ -16,8 +16,11 @@ RUN CGO_ENABLED=0 go build -o /hubd .
 
 # Soloist cần glibc ≥ 2.38 (trixie), libatomic1, chứng chỉ gốc, và PulseAudio (hoặc PipeWire) để xuất âm thanh.
 # tini làm PID 1: crashpad-handler của Soloist tách khỏi cha, thoát thì cần init dọn (không thì thành zombie dưới hubd).
+# Khu Loa nối vào hub (hubout.go): pacat (pulseaudio-utils, có sẵn theo pulseaudio) ra jack/HDMI qua /dev/snd;
+# pulseaudio-module-bluetooth nói với bluetoothd của máy chủ qua D-Bus hệ thống; bluez chỉ để có bluetoothctl
+# (bluetoothd trong gói không chạy trong container).
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libatomic1 pulseaudio tini \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libatomic1 pulseaudio pulseaudio-module-bluetooth bluez tini \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=soloistkey /soloist-key.so /usr/local/lib/soloist-key.so
 COPY --from=build /hubd /hubd

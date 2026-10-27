@@ -36,27 +36,28 @@ import (
 // Ghép đôi: app Spotify trong LAN thấy hub nhờ avahi của máy chủ (avahi/spotify-connect.service) rồi gọi ZeroConf ở /zc
 // của hubd; hubd chuyển tới cổng ZeroConf của Soloist (mDNS của Soloist không ra khỏi mạng Docker).
 type hubSpotify struct {
-	db                                *DB
-	dir, url, name, pulseBin, preload string
-	pcm                               chan []byte
-	wake                              chan struct{}
-	loopDone                          chan struct{}
-	readOnce                          sync.Once
+	db                      *DB
+	pulse                   *hubPulse // dùng chung với khu Loa nối vào hub (pulse.go)
+	dir, url, name, preload string
+	pcm                     chan []byte
+	wake                    chan struct{}
+	loopDone                chan struct{}
+	readOnce                sync.Once
 
-	mu              sync.Mutex
-	sol, pa         *exec.Cmd
-	solDone, paDone chan struct{}
-	state           string // nokey | downloading | starting | running | expired | error
-	lastErr         string
-	lastLine        string // dòng log cuối của Soloist, kèm vào lỗi khi nó thoát
-	version         string
-	days            int  // số ngày còn lại của bản dựng, Soloist in lúc khởi động
-	again           bool // dừng Soloist để chạy lại ngay (đổi khoá, Cập nhật Soloist), không tính là lỗi
-	stopped         bool
-	ws              *websocket.Conn
-	zc              int // cổng ZeroConf của Soloist
-	now             soloNow
-	last            time.Time // lúc nhận đoạn Spotify có tiếng gần nhất
+	mu       sync.Mutex
+	sol      *exec.Cmd
+	solDone  chan struct{}
+	state    string // nokey | downloading | starting | running | expired | error
+	lastErr  string
+	lastLine string // dòng log cuối của Soloist, kèm vào lỗi khi nó thoát
+	version  string
+	days     int  // số ngày còn lại của bản dựng, Soloist in lúc khởi động
+	again    bool // dừng Soloist để chạy lại ngay (đổi khoá, Cập nhật Soloist), không tính là lỗi
+	stopped  bool
+	ws       *websocket.Conn
+	zc       int // cổng ZeroConf của Soloist
+	now      soloNow
+	last     time.Time // lúc nhận đoạn Spotify có tiếng gần nhất
 }
 
 var (
@@ -65,17 +66,12 @@ var (
 	soloDaysRe  = regexp.MustCompile(`expires in (\d+) day`)
 )
 
-func newHubSpotify(db *DB) *hubSpotify {
-	env := func(k, def string) string {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-		return def
-	}
+func newHubSpotify(db *DB, pulse *hubPulse) *hubSpotify {
+	env := envOr
 	arch := map[string]string{"amd64": "x86_64", "arm64": "arm64", "arm": "arm32"}[runtime.GOARCH]
-	s := &hubSpotify{db: db, dir: env("HUBD_SOLOIST_DIR", "/db/soloist"),
-		url:  env("HUBD_SOLOIST_URL", "https://soloist-builds.spotifycdn.com/soloist_release_"+arch+".tar.gz"),
-		name: env("HUBD_SPOTIFY_NAME", "iNIX Smart"), pulseBin: env("HUBD_PULSEAUDIO", "pulseaudio"),
+	s := &hubSpotify{db: db, pulse: pulse, dir: env("HUBD_SOLOIST_DIR", "/db/soloist"),
+		url:     env("HUBD_SOLOIST_URL", "https://soloist-builds.spotifycdn.com/soloist_release_"+arch+".tar.gz"),
+		name:    env("HUBD_SPOTIFY_NAME", "iNIX Smart"),
 		preload: "/usr/local/lib/soloist-key.so", pcm: make(chan []byte, 25), wake: make(chan struct{}, 1),
 		loopDone: make(chan struct{}), state: "nokey"}
 	if v, ok := os.LookupEnv("HUBD_SOLOIST_PRELOAD"); ok { // test: không có thư viện, Soloist giả tự đọc biến môi trường
@@ -114,12 +110,12 @@ func (s *hubSpotify) run() {
 		s.again = false
 		s.mu.Unlock()
 		if stopped {
-			s.stopPulse()
+			s.pulse.release("soloist")
 			return
 		}
 		key := s.key()
 		if key == "" {
-			s.stopPulse()
+			s.pulse.release("soloist")
 			s.set("nokey", "")
 			<-s.wake
 			continue
@@ -152,7 +148,7 @@ func (s *hubSpotify) run() {
 			s.mu.Unlock()
 		}
 		log.Printf("soloist: dừng (%v), chạy lại sau %v", err, retry)
-		s.stopPulse()
+		s.pulse.release("soloist")
 		select {
 		case <-s.wake:
 		case <-time.After(retry):
@@ -243,19 +239,24 @@ func untarSoloist(r io.Reader, bin string) error {
 // soloist-key.so (LD_PRELOAD, soloist/key.c) thay bằng khoá trước main() nên /proc/<pid>/cmdline không có khoá.
 // Soloist chỉ nhận môi trường tối thiểu, không thừa hưởng PIN, mật khẩu MQTT của hubd.
 func (s *hubSpotify) runSoloist(key string) error {
-	data, cache, pa := filepath.Join(s.dir, "data"), filepath.Join(s.dir, "cache"), filepath.Join(s.dir, "pa")
-	for _, d := range []string{data, cache, pa} {
+	data, cache := filepath.Join(s.dir, "data"), filepath.Join(s.dir, "cache")
+	for _, d := range []string{data, cache} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
 	}
-	if err := s.startPulse(pa); err != nil {
+	if s.stoppedNow() {
+		return nil
+	}
+	if err := s.pulse.acquire("soloist", s.pulseDied); err != nil {
 		return err
 	}
+	s.readOnce.Do(func() { go s.readLoop(s.pulse.fifo()) })
 	os.Remove(filepath.Join(data, "ws.port")) // của lần chạy trước
 	c := exec.Command(filepath.Join(s.dir, "soloist"), "-n", s.name, "-k", "@SOLOIST_API_KEY", "-D", data, "-C", cache,
 		"-z", "100", "-i", "100", "--ws", "127.0.0.1:0")
-	c.Env = []string{"HOME=" + s.dir, "PATH=/usr/bin:/bin", "PULSE_SERVER=unix:" + filepath.Join(pa, "native"), "SOLOIST_API_KEY=" + key}
+	// PULSE_SINK: luôn phát vào sink "hub" (FIFO), kể cả khi PulseAudio có thêm sink ALSA/Bluetooth của khu Loa nối vào hub
+	c.Env = []string{"HOME=" + s.dir, "PATH=/usr/bin:/bin", s.pulse.server(), "PULSE_SINK=hub", "SOLOIST_API_KEY=" + key}
 	if s.preload != "" {
 		if _, err := os.Stat(s.preload); err != nil { // thiếu thì Soloist nhận chữ giữ chỗ làm khoá: báo rõ thay vì "khoá sai"
 			return fmt.Errorf("image hubd thiếu %s, cần dựng lại image", s.preload)
@@ -338,72 +339,17 @@ func startLogged(c *exec.Cmd, line func(string)) (<-chan struct{}, error) {
 	return done, nil
 }
 
-// startPulse: PulseAudio tối giản cho Soloist (-n: không nạp default.pa): socket native trong thư mục pa và một sink ghi PCM
-// 44,1 kHz/16 bit stereo vào FIFO mà readLoop đọc. Sink chạy theo tốc độ người đọc nên Soloist chỉ giải mã kịp tốc độ phát.
-// Đang chạy thì giữ; PulseAudio chết thì dừng luôn Soloist để vòng giám sát chạy lại cả hai.
-func (s *hubSpotify) startPulse(dir string) error {
-	fifo, sock := filepath.Join(dir, "audio.fifo"), filepath.Join(dir, "native")
+// pulseDied: PulseAudio chết khi Soloist đang chạy: dừng Soloist để vòng giám sát chạy lại cả hai.
+func (s *hubSpotify) pulseDied() {
 	s.mu.Lock()
-	if s.pa != nil || s.stopped {
-		s.mu.Unlock()
-		return nil
+	defer s.mu.Unlock()
+	if s.sol != nil && !s.stopped {
+		log.Printf("soloist: PulseAudio dừng, chạy lại cùng Soloist")
+		s.sol.Process.Signal(syscall.SIGTERM)
 	}
-	if st, err := os.Stat(fifo); err != nil || st.Mode()&os.ModeNamedPipe == 0 {
-		os.Remove(fifo)
-		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-			s.mu.Unlock()
-			return err
-		}
-	}
-	s.readOnce.Do(func() { go s.readLoop(fifo) })
-	os.Remove(sock)
-	c := exec.Command(s.pulseBin, "-n", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit", "--use-pid-file=no",
-		"--realtime=no", "--high-priority=no", "--disable-shm=yes", "--log-target=stderr", "--log-level=error",
-		"--load=module-native-protocol-unix auth-anonymous=1 socket="+sock,
-		"--load=module-pipe-sink file="+fifo+" sink_name=hub format=s16le rate=44100 channels=2")
-	c.Env = []string{"HOME=" + dir, "XDG_RUNTIME_DIR=" + dir, "PATH=/usr/bin:/bin"}
-	if _, err := startLogged(c, func(l string) { log.Printf("pulseaudio: %s", l) }); err != nil {
-		s.mu.Unlock()
-		return fmt.Errorf("không chạy được PulseAudio: %w", err)
-	}
-	done := make(chan struct{})
-	s.pa, s.paDone = c, done
-	s.mu.Unlock()
-	go func() {
-		err := c.Wait()
-		close(done)
-		s.mu.Lock()
-		if s.pa == c {
-			s.pa = nil
-			if s.sol != nil && !s.stopped {
-				log.Printf("pulseaudio dừng (%v): chạy lại cùng Soloist", err)
-				s.sol.Process.Signal(syscall.SIGTERM)
-			}
-		}
-		s.mu.Unlock()
-	}()
-	for i := 0; i < 60; i++ { // Soloist chỉ nối PulseAudio khi phát; chờ socket ở đây để lỗi khởi động hiện ngay
-		if _, err := os.Stat(sock); err == nil {
-			return nil
-		}
-		select {
-		case <-done:
-			return errors.New("PulseAudio thoát ngay khi khởi động")
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-	return errors.New("PulseAudio không mở socket")
 }
 
-func (s *hubSpotify) stopPulse() {
-	s.mu.Lock()
-	c, done := s.pa, s.paDone
-	s.pa = nil
-	s.mu.Unlock()
-	if c != nil {
-		terminate(c, done)
-	}
-}
+func (s *hubSpotify) stoppedNow() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stopped || s.again }
 
 // terminate: SIGTERM để tiến trình dọn dẹp (Soloist xoá ws.port, lưu phiên), quá 5 giây thì SIGKILL. Chờ tới khi thoát.
 func terminate(c *exec.Cmd, done <-chan struct{}) {
@@ -441,7 +387,7 @@ func (s *hubSpotify) stop() {
 	case <-s.loopDone:
 	case <-time.After(15 * time.Second):
 	}
-	s.stopPulse()
+	s.pulse.release("soloist")
 }
 
 // connect: chờ Soloist ghi cổng WebSocket (ws.port trong thư mục dữ liệu) rồi nối vào, đọc sự kiện tới khi Soloist dừng.

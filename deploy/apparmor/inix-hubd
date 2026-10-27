@@ -1,0 +1,73 @@
+# Profile AppArmor cho container hubd (docker-compose.yml: security_opt apparmor=inix-hubd).
+# = luật của docker-default (mẫu profiles/apparmor/template.go của moby) + D-Bus hệ thống CHỈ tới bus và bluez, cho loa
+# Bluetooth của khu "Loa nối vào hub" (hubout.go: PulseAudio đăng ký endpoint A2DP, bluetoothctl ghép đôi/nối).
+# hubd chạy root: không có giới hạn này thì root trên D-Bus hệ thống gọi được systemd1 (chạy lệnh trên máy chủ), login1...
+# Cài trên máy chủ (một lần, trước khi chạy container):
+#   sudo cp deploy/apparmor/inix-hubd /etc/apparmor.d/inix-hubd && sudo apparmor_parser -r -W /etc/apparmor.d/inix-hubd
+# Hoàn tác: bỏ security_opt và socket D-Bus khỏi compose, rồi
+#   sudo apparmor_parser -R /etc/apparmor.d/inix-hubd && sudo rm /etc/apparmor.d/inix-hubd
+
+#include <tunables/global>
+
+profile inix-hubd flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+  # Host (privileged) processes may send signals to container processes.
+  signal (receive) peer=unconfined,
+  # runc/crun may send signals to container processes (for "docker stop").
+  signal (receive) peer=runc,
+  signal (receive) peer=crun,
+  # Container processes may send signals amongst themselves.
+  signal (send,receive) peer=inix-hubd,
+
+  deny @{PROC}/* w,   # deny write for all files directly in /proc (not in a subdir)
+  # deny write to files not in /proc/<number>/** or /proc/sys/**
+  deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
+  deny @{PROC}/sys/[^k]** w,  # deny /proc/sys except /proc/sys/k* (effectively /proc/sys/kernel)
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,  # deny everything except shm* in /proc/sys/kernel/
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+
+  deny mount,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  # suppress ptrace denials when using 'docker ps' or using 'ps' inside a container
+  ptrace (trace,read,tracedby,readby) peer=inix-hubd,
+
+  # --- Thêm so với docker-default: D-Bus hệ thống cho Bluetooth, không gì khác ---
+  # Bus: kết nối, đăng ký nghe tín hiệu, hỏi chủ của tên.
+  dbus send
+       bus=system
+       path=/org/freedesktop/DBus
+       interface=org.freedesktop.DBus
+       member={Hello,AddMatch,RemoveMatch,GetNameOwner,NameHasOwner}
+       peer=(name=org.freedesktop.DBus),
+  # bluez: thiết bị, ghép đôi, nối, đăng ký endpoint A2DP và agent ghép đôi.
+  dbus send bus=system peer=(name=org.bluez),
+  # Luồng âm thanh A2DP: PulseAudio gọi transport (Acquire, Release, thuộc tính) theo tên duy nhất của bluetoothd (:1.x),
+  # không qua tên org.bluez (đo trên máy thử). Không mở theo nhãn (systemd cũng unconfined): chỉ đường dẫn /org/bluez/**
+  # với đúng các giao diện này, systemd1/login1 không có đối tượng nào ở đó.
+  dbus send
+       bus=system
+       path=/org/bluez/**
+       interface={org.bluez.MediaTransport1,org.freedesktop.DBus.Properties},
+  # Nhận tín hiệu và lời gọi lại (bluetoothd gọi endpoint/agent; bus gửi NameAcquired...). bluetoothd và dbus-daemon của
+  # máy chủ không bị AppArmor giới hạn (nhãn unconfined).
+  dbus receive bus=system peer=(label=unconfined),
+  # Ghi rõ ý: không bao giờ được gửi tới các dịch vụ quản trị máy chủ (luật deny thắng mọi luật allow thêm về sau).
+  deny dbus send bus=system peer=(name=org.freedesktop.systemd1),
+  deny dbus send bus=system peer=(name=org.freedesktop.login1),
+  deny dbus send bus=system peer=(name=org.freedesktop.PolicyKit1),
+}
