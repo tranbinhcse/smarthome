@@ -85,6 +85,24 @@ ON, OFF = {"bat", "mo"}, {"tat"}
 QUESTION = {"nhieu", "may", "khong", "chua", "sao", "nao"}
 
 
+def grouped(cfg):
+    """Thiết bị theo tên gọi. Thiết bị nhiều nút đã tách kênh (cùng `group`, vd "Nút 1", "Nút 2" của "Đèn phòng lạnh"):
+    kênh gọi là "<nhóm> <kênh>", nhóm chỉ một kênh gọi bằng tên nhóm, và thêm một mục cho cả nhóm (id "group:<nhóm>").
+    Mỗi mục có `members` = các thiết bị thật nhận lệnh. Gọi lại trên cfg đã gom thì trả nguyên cfg đó."""
+    if any("members" in d for d in cfg["devices"]):
+        return cfg
+    by = {}
+    for d in cfg["devices"]:
+        if (d.get("group") or "").strip():
+            by.setdefault(d["group"].strip(), []).append(d)
+    devs = []
+    for d in cfg["devices"]:
+        g, name = (d.get("group") or "").strip(), d["name"].strip()
+        devs.append({**d, "name": (g if len(by[g]) == 1 else f"{g} {name}") if g else name, "members": [d]})
+    devs += [{"id": "group:" + g, "name": g, "zone": ms[0].get("zone"), "members": ms} for g, ms in by.items() if len(ms) > 1]
+    return {**cfg, "devices": devs}
+
+
 def named(items, ws):
     """Mục có cả tên nằm trọn trong câu; nhiều mục khớp lấy tên dài nhất, hoà thì None (không đoán)."""
     hits = [(len(set(words(x["name"]))), x) for x in items if words(x["name"]) and set(words(x["name"])) <= ws]
@@ -106,6 +124,7 @@ def measured(cfg, ws):
 
 def match(text, cfg):
     """Hiểu câu bằng luật cố định. Trả (việc, đối tượng, on/off) hoặc None để AI xử lý."""
+    cfg = grouped(cfg)
     w = words(text)
     ws = set(w)
     verb = next((i for i, x in enumerate(w) if x in ON | OFF), None)
@@ -132,13 +151,39 @@ def num(v):
         return v
 
 
+def switch(x, to, hub):
+    """Bật/tắt một thiết bị, một kênh hay cả nhóm (từng kênh một; hubd tự chặn kênh cần PIN).
+    Trả (câu trả lời, mọi kênh đã nhận lệnh)."""
+    ms = x.get("members") or [x]
+    done, pin, bad = [], [], []
+    for d in ms:
+        code, _ = hub("POST", "/cmd", {"device": d["id"], "to": to})
+        (done if code == 204 else pin if code == 403 else bad).append(d["name"].strip())
+    name = x["name"].strip()
+    of = (lambda ns: f"{', '.join(ns)} của {name}") if sum(map(bool, (done, pin, bad))) > 1 else (lambda ns: name)
+    out = ([f"Đã {'bật' if to == 'on' else 'tắt'} {of(done)}."] if done else []) + \
+          ([f"{of(pin)} cần PIN, hãy bấm trên màn hình."] if pin else []) + ([f"Không gửi được lệnh tới {of(bad)}."] if bad else [])
+    return " ".join(out), not pin and not bad
+
+
+def status(x, v):
+    """Trạng thái một thiết bị/kênh/nhóm; nhóm có kênh khác nhau thì kể từng kênh."""
+    def one(d):
+        if v.get("online:" + d["id"]) == "offline":
+            return "đang mất kết nối"
+        s = v.get("dev:" + d["id"])
+        return "chưa có trạng thái" if s is None else "đang bật" if ON_RE.match(s) else "đang tắt"
+    ss = [(d["name"].strip(), one(d)) for d in x.get("members") or [x]]
+    if len({s for _, s in ss}) == 1:
+        return f"{x['name'].strip()} {ss[0][1]}."
+    return f"{x['name'].strip()}: " + ", ".join(f"{n} {s.removeprefix('đang ')}" for n, s in ss) + "."
+
+
 def run(intent, hub):
     kind, x, to = intent
     name = x and x["name"].strip()
     if kind == "set":
-        code, msg = hub("POST", "/cmd", {"device": x["id"], "to": to})
-        return {204: f"Đã {'bật' if to == 'on' else 'tắt'} {name}.",
-                403: f"{name} cần PIN, hãy bấm trên màn hình."}.get(code, f"Không gửi được lệnh tới {name}.")
+        return switch(x, to, hub)[0]
     if kind == "scene":
         code, msg = hub("POST", "/scene/" + quote(x["id"], safe=""))
         return {204: f"Đã chạy {name}.", 403: f"Kịch bản {name} cần PIN, hãy bấm trên màn hình."}.get(code, f"{name}: {msg}.")
@@ -149,10 +194,7 @@ def run(intent, hub):
         return summary(hub)
     v = hub("GET", "/state")[1]["values"]
     if kind == "ask_device":
-        if v.get("online:" + x["id"]) == "offline":
-            return f"{name} đang mất kết nối."
-        s = v.get("dev:" + x["id"])
-        return f"{name} chưa có trạng thái." if s is None else f"{name} đang {'bật' if ON_RE.match(s) else 'tắt'}."
+        return status(x, v)
     if x["id"] not in v:
         return f"{name} chưa có số đo."
     return f"{name} {num(v[x['id']])} {UNITS.get(x.get('unit', ''), x.get('unit', ''))}".rstrip() + "."
@@ -240,8 +282,12 @@ TOOLS = [
 
 
 def system_prompt(cfg):
+    cfg = grouped(cfg)
     zone = {z["id"]: z["name"] for z in cfg["zones"]}
-    lock = lambda x: " [cần PIN]" if x["id"] in cfg["locked"] else ""
+    def lock(x):
+        n = sum(m["id"] in cfg["locked"] for m in x.get("members") or [x])
+        return "" if not n else " [cần PIN]" if n == len(x.get("members") or [x]) else " [có kênh cần PIN]"
+    group = lambda d: f" (cả nhóm: {', '.join(m['name'].strip() for m in d['members'])})" if len(d.get("members") or []) > 1 else ""
     dev = {d["id"]: d["name"].strip() for d in cfg["devices"]}
     return "\n".join([
         "Bạn là trợ lý giọng nói của iNIX Home, nhà 3 tầng kiêm quán cafe.",
@@ -250,8 +296,8 @@ def system_prompt(cfg):
         "Chỉ xem và điều khiển nhà bằng các tool. Tool báo cần PIN thì bảo người dùng bấm trên màn hình, không thử cách khác.",
         "Không bịa số liệu; chưa có dữ liệu thì nói chưa có.",
         f"Bây giờ là {datetime.now(VN):%H:%M ngày %d/%m/%Y} (giờ Việt Nam).",
-        "", "Thiết bị (id: tên, phòng):",
-        *(f"- {d['id']}: {d['name'].strip()}, {zone.get(d.get('zone'), 'chưa gán phòng')}{lock(d)}" for d in cfg["devices"]),
+        "", "Thiết bị (id: tên, phòng). Mục id group:<nhóm> là cả nhóm kênh của một thiết bị nhiều nút: người dùng nói tên nhóm thì dùng id đó:",
+        *(f"- {d['id']}: {d['name'].strip()}, {zone.get(d.get('zone'), 'chưa gán phòng')}{group(d)}{lock(d)}" for d in cfg["devices"]),
         "", "Kịch bản (id: tên):",
         *(f"- {s['id']}: {s['name']}{lock(s)}" for s in cfg["scenes"]),
         "", "Số đo (id: tên, đơn vị, thuộc):",
@@ -260,13 +306,14 @@ def system_prompt(cfg):
 
 
 def state_text(cfg, st):
+    cfg = grouped(cfg)
     v = st["values"]
     def dev(d):
         if v.get("online:" + d["id"]) == "offline":
             return "mất kết nối"
         s = v.get("dev:" + d["id"])
         return "chưa rõ" if s is None else ("bật" if ON_RE.match(s) else "tắt")
-    return "\n".join(["Thiết bị:", *(f"- {d['name'].strip()} ({d['id']}): {dev(d)}" for d in cfg["devices"]),
+    return "\n".join(["Thiết bị:", *(f"- {d['name'].strip()} ({d['id']}): {dev(d)}" for d in cfg["devices"] if len(d["members"]) == 1),
                       "Số đo:", *(f"- {e['name']} ({e['id']}): {v.get(e['id'], 'chưa có')} {e.get('unit', '')}".rstrip() for e in cfg["entities"]),
                       "Cảnh báo chưa xác nhận: " + ("; ".join(f"{a['level']}: {a['text']}" for a in st["alerts"]) or "không có")])
 
@@ -301,7 +348,11 @@ def call_tool(name, args, hub, cfg):
             code, pts = hub("GET", "/history?" + urlencode({"id": a["entity"], "hours": hours}))
             return history_text(a["entity"], hours, pts) if code == 200 else f"LỖI {code}"
         if name == "set_device":
-            return verdict(*hub("POST", "/cmd", {"device": a["device"], "to": a["to"]}))
+            x = next((d for d in grouped(cfg)["devices"] if d["id"] == a["device"]), None)
+            if x is None:
+                return f"LỖI: không có thiết bị {a['device']}"
+            text, ok = switch(x, a["to"], hub)
+            return text if ok else f"LỖI: {text} Không thử cách khác."
         if name == "run_scene":
             return verdict(*hub("POST", "/scene/" + quote(a["scene"], safe="")))
         if name == "ack_alarm":
