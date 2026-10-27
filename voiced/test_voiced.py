@@ -96,6 +96,23 @@ class TestMatch(unittest.TestCase):
         twins = {**CFG, "devices": [{"id": "a", "name": "Đèn trần", "zone": "kho"}, {"id": "b", "name": "Đèn trần", "zone": "cafe"}]}
         self.assertIsNone(voiced.match("bật đèn trần", twins))
 
+    def test_question_frame_words_never_name_a_measurement(self):
+        # "có bao nhiêu đèn đang mở" từng trả "Có người chưa có số đo": chữ "có" của khung câu hỏi được lấy làm từ đầu tên số đo.
+        # Quét mọi từ khung (voiced.FRAME) trên mọi số đo thật của config.yaml: câu chỉ có khung hỏi không chọn số đo nào,
+        # còn số đo có tên bắt đầu bằng từ khung vẫn hỏi được khi nói đủ tên.
+        import yaml
+        real = yaml.safe_load(_CFG_TEXT)
+        cfg = {**CFG, "zones": real["zones"], "entities": real["entities"]}
+        for f in sorted(voiced.FRAME):
+            self.assertIsNone(voiced.match(f"{f} bao nhiêu đèn đang mở", cfg), f)
+        for t in ("có bao nhiêu đèn đang mở", "kiểm tra xem có bao nhiêu đèn đang mở"):
+            self.assertIsNone(voiced.match(t, cfg), t)
+        framed = [e for e in real["entities"] if voiced.words(e["name"])[0] in voiced.FRAME]
+        self.assertTrue(framed)
+        for e in framed:
+            got = voiced.match(f"{e['name']} không", cfg)
+            self.assertEqual(got and (got[0], got[1]["id"]), ("ask_entity", e["id"]), e["name"])
+
 
 class TestRun(unittest.TestCase):
     def test_run_replies_and_pin_block(self):

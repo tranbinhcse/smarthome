@@ -166,6 +166,8 @@ def words(s):
 
 ON, OFF = {"bat", "mo"}, {"tat"}
 QUESTION = {"nhieu", "may", "khong", "chua", "sao", "nao"}
+# Từ khung câu hỏi ("có … không", "đã … chưa", "còn/là bao nhiêu"): không đủ để đoán tên số đo ("có bao nhiêu đèn" ≠ "Có người").
+FRAME = QUESTION | {"co", "da", "dang", "con", "la", "bao"}
 
 
 def grouped(cfg):
@@ -212,12 +214,13 @@ def named(items, ws):
 
 
 def measured(cfg, ws):
-    """Số đo được hỏi: tên phải có từ đầu (pin, điện, công...) trong câu; điểm = (từ của tên, từ của thiết bị/phòng)."""
+    """Số đo được hỏi: tên phải có từ đầu (pin, điện, công...) trong câu, từ đầu là từ khung câu hỏi (có, đã...) thì phải
+    nói đủ tên; điểm = (từ của tên, từ của thiết bị/phòng)."""
     ctx = {d["id"]: d["name"] for d in cfg["devices"]} | {z["id"]: z["name"] for z in cfg["zones"]}
     scored = []
     for e in cfg["entities"]:
         name = words(e["name"])
-        if name and name[0] in ws:
+        if name and name[0] in ws and (name[0] not in FRAME or set(name) <= ws):
             scored.append(((len(set(name) & ws), len(set(words(ctx.get(e.get("device"), "") + " " + ctx.get(e.get("zone"), ""))) & ws)), e))
     top = [e for s, e in scored if s == max(s for s, _ in scored)]
     return top[0] if len(top) == 1 else None
