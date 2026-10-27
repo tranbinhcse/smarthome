@@ -33,13 +33,13 @@ CFG = {
 
 class FakeHub:
     """Giả API trợ lý của hubd, cùng quy tắc chặn: id trong locked → 403."""
-    def __init__(self, values=None, settings=None):
-        self.calls, self.values, self.alerts, self.settings = [], values or {}, [], settings or {}
+    def __init__(self, values=None, settings=None, cfg=CFG):
+        self.calls, self.values, self.alerts, self.settings, self.cfg = [], values or {}, [], settings or {}, cfg
 
     def __call__(self, method, path, body=None):
         self.calls.append((method, path, body))
         if path == "/config":
-            return 200, CFG
+            return 200, self.cfg
         if path == "/state":
             return 200, {"values": self.values, "alerts": self.alerts}
         if path == "/settings/ai":
@@ -47,7 +47,7 @@ class FakeHub:
         if path.startswith("/history"):
             return 200, [{"t": 1000, "v": 80}, {"t": 2000, "v": 90}, {"t": 3000, "v": 85}]
         target = body["device"] if path == "/cmd" else path.rsplit("/", 1)[-1]
-        if target in CFG["locked"]:
+        if target in self.cfg["locked"]:
             return 403, "cần PIN"
         return 204, None
 
@@ -497,6 +497,85 @@ class TestServer(unittest.TestCase):
     def test_warm_prerenders_alert_phrases(self):
         self.app.warm()
         self.assertTrue((Path(self.tmp.name) / f"{self.app.tts.key('Có khói ở bếp')}.wav").exists())
+
+
+# Thiết bị nhiều nút sau khi quét QR Tuya: tuya.yaml tách mỗi nút/lỗ thành một thiết bị tên "Nút 1", "Lỗ 2"... cùng `group`,
+# hubd bỏ thiết bị gốc (b3e097f). Dữ liệu giống trên hub: đèn 2 nút, ổ 3 lỗ có một lỗ protected, nhóm một kênh.
+GROUP_CFG = {
+    "zones": [{"id": "cafe", "name": "Khu cafe"}, {"id": "sansau", "name": "Sân sau"}],
+    "devices": [
+        {"id": "tuya_lanh_1", "name": "Nút 1", "group": "Đèn phòng lạnh", "zone": "cafe"},
+        {"id": "tuya_lanh_2", "name": "Nút 2", "group": "Đèn phòng lạnh", "zone": "cafe"},
+        {"id": "tuya_ca_1", "name": "Lỗ 1", "group": "Ổ cắm Hồ Cá", "zone": "sansau"},
+        {"id": "tuya_ca_2", "name": "Lỗ 2", "group": "Ổ cắm Hồ Cá", "zone": "sansau"},
+        {"id": "tuya_ca_3", "name": "Lỗ 3", "group": "Ổ cắm Hồ Cá", "zone": "sansau", "protected": True},
+        {"id": "tuya_san_1", "name": "Kênh 1", "group": "Đèn sân", "zone": "sansau"},
+        {"id": "tuya_kho", "name": "Đèn Kho", "zone": "cafe"},
+    ],
+    "scenes": [], "entities": [], "locked": ["tuya_ca_3"], "phrases": [],
+}
+
+
+class TestGroups(AICase):
+    """Kênh gọi bằng "<nhóm> <kênh>", nói tên nhóm thì áp dụng mọi kênh (lệnh cố định lẫn tool AI); kênh cần PIN vẫn bị hubd chặn."""
+    def test_fixed_commands(self):
+        hub = FakeHub({"dev:tuya_lanh_1": "ON", "dev:tuya_lanh_2": "OFF"}, cfg=GROUP_CFG)
+        say = lambda t: voiced.run(voiced.match(t, GROUP_CFG), hub)
+        cmds = lambda: [(c[2]["device"], c[2]["to"]) for c in hub.calls if c[1] == "/cmd"]
+        self.assertEqual(say("bật đèn phòng lạnh"), "Đã bật Đèn phòng lạnh.")
+        self.assertEqual(cmds(), [("tuya_lanh_1", "on"), ("tuya_lanh_2", "on")])
+        hub.calls.clear()
+        self.assertEqual(say("tắt đèn phòng lạnh nút 2"), "Đã tắt Đèn phòng lạnh Nút 2.")
+        self.assertEqual(cmds(), [("tuya_lanh_2", "off")])
+        hub.calls.clear()
+        self.assertEqual(say("TẮT Ổ CẮM HỒ CÁ"), "Đã tắt Lỗ 1, Lỗ 2 của Ổ cắm Hồ Cá. Lỗ 3 của Ổ cắm Hồ Cá cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(cmds(), [("tuya_ca_1", "off"), ("tuya_ca_2", "off"), ("tuya_ca_3", "off")])  # lỗ 3: hubd trả 403
+        self.assertEqual(say("tắt ổ cắm hồ cá lỗ 3"), "Ổ cắm Hồ Cá Lỗ 3 cần PIN, hãy bấm trên màn hình.")
+        self.assertEqual(say("bật đèn sân"), "Đã bật Đèn sân.")  # nhóm một kênh: gọi bằng tên nhóm
+        self.assertEqual(say("đèn phòng lạnh đang bật không"), "Đèn phòng lạnh: Nút 1 bật, Nút 2 tắt.")
+        self.assertEqual(say("đèn phòng lạnh nút 1 bật chưa"), "Đèn phòng lạnh Nút 1 đang bật.")
+        self.assertIsNone(voiced.match("bật nút 1", GROUP_CFG))  # "Nút 1" trần không còn là tên gọi: không đoán
+
+    def test_every_name_sweep(self):
+        # Quét mọi tên gọi do grouped() sinh (kênh, nhóm, nhóm một kênh, thiết bị thường) × 3 động từ × 3 dạng chữ.
+        targets = voiced.grouped(GROUP_CFG)["devices"]
+        self.assertEqual(sorted(d["name"] for d in targets), sorted([
+            "Đèn phòng lạnh Nút 1", "Đèn phòng lạnh Nút 2", "Ổ cắm Hồ Cá Lỗ 1", "Ổ cắm Hồ Cá Lỗ 2", "Ổ cắm Hồ Cá Lỗ 3",
+            "Đèn sân", "Đèn Kho", "Đèn phòng lạnh", "Ổ cắm Hồ Cá"]))
+        n = 0
+        for d in targets:
+            for verb, to in (("bật", "on"), ("mở", "on"), ("tắt", "off")):
+                for form in (str, str.upper, voiced.plain):
+                    n += 1
+                    got = voiced.match(form(f"{verb} {d['name']} giúp tôi"), GROUP_CFG)
+                    self.assertEqual(got and (got[0], got[1]["id"], got[2]), ("set", d["id"], to), (verb, d["name"]))
+        self.assertEqual(n, 9 * 9)
+        g = voiced.grouped(GROUP_CFG)
+        self.assertIs(voiced.grouped(g), g)  # gom lại cfg đã gom: giữ nguyên, không thành "Đèn phòng lạnh Đèn phòng lạnh Nút 1"
+
+    def test_ai_context_and_group_tool(self):
+        sp = voiced.system_prompt(GROUP_CFG)
+        self.assertIn("- tuya_lanh_1: Đèn phòng lạnh Nút 1, Khu cafe", sp)
+        self.assertIn("- group:Đèn phòng lạnh: Đèn phòng lạnh, Khu cafe (cả nhóm: Nút 1, Nút 2)", sp)
+        self.assertIn("- group:Ổ cắm Hồ Cá: Ổ cắm Hồ Cá, Sân sau (cả nhóm: Lỗ 1, Lỗ 2, Lỗ 3) [có kênh cần PIN]", sp)
+        self.assertIn("- tuya_san_1: Đèn sân, Sân sau", sp)
+        self.assertNotIn("- tuya_lanh_1: Nút 1,", sp)  # không còn dòng thiết bị tên trần "Nút 1"
+        st = voiced.state_text(GROUP_CFG, {"values": {"dev:tuya_lanh_1": "ON"}, "alerts": []})
+        self.assertIn("- Đèn phòng lạnh Nút 1 (tuya_lanh_1): bật", st)
+        self.assertNotIn("group:", st)  # trạng thái liệt kê từng kênh, không lặp nhóm
+        r1 = {"role": "assistant", "content": None, "tool_calls": [
+            tc("t1", "set_device", {"device": "group:Đèn phòng lạnh", "to": "on"}),
+            tc("t2", "set_device", {"device": "group:Ổ cắm Hồ Cá", "to": "off"}),
+            tc("t3", "set_device", {"device": "tuya_lanh_2", "to": "off"})]}
+        api, hub = self.fake(r1, say("Xong.")), FakeHub(cfg=GROUP_CFG)
+        self.assertEqual(voiced.ask_ai("bật đèn phòng lạnh, tắt ổ cắm hồ cá", GROUP_CFG, hub, voiced.AI(api.url, "", "m")), "Xong.")
+        tools = api.chats()[1][3]["messages"][-3:]
+        self.assertEqual(tools[0]["content"], "Đã bật Đèn phòng lạnh.")
+        self.assertTrue(tools[1]["content"].startswith("LỖI"), tools[1])
+        self.assertIn("Lỗ 3 của Ổ cắm Hồ Cá cần PIN", tools[1]["content"])
+        self.assertEqual(tools[2]["content"], "Đã tắt Đèn phòng lạnh Nút 2.")
+        self.assertEqual([c[2]["device"] for c in hub.calls if c[1] == "/cmd"],
+                         ["tuya_lanh_1", "tuya_lanh_2", "tuya_ca_1", "tuya_ca_2", "tuya_ca_3", "tuya_lanh_2"])
 
 
 if __name__ == "__main__":
