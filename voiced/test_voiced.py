@@ -563,6 +563,10 @@ class TestServer(unittest.TestCase):
         self.assertGreater(len(r["audio"]), 1)
         first = Path(self.tmp.name) / r["audio"][0].rsplit("/", 1)[1]
         self.assertTrue(first.exists())
+        # Câu đầu đã có: tải ngay dù luồng nền đang giữ máy TTS cho câu sau (đo trên hub: từng phải chờ 4,7 s).
+        t0 = time.perf_counter()
+        self.assertEqual(urllib.request.urlopen(self.base + r["audio"][0], timeout=3).read()[:4], b"RIFF")
+        self.assertLess(time.perf_counter() - t0, 1)
         gate.set()
         for u in r["audio"]:
             self.assertEqual(urllib.request.urlopen(self.base + u).read()[:4], b"RIFF")

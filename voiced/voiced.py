@@ -599,9 +599,11 @@ class TTS:
     def make(self, k):
         """Tệp WAV của khoá k, tổng hợp nếu chưa có. Khoá chưa từng ghi nhận → None."""
         p = self.cache / f"{k}.wav"
+        if p.exists():  # có sẵn: trả ngay, không chờ máy TTS đang đọc câu khác
+            os.utime(p)  # đánh dấu vừa dùng
+            return p
         with self.lock:
-            if p.exists():
-                os.utime(p)  # đánh dấu vừa dùng
+            if p.exists():  # vừa được luồng khác tổng hợp xong
                 return p
             if k not in self.pending:
                 return None
