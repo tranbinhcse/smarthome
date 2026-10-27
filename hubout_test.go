@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -284,6 +285,11 @@ func TestHubOutWiredZone(t *testing.T) {
 	if script, _ := os.ReadFile(filepath.Join(dir, "hub.pa")); !strings.Contains(string(script), "module-bluez5-discover headset=ofono") ||
 		!strings.Contains(string(script), ".nofail") {
 		t.Fatalf("có D-Bus hệ thống thì PulseAudio nạp Bluetooth (không bắt buộc): %s", script)
+	}
+	// Loa Bluetooth đã nối sẵn lúc hubd khởi động thì thành sink mặc định; Soloist mở luồng vào sink mặc định nên Spotify
+	// đi thẳng ra loa đó, bỏ qua luồng chung: các đầu nhận (Mac chạy snapclient) im. Sink mặc định phải luôn là "hub".
+	if script, _ := os.ReadFile(filepath.Join(dir, "hub.pa")); !regexp.MustCompile(`sink_name=hub [^\n]*\nset-default-sink hub\n`).Match(script) {
+		t.Fatalf("PulseAudio phải giữ sink mặc định là hub ngay sau khi nạp: %s", script)
 	}
 	pacat, pa := pacatPid(h.music.out), pulsePid(h.music.out.pulse)
 	if !alive(pacat) || !alive(pa) {

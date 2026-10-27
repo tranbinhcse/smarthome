@@ -84,9 +84,11 @@ func (p *hubPulse) start(sock string) error {
 		}
 	}
 	os.Remove(sock)
-	// sink "hub": PCM 44,1 kHz/16 bit stereo vào FIFO, chạy theo tốc độ người đọc nên Soloist chỉ giải mã kịp tốc độ phát
+	// sink "hub": PCM 44,1 kHz/16 bit stereo vào FIFO, chạy theo tốc độ người đọc nên Soloist chỉ giải mã kịp tốc độ phát.
+	// Giữ "hub" làm sink mặc định: loa Bluetooth nối sẵn lúc khởi động sẽ thành mặc định, Soloist mở luồng vào đó và Spotify
+	// ra thẳng loa, bỏ qua luồng chung (đầu nhận im, nhạc trên hub đè lên Spotify).
 	pa := fmt.Sprintf("load-module module-native-protocol-unix auth-anonymous=1 socket=%s\n"+
-		"load-module module-pipe-sink file=%s sink_name=hub format=s16le rate=44100 channels=2\n", sock, fifo)
+		"load-module module-pipe-sink file=%s sink_name=hub format=s16le rate=44100 channels=2\nset-default-sink hub\n", sock, fifo)
 	if _, err := os.Stat(p.dbus); err == nil { // headset=ofono: chỉ A2DP, không giành HFP/HSP của máy chủ
 		pa += ".nofail\nload-module module-bluetooth-policy\nload-module module-bluez5-discover headset=ofono\n"
 	}
