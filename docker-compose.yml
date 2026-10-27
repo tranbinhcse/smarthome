@@ -42,14 +42,20 @@ services:
       # điền để dùng chứng chỉ riêng (scripts/tls-selfsigned.sh, tên miền thật).
       HUBD_TLS_CERT: ${HUBD_TLS_CERT:-}
       HUBD_TLS_KEY: ${HUBD_TLS_KEY:-}
+      # Nhạc trên hub (mục 18.3, music.go): file MP3 trong ./music và USB tự gắn dưới /media; đầu nhận Snapcast nối cổng 1704.
+      HUBD_MUSIC_DIRS: /music:/media
+      HUBD_SNAP_LISTEN: ":1704"
     volumes:
       - ./config.yaml:/data/config.yaml:ro
+      - ./music:/music:ro
+      - { type: bind, source: /media, target: /media, read_only: true, bind: { propagation: rslave, create_host_path: true } }   # USB cắm sau vẫn hiện
       - tuya-state:/gen   # tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh); hubd chỉ ghi camera.yaml
       - hubd-db:/db
       - ./tls:/tls:ro
     ports:
       - "8080:8080"
       - "8443:8443"
+      - "1704:1704"   # đầu nhận nhạc (snapclient) trong LAN
 
   # Cầu nối Tuya <-> MQTT. network_mode host để TCP ra thiết bị trong LAN (cổng 6668) không qua NAT docker.
   tuya-bridge:

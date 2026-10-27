@@ -826,14 +826,17 @@ let playerOpen = false, playerSlide = false;
 function player(f, zid) {
   const sps = cfg.devices.filter(d => kindOf(d) === 'speaker' && (zid ? d.zone === zid : !f || floorOf(d) === f));
   const sp = sps.find(d => xs(d, 'play') === '1') || sps[0];
-  if (!sp && !SP.connected) return '';
-  const playing = SP.connected ? SP.playing : xs(sp, 'play') === '1';
-  const art = SP.connected && /^https:\/\/[^"'()\\\s]+$/.test(SP.art || '') ? SP.art : '';
+  // nhạc trên hub (music.js) đang phát, hoặc chưa kết nối Spotify: thanh nhạc theo nhạc trên hub
+  const hub = HM.playing || HM.ok && !SP.connected;
+  if (!sp && !SP.connected && !HM.ok) return '';
+  const playing = hub ? HM.playing : SP.connected ? SP.playing : xs(sp, 'play') === '1';
+  const art = !hub && SP.connected && /^https:\/\/[^"'()\\\s]+$/.test(SP.art || '') ? SP.art : '';
   const slide = playerSlide;
   playerSlide = false;
   // độ trễ âm theo đồng hồ để đĩa không giật về 0° mỗi lần vẽ lại; có ảnh bìa Spotify thì in lên đĩa
   const disc = `<button class="disc${playing ? ' spin' : ''}${art ? ' art' : ''}" data-pl style="animation-delay:-${(Date.now() % 4000) / 1000}s${art ? `;background-image:url('${esc(art)}')` : ''}" aria-expanded="${playerOpen}" aria-label="${playerOpen ? 'Thu gọn' : 'Mở'} trình phát nhạc"></button>`;
   if (!playerOpen) return `<div class="player mini">${disc}</div>`;
+  if (hub) return `<div class="player${slide ? ' slide' : ''}">${disc}${hmBar()}</div>`;
   if (SP.connected) return `<div class="player${slide ? ' slide' : ''}">${disc}${spControls(f, zid, sps)}</div>`;
   const b = (...a) => btn(sp.id, ...a), tr = xs(sp, 'track'), vol = Number(xs(sp, 'vol') ?? 50);
   return `<div class="player${slide ? ' slide' : ''}">${disc}
@@ -846,7 +849,8 @@ const volw = (id, name, vol) => `<span class="volw"><button class="rb" data-vol=
 /* Spotify (hubd /api/spotify/*, mục 18 thiết kế). Một tài khoản chỉ phát ở một nơi: trình phát luôn hiện luồng đang phát,
    nút chọn thiết bị chuyển luồng sang đầu thu khác. Đầu thu thuộc khu khi tên chứa tên hoặc id khu (vd. "Khu cafe", "cafe-pi").
    Hỏi lại 5 giây một lần khi màn hình bật (30 giây khi chưa kết nối). Loa hồng ngoại của khu vẫn mở được từ trình phát. */
-let SP = {connected: false}, spDevs = null, spDevOpen = false;
+// HM: trạng thái nhạc trên hub (/api/music/state, music.js hỏi lại); khai báo ở đây vì thanh nhạc có thể vẽ trước khi music.js nạp
+let SP = {connected: false}, HM = {ok: false}, spDevs = null, spDevOpen = false;
 const fold = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
 const spZone = d => d && cfg.zones.find(z => z.type !== 'panel' && [z.name, z.id].some(n => fold(d.name).includes(fold(n))));
 async function spFetch() {
@@ -1247,7 +1251,7 @@ document.addEventListener('click', async e => {
   if (spDevOpen && !pick('.spdw')) { spDevOpen = false; draw(); }
   if ((el = pick('[data-pl]'))) {
     if (!playerOpen) { playerOpen = playerSlide = true; if (SP.connected) spLoadDevs(); return draw(); }
-    if (SP.connected) return openMusic();   // đang mở: chạm đĩa (hoặc tên bài) mở trình phát đầy đủ (music.js)
+    if (SP.connected || HM.ok) return openMusic();   // đang mở: chạm đĩa (hoặc tên bài) mở trình phát đầy đủ (music.js)
     el.parentElement.classList.add('closing');
     return setTimeout(() => { playerOpen = false; volOpen = ''; spDevOpen = false; draw(); }, 260);
   }

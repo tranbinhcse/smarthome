@@ -29,6 +29,8 @@ type Hub struct {
 
 	nodes  map[string]*nodeSeen                   // node ESP32 đã gửi tin (nodes.go), khoá bằng mu
 	dynsec func(cmds []dynCmd) ([]dynResp, error) // quản lý tài khoản MQTT của node (nodes.go); nil = chưa cấu hình
+
+	music *hubMusic // nhạc phát từ hub tới các đầu nhận (music.go)
 }
 
 func NewHub(cfg Config, db *DB, publish func(topic, payload string)) *Hub {

@@ -628,3 +628,24 @@ Chi phí là **ước lượng cho một khu**, chưa tra giá cửa hàng lúc 
 - Spotify chỉ cho địa chỉ trả về (redirect URI) dạng HTTPS hoặc `http://127.0.0.1`. Hub dùng lại HTTPS cổng 8443 của nút nói trợ lý (`scripts/tls-selfsigned.sh`): cùng một chứng chỉ, cùng một CA cài trên iPad, không thêm cổng. Redirect URI = `https://<IP hub>:8443/api/spotify/callback`.
 - Dashboard: trình phát hiện bài đang phát (tên, nghệ sĩ, ảnh bìa trên đĩa), phát/dừng, bài sau, âm lượng, chọn thiết bị Spotify Connect (thiết bị của khu đang xem xếp trước). Loa hồng ngoại vẫn điều khiển như cũ, và khi Spotify chưa kết nối thì trình phát vẫn là loa hồng ngoại.
 - Dashboard hỏi trạng thái Spotify qua hub 5 giây một lần khi đang mở và màn hình bật; hub không hỏi Spotify khi không ai xem.
+
+
+### 18.3 Quyết định của chủ nhà (2026-10-27): hub tự phát nhạc tới các amply
+
+- **Hub Center tự là máy phát nhạc.** Bộ phát nằm ngay trong `hubd`, không chạy dịch vụ Docker riêng, để sau này chạy được trên thiết bị Hub Center cấu hình thấp. Cách ở 18.2 (chỉ điều khiển một thiết bị Spotify Connect đang mở như iPhone, Chrome) không đủ: phải có app mở ở đâu đó mới phát được. Phần chọn bài, playlist, hàng đợi của 18.2 vẫn dùng lại.
+- **Amply các phòng có AUX/RCA và Bluetooth, không có Chromecast/AirPlay/DLNA.** Mỗi amply thêm một đầu nhận cắm AUX/RCA. Không phát Bluetooth từ hub: tầm ngắn, không tới được mọi phòng, không đồng bộ nhiều phòng.
+- **Chia nhạc:** `hubd` có máy chủ giao thức Snapcast viết bằng Go thuần (PCM 44,1 kHz/16 bit, khoảng 1,4 Mbit/s mỗi đầu nhận trong LAN). Đầu nhận chạy snapclient có sẵn: ESP32 (nên có PSRAM) + DAC I2S PCM5102A, khoảng 0,3–0,5 triệu; hoặc Raspberry Pi Zero 2 W + DAC, khoảng 1–1,5 triệu (ước lượng, chưa tra giá). Các khu phát đồng bộ; `hubd` bật/tắt, chỉnh âm lượng từng khu. Amply vẫn bật/tắt, đổi nguồn vào bằng hồng ngoại.
+- **Một luồng = cùng một nhạc cho các khu đang bật.** Khu khác nhạc cùng lúc thì thêm luồng; mỗi luồng Spotify cần một tài khoản Premium riêng.
+- **Phạm vi chốt (chủ nhà, 2026-10-27):** Hub Center là sản phẩm nhà thông minh; quán cafe chỉ là nơi demo. Nguồn nhạc dành cho nghe cá nhân, phi thương mại. Người dùng phát nhạc thương mại tự chịu trách nhiệm giấy phép và tài khoản họ kết nối. Hai nguồn được hỗ trợ:
+
+| Nguồn | Cách lấy âm thanh | Ghi chú |
+|---|---|---|
+| File MP3 trong bộ nhớ của hub, USB, thư mục mạng đã gắn vào hub | `hubd` đọc file, giải mã MP3 bằng Go thuần | Chạy cả khi mất internet |
+| Spotify Premium (cho ai cần) | `hubd` chạy librespot (giấy phép MIT) như tiến trình con, đọc âm thanh qua pipe; hub hiện là thiết bị Spotify "Hub Center" luôn sẵn sàng | Dùng tài khoản Premium của chính người dùng. librespot là bản không chính thức: Spotify có thể đổi giao thức hoặc chặn. Không dùng go-librespot (GPL-3, cần cgo) |
+
+  Không làm: radio internet, Jamendo, YouTube Music.
+- **Làm theo giai đoạn:** (1) máy chủ Snapcast trong `hubd` + phát MP3 từ các thư mục nhạc + API + bảng trình phát chọn nguồn và khu; (2) Spotify qua librespot; (3) chọn phần cứng đầu nhận, nạp snapclient cho ESP32 hoặc Pi.
+- **Spotify phát qua hub (giai đoạn 2):** `hubd` chạy librespot v0.8.0 (dựng tĩnh: musl, rustls kèm chứng chỉ gốc, không mDNS, không ALSA) như tiến trình con, tên thiết bị Spotify "Hub Center". Không bật tìm thiết bị qua mDNS: container `hubd` không ở mạng host.
+  - **Đăng nhập một lần.** librespot không cho đặt Client ID, nên không dùng lại được token PKCE của 18.2 (phiên phải cùng Client ID với token). Hub chạy `librespot --enable-oauth --oauth-port 0` và đưa địa chỉ "Browse to" lên Cài đặt. Người dùng đăng nhập Premium, Spotify chuyển tới `http://127.0.0.1/login?code=...` (trang lỗi trên iPad), người dùng dán địa chỉ đó vào Cài đặt, hub chuyển cho librespot qua stdin. Thông tin đăng nhập lưu ở `/db/librespot`, những lần sau librespot tự đăng nhập.
+  - **Âm thanh:** librespot ghi PCM 44,1 kHz/16 bit qua FIFO; `hubd` ưu tiên luồng Spotify khi có tiếng (tự dừng MP3), Spotify dừng thì quay về MP3 hoặc im lặng. Trên trình phát Spotify chọn thiết bị "Hub Center" để nghe qua các khu.
+- **NAS (chủ nhà, 2026-10-27):** cho chọn một thư mục nhạc trên NAS trong nhà (chia sẻ SMB) làm nguồn MP3. `hubd` tự đọc qua SMB bằng Go thuần, không cần gắn ổ mạng trên máy Ubuntu; địa chỉ, tài khoản nhập ở Cài đặt, mật khẩu chỉ lưu ở hub.

@@ -172,6 +172,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	mountSessions(mux, auth)
 	mountTuyaSetup(mux, hub, auth)
 	mountSpotify(mux, hub, auth)
+	hub.music = mountMusic(mux, hub, auth)
 	mountNodes(mux, hub, auth)
 	mountNotify(mux, hub, auth)
 	mountTLS(mux, hub.db, auth)
