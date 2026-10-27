@@ -612,3 +612,23 @@ Chi phí là **ước lượng cho một khu**, chưa tra giá cửa hàng lúc 
 - Spotify chỉ cho địa chỉ trả về (redirect URI) dạng HTTPS hoặc `http://127.0.0.1`. Hub dùng lại HTTPS cổng 8443 của nút nói trợ lý (`scripts/tls-selfsigned.sh`): cùng một chứng chỉ, cùng một CA cài trên iPad, không thêm cổng. Redirect URI = `https://<IP hub>:8443/api/spotify/callback`.
 - Dashboard: trình phát hiện bài đang phát (tên, nghệ sĩ, ảnh bìa trên đĩa), phát/dừng, bài sau, âm lượng, chọn thiết bị Spotify Connect (thiết bị của khu đang xem xếp trước). Loa hồng ngoại vẫn điều khiển như cũ, và khi Spotify chưa kết nối thì trình phát vẫn là loa hồng ngoại.
 - Dashboard hỏi trạng thái Spotify qua hub 5 giây một lần khi đang mở và màn hình bật; hub không hỏi Spotify khi không ai xem.
+
+
+### 18.3 Quyết định của chủ nhà (2026-10-27): hub tự phát nhạc tới các amply
+
+- **Hub Center tự là máy phát nhạc.** Bộ phát nằm ngay trong `hubd`, không chạy dịch vụ Docker riêng, để sau này chạy được trên thiết bị Hub Center cấu hình thấp. Cách ở 18.2 (chỉ điều khiển một thiết bị Spotify Connect đang mở như iPhone, Chrome) không đủ: phải có app mở ở đâu đó mới phát được. Phần chọn bài, playlist, hàng đợi của 18.2 vẫn dùng lại.
+- **Amply các phòng có AUX/RCA và Bluetooth, không có Chromecast/AirPlay/DLNA.** Mỗi amply thêm một đầu nhận cắm AUX/RCA. Không phát Bluetooth từ hub: tầm ngắn, không tới được mọi phòng, không đồng bộ nhiều phòng.
+- **Chia nhạc:** `hubd` có máy chủ giao thức Snapcast viết bằng Go thuần (PCM 44,1 kHz/16 bit, khoảng 1,4 Mbit/s mỗi đầu nhận trong LAN). Đầu nhận chạy snapclient có sẵn: ESP32 (nên có PSRAM) + DAC I2S PCM5102A, khoảng 0,3–0,5 triệu; hoặc Raspberry Pi Zero 2 W + DAC, khoảng 1–1,5 triệu (ước lượng, chưa tra giá). Các khu phát đồng bộ; `hubd` bật/tắt, chỉnh âm lượng từng khu. Amply vẫn bật/tắt, đổi nguồn vào bằng hồng ngoại.
+- **Một luồng = cùng một nhạc cho các khu đang bật.** Khu khác nhạc cùng lúc thì thêm luồng; mỗi luồng Spotify cần một tài khoản Premium riêng.
+- **Nguồn nhạc** (giải mã trong `hubd`, không thư viện C):
+
+| Nguồn | Chính thức? | Ghi chú |
+|---|---|---|
+| Radio internet (thư mục Radio Browser) | Có: API mở, không cần khoá | Đo ngày 2026-10-27: 33 đài Việt Nam đang chạy (VOV1, VOV Giao thông, Zing Bolero...): 18 MP3, 7 AAC/AAC+, 8 chưa rõ. MP3 giải mã bằng Go thuần; AAC chưa có bộ giải mã Go thuần tốt |
+| File nhạc trên hub, USB, NAS (MP3, FLAC, Ogg Vorbis) | Có | Chủ nhà tự lo bản quyền |
+| Jamendo | Có: API miễn phí cho mục đích phi thương mại | Phát trong quán cần giấy phép thương mại; Jamendo Licensing có gói nhạc nền cho cửa hàng, quán |
+| Spotify | Không: librespot (giấy phép MIT) chạy kèm `hubd` như tiến trình con, `hubd` đọc âm thanh qua pipe | Hub hiện là thiết bị Spotify "Hub Center", luôn sẵn sàng; cần Premium. Không dùng go-librespot (GPL-3, cần cgo và libogg/libvorbis/FLAC/alsa) |
+| YouTube Music | Không: chỉ có thư viện không chính thức | Để sau |
+
+- **Chờ chủ nhà:** Hub Center có bán cho khách không? Nguồn không chính thức (librespot, YouTube Music) không dùng được trong thiết bị thương mại; thiết bị bán ra chỉ được dùng Spotify Connect qua chương trình đối tác của Spotify.
+- **Bản quyền khi phát trong quán:** gói Spotify, YouTube Music cá nhân chỉ cho nghe cá nhân. Phát cho khách cần giấy phép biểu diễn (ở Việt Nam do VCPMC thu) dù dùng nguồn nào; chủ nhà tự kiểm tra, đây không phải tư vấn pháp lý.
