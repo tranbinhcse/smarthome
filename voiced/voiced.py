@@ -12,6 +12,8 @@ nhóm "ai" (URL, khoá, model), nhóm "voice" (giọng, cách gọi chủ nhà, 
 HTTP (chỉ trong mạng docker; dashboard đi qua hubd /voice/*, không mở cổng ra LAN):
   POST /voice/ask       body audio/wav (PCM 16-bit, tần số bất kỳ) hoặc JSON {"text": "..."}
                         → {"heard", "reply", "audio": ["/voice/tts/<key>.wav", ...]} (từng câu, phát lần lượt)
+  POST /voice/ask?listen=1  (nghe gọi tên: iPad/loa vệ tinh gửi từng đoạn có tiếng) câu không mở đầu bằng tên trợ lý
+                        → {"ignored": true}, không trả lời, không ghi log; chỉ gọi tên → lời chào + "awaiting": true
   POST /voice/brief     tóm tắt tình hình (thời tiết, không khí, điện/pin, cảnh báo) → {"reply", "audio"}
   POST /voice/ai/check  JSON {url, api_key, model} (ô trống = giá trị đã lưu) → {"ok", "models", "message"}
   POST /voice/preview   JSON {voice, owner, name} (đang nhập, chưa lưu) → lời chào thử {"reply", "audio"}
@@ -34,7 +36,7 @@ import wave
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import numpy as np
 
@@ -180,6 +182,20 @@ def match(text, cfg):
 
 
 GREET = {"xin", "chao", "alo", "oi", "a", "nhe"}
+
+
+def wake(text, p):
+    """Câu gọi trợ lý: tên (p.name, chưa đặt thì "trợ lý") ở đầu câu, cho một tiếng đệm phía trước ("à Mây ơi").
+    Khớp đúng dấu, hoặc sai dấu nhưng ngay sau là "ơi" (STT hay sai dấu; "máy lạnh" không gọi nhầm "Mây").
+    Trả phần lệnh sau tên ("" nếu chỉ gọi tên), không gọi → None."""
+    nfc = lambda x: unicodedata.normalize("NFC", x)
+    toks, name = re.findall(r"\w+", nfc(text)), re.findall(r"\w+", nfc((p.name or "trợ lý").lower()))
+    for i in (0, 1):
+        got, after = [t.lower() for t in toks[i:i + len(name)]], toks[i + len(name):]
+        oi = bool(after) and plain(after[0]) == "oi"
+        if len(got) == len(name) and (got == name or (oi and list(map(plain, got)) == list(map(plain, name)))):
+            return " ".join(after[1:] if oi else after)
+    return None
 
 
 def greeting(text, p):
@@ -738,8 +754,9 @@ def handler(app):
             if not n.isdigit() or int(n) > 8_000_000:
                 return self.send(400, "Content-Length không hợp lệ (tối đa 8 MB)".encode(), "text/plain; charset=utf-8")
             body = self.rfile.read(int(n))
-            if self.path == "/voice/ask":
-                return self.ask(body)
+            u = urlsplit(self.path)
+            if u.path == "/voice/ask":
+                return self.ask(body, parse_qs(u.query).get("listen") == ["1"])
             if self.path == "/voice/brief":
                 try:
                     reply = summary(app.hub, app.persona)
@@ -766,7 +783,7 @@ def handler(app):
         def json(self, obj):
             self.send(200, json.dumps(obj, ensure_ascii=False).encode())
 
-        def ask(self, body):
+        def ask(self, body, listen=False):
             t0 = time.perf_counter()
             try:
                 if self.headers.get("Content-Type", "").startswith("application/json"):
@@ -777,6 +794,14 @@ def handler(app):
                     heard = app.stt(rate, a).strip().lower() if len(a) >= rate * 0.3 else ""
             except Exception:
                 return self.send(400, "cần WAV PCM 16-bit hoặc JSON {\"text\": ...}".encode(), "text/plain; charset=utf-8")
+            if listen:
+                rest = wake(heard, app.persona)
+                if rest is None:  # người trong nhà/quán nói chuyện, không gọi trợ lý: bỏ qua, không ghi log
+                    return self.json({"ignored": True})
+                if not rest:
+                    reply = app.persona.greet()
+                    return self.json({"heard": heard, "reply": reply, "audio": app.speak(reply), "awaiting": True})
+                heard = rest
             t1 = time.perf_counter()
             try:
                 reply = answer(heard, app.hub, app.ai, app.persona)

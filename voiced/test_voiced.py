@@ -570,6 +570,29 @@ class TestServer(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError):  # khoá lạ (chưa từng đăng ký) thì 404, không tổng hợp gì
             urllib.request.urlopen(self.base + "/voice/tts/0123456789abcdef.wav")
 
+    def test_listen_mode_wake_name(self):
+        # Nghe gọi tên (iPad để micro mở, gửi từng đoạn có tiếng): chỉ câu mở đầu bằng tên trợ lý mới được xử lý.
+        self.app.hub.voice = {"name": "Mây", "owner": "anh Bình"}
+        self.app.load_voice()
+        heard = {"v": ""}
+        self.app.stt = lambda rate, a: heard["v"]
+        listen = lambda text, q="?listen=1": (heard.__setitem__("v", text), self.post(wav_bytes(), "audio/wav", "/voice/ask" + q))[1]
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            r = listen("KHÁCH BÀN BA GỌI MỘT LY CÀ PHÊ SỮA")
+        self.assertEqual(r, {"ignored": True})
+        self.assertNotIn("CÀ PHÊ", log.getvalue().upper())  # không ghi lại câu nói không gọi trợ lý
+        n = len(self.spoken)
+        self.assertEqual(listen("MÁY LẠNH CÒN BẬT KHÔNG"), {"ignored": True})  # "máy" không phải "Mây"
+        self.assertEqual(len(self.spoken), n)
+        r = listen("MÂY ƠI BẬT ĐÈN KHO")
+        self.assertEqual((r["heard"], r["reply"]), ("bật đèn kho", "Dạ anh Bình, đã bật Đèn Kho."))
+        self.assertIn(("POST", "/cmd", {"device": "tuya_eba30c56ca208baad0y43a", "to": "on"}), self.app.hub.calls)
+        r = listen("MÂY ƠI")
+        self.assertEqual((r["reply"], r["awaiting"]), ("Dạ, em là Mây đây, anh Bình cần gì ạ?", True))
+        r = listen("TẮT ĐÈN KHO", "")  # câu ngay sau khi trợ lý hỏi lại: gửi như nút nói, không cần gọi tên
+        self.assertEqual(r["reply"], "Dạ anh Bình, đã tắt Đèn Kho.")
+
     def test_preview_endpoint(self):
         # Nút Nghe thử: dùng giá trị đang nhập (chưa lưu), không đổi cấu hình đang chạy.
         r = self.post(json.dumps({"voice": "Trúc Ly", "owner": "anh Bình", "name": "Mây"}).encode(), "application/json", "/voice/preview")
@@ -583,6 +606,18 @@ class TestServer(unittest.TestCase):
     def test_warm_prerenders_alert_phrases(self):
         self.app.warm()
         self.assertTrue((Path(self.tmp.name) / f"{self.app.tts.key('Có khói ở bếp', 'Hải Đăng')}.wav").exists())
+
+
+class TestWake(unittest.TestCase):
+    def test_wake_name(self):
+        # Tên có dấu khớp đúng, hoặc không dấu nhưng ngay sau là "ơi" (STT hay sai dấu); cho phép một tiếng đệm phía trước.
+        mây, plain = voiced.Persona({"name": "Mây"}), voiced.Persona()
+        cases = [(mây, "MÂY ƠI BẬT ĐÈN KHO", "BẬT ĐÈN KHO"), (mây, "mây ơi", ""), (mây, "Mây, tắt đèn", "tắt đèn"),
+                 (mây, "MÁY ƠI TẮT ĐÈN", "TẮT ĐÈN"), (mây, "à mây ơi tắt đèn", "tắt đèn"),
+                 (mây, "máy lạnh bật chưa", None), (mây, "bật đèn kho", None), (mây, "bật đèn kho mây ơi", None), (mây, "", None),
+                 (plain, "TRỢ LÝ ƠI BẬT ĐÈN", "BẬT ĐÈN"), (plain, "trợ lý", ""), (plain, "bật đèn kho", None)]
+        for p, text, want in cases:
+            self.assertEqual(voiced.wake(text, p), want, (p.name, text))
 
 
 class TestPersona(unittest.TestCase):
