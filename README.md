@@ -206,7 +206,7 @@ Hub tự phát nhạc, không cần mở app nào (mục 18.3 tài liệu thiế
 | `GET /api/music/library` | `{files: [{id, title, folder}], roots: [{path, ok}]}` |
 | `GET /api/music/state` | `{playing, file, index, queue, pos_ms, dur_ms, zones: [{id, name, connected, volume, muted}]}` |
 | `POST /api/music/cmd` | `{do: play, files: [id...], index}` (hàng đợi mới, tối đa 2000 bài), `{do: play}` phát tiếp, `pause`, `next`, `prev`, `stop`, `{do: zone, id, volume?, muted?, name?}` |
-| `POST /api/music/nas` | `{host, user, pass?}` → `{shares}`; thêm `share`, `path` → `{dirs, mp3}`. `pass` trống = mật khẩu đã lưu |
+| `POST /api/music/nas` | `{host, user, pass?}` → `{shares}`; thêm `share`, `path` → `{dirs, mp3}`; `{do: save, host, user, pass?, share, path}` lưu thư mục; `{do: unset}` bỏ. `pass` trống = mật khẩu đã lưu, chỉ cho đúng địa chỉ và tài khoản lúc lưu (đổi địa chỉ phải nhập lại, để mật khẩu NAS không bị gửi tới máy lạ) |
 | `GET /api/spotify/hub` | `{available, logged_in, state: off/starting/login/running, url, name, error}` |
 | `POST /api/spotify/hub` | `{do: login}` → `{url}`; `{do: code, url}` (địa chỉ trang trả về); `{do: logout}` |
 

@@ -40,9 +40,9 @@
     if (what === 'share') return browse(el.dataset.nas, '');
     if (what === 'dir') return browse(NB.share, NB.path ? `${NB.path}/${el.dataset.nas}` : el.dataset.nas);
     if (what === 'up') return NB.path ? browse(NB.share, NB.path.split('/').slice(0, -1).join('/')) : browse('', '');
-    const b = nasBody(), patch = what === 'use' ? {nas_host: b.host, nas_user: b.user, nas_share: NB.share, nas_path: NB.path} : {nas_share: null, nas_path: null};
-    if (what === 'use' && b.pass) patch.nas_pass = b.pass;   // để trống: giữ mật khẩu đã lưu
-    const r = await U.api('/api/settings/music', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
+    // lưu qua /api/music/nas: hub ràng buộc mật khẩu với đúng địa chỉ, tài khoản (mật khẩu trống = mật khẩu đã lưu cho đúng máy đó)
+    const body = what === 'use' ? {do: 'save', ...nasBody(), share: NB.share, path: NB.path} : {do: 'unset'};
+    const r = await U.api('/api/music/nas', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     if (!r.ok) return U.toast(`Chưa lưu được: ${await r.text()}`);
     delete U.DRAFT.music;
     NB = null;
