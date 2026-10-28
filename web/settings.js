@@ -12,7 +12,7 @@ const SECS = [['phong', 'Phòng và thiết bị', 'home'], ['den', 'Chiếu sá
   ['taikhoan', 'Tài khoản & chia sẻ', 'user'], ['mang', 'Mạng & kết nối', 'router'], ['thongbao', 'Thông báo', 'bell'],
   ['troly', 'Trợ lý & giọng nói', 'mic'], ['nhac', 'Nhạc', 'music'], ['saoluu', 'Sao lưu & khôi phục', 'cloud'], ['hethong', 'Hệ thống', 'gear']];
 // mục tích hợp (SETUP) nằm ở đâu; mục mới chưa khai thì vào Mạng & kết nối
-const SETUP_SEC = {camera: 'camera', tuya: 'mang', nodes: 'mang', https: 'mang', ai: 'troly', voice: 'troly', notify: 'thongbao', spotify: 'nhac', soloist: 'nhac', music: 'nhac', speaker: 'nhac'};
+const SETUP_SEC = {camera: 'camera', tuya: 'mang', nodes: 'mang', https: 'mang', ai: 'troly', voice: 'troly', people: 'troly', notify: 'thongbao', spotify: 'nhac', soloist: 'nhac', music: 'nhac', speaker: 'nhac'};
 const KIND_LABEL = {light: 'Chiếu sáng', socket: 'Ổ cắm', switch: 'Công tắc', breaker: 'CB', fan: 'Quạt', ac: 'Điều hoà', tv: 'TV', speaker: 'Loa',
   camera: 'Camera', pump: 'Bơm nước', water: 'Tưới cây', vacuum: 'Robot lau nhà', router: 'Wi-Fi', infra: 'Hạ tầng'};
 const EDIT_KINDS = ['light', 'socket', 'switch', 'breaker', 'fan', 'ac', 'tv', 'speaker', 'pump', 'water'];

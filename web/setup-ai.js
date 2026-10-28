@@ -51,7 +51,8 @@
       `<div class="kv">${U.sinput('voice', 'quiet_from', 'Giờ yên lặng từ', {type: 'time'})}${U.sinput('voice', 'quiet_to', 'đến', {type: 'time'})}</div>
       <div class="kv"><button class="pill" data-sact="voice:preview">Nghe thử</button>${U.ssave('voice')}
         <button class="pill${window.voiceEar?.on() ? ' amber' : ''}" data-sact="voice:ear">${window.voiceEar?.on() ? 'Tắt nghe gọi tên ở màn hình này' : 'Nghe gọi tên ở màn hình này'}</button></div>
-      <p class="note">Có cách gọi chủ nhà thì trợ lý xưng "em" và mở đầu câu trả lời bằng "Dạ ...", cả khi hỏi AI. Trong giờ yên lặng
+      <p class="note">Có cách gọi chủ nhà thì trợ lý xưng "em" và mở đầu câu trả lời bằng "Dạ ...", cả khi hỏi AI. Đã đăng ký
+        Giọng người nhà thì trợ lý gọi theo người đang nói. Trong giờ yên lặng
         cảnh báo chỉ hiện chữ, cảnh báo khẩn vẫn đọc; để trống hai ô giờ thì luôn đọc.</p>
       <p class="note">Nghe gọi tên: micro của màn hình này mở liên tục (cần HTTPS, để màn hình sáng); gọi "${U.esc(U.sval('voice', 'name') || 'trợ lý')} ơi"
         rồi nói lệnh. Tiếng nói được nhận dạng ngay trên hub, câu không gọi tên bị bỏ qua và không lưu lại.</p>`,
@@ -72,6 +73,67 @@
       sample.src = j.audio[0];
       sample.defaultPlaybackRate = sample.playbackRate = Number(v('speed')) || 1;
       sample.play().catch(() => {});
+    }});
+
+  // Giọng người nhà (voiced /voice/people): mỗi người đọc vài câu để trợ lý nhận ra ai đang nói, xưng hô đúng người; bật
+  // "chỉ làm theo giọng người nhà" (nhóm "voice") thì bỏ qua giọng lạ như TV, khách. Vân giọng chỉ lưu trên hub.
+  // Câu mẫu không chứa lệnh (micro nghe lệnh có thể đang mở; voice.js cũng tạm ngừng nghe khi ghi).
+  const READ = ['Xin chào, đây là giọng của tôi, hãy nhớ giọng nói này nhé.',
+    'Sáng nay trời trong xanh, gió nhẹ, tôi đi dạo quanh hồ một vòng.', 'Một, hai, ba, bốn, năm, sáu, bảy, tám, chín, mười.'];
+  const LEVELS = [['0.55', 'Vừa (mặc định)'], ['0.45', 'Thoáng: người nhà ít bị báo giọng lạ'], ['0.65', 'Chặt: người lạ khó lọt']];
+  const num = x => String(x).replace('.', ',');
+  let people = null, recBusy = '';
+  async function loadPeople() {
+    people = people || [];
+    if (U.DEMO) { people = [{you: 'anh Bình', samples: 3}]; return U.soon(); }
+    const r = await U.api('/voice/people');
+    if (r.ok) { people = await r.json(); U.soon(); }
+  }
+  SETUP.push({id: 'people', ns: 'voice', icon: 'shield', c: 'cyan', title: 'Giọng người nhà',
+    meta: () => people?.length ? `${people.length} người${U.SAVED.voice?.only_people ? ' · chỉ nghe người nhà' : ''}` : 'Chưa đăng ký',
+    body: () => {
+      if (!people) loadPeople();
+      const you = String(U.sval('people', 'you') || '').trim(), n = people?.find(p => p.you === you)?.samples || 0;
+      return `<p class="note">Mỗi người đọc ${READ.length} câu dưới đây, mỗi lần bấm ghi 5 giây; nói như lúc ra lệnh, đứng cách màn hình như thường ngày.
+          Trợ lý nhận ra ai đang nói để xưng hô đúng người. Vân giọng chỉ lưu trên hub.</p>
+        ${U.sinput('people', 'you', 'Cách gọi người này', {ph: 'vd anh Bình, chị Lan'})}
+        ${you ? `<p class="note">Câu ${n % READ.length + 1}: <b>“${U.esc(READ[n % READ.length])}”</b></p>` : ''}
+        <div class="kv"><button class="pill amber" data-sact="people:rec"${recBusy || !you ? ' disabled' : ''}>${recBusy === 'rec' ? 'Đang ghi… đọc câu trên'
+            : n ? `Ghi thêm (đã có ${n} mẫu)` : 'Ghi câu 1'}</button>
+          <button class="pill" data-sact="people:check"${recBusy || !people?.length ? ' disabled' : ''}>${recBusy === 'check' ? 'Đang nghe… nói một câu' : 'Thử nhận giọng'}</button></div>
+        ${people?.length ? `<div class="list">${people.map(p => `<div class="setrow"><span>${U.esc(p.you)}<small>${p.samples} mẫu${p.samples < READ.length
+            ? `, nên ghi đủ ${READ.length}` : ''}</small></span><button class="pill sm" data-sact="people:del" data-you="${U.esc(p.you)}">Xoá</button></div>`).join('')}</div>` : ''}
+        <label class="setrow"><span>Chỉ làm theo giọng người nhà<small>Giọng lạ (TV, khách) bị bỏ qua; bấm nút nói thì trợ lý chỉ báo bằng chữ</small></span>
+          <input type="checkbox" data-sfield="voice.only_people"${U.sval('voice', 'only_people') === true ? ' checked' : ''}></label>
+        ${U.sselect('voice', 'speaker_threshold', 'Độ khắt khe khi nhận giọng', LEVELS)}
+        <div class="kv">${U.ssave('voice')}</div>
+        <p class="note">Thử nhận giọng cho biết độ giống (0 đến 1, từ 0,55 là cùng người ở mức Vừa). Người nhà hay bị báo giọng lạ thì ghi thêm mẫu
+          hoặc chọn Thoáng; người lạ vẫn lọt thì chọn Chặt. Câu rất ngắn như "có" được tính cho người vừa nói trong cùng cuộc trò chuyện.</p>`;
+    },
+    act: async (what, el) => {
+      if (U.DEMO) return U.toast('Chế độ dữ liệu mẫu không ghi âm');
+      if (what === 'del') {
+        if (!(await ask({title: `Xoá giọng của ${el.dataset.you}?`, ok: 'Xoá', danger: true}))) return;
+        const r = await U.api('/voice/people?you=' + encodeURIComponent(el.dataset.you), {method: 'DELETE'});
+        if (!r.ok) return U.toast(`Lỗi ${r.status}`);
+        people = null; return loadPeople();
+      }
+      if (recBusy) return;
+      if (!window.voiceRecord) return U.toast('Trợ lý giọng nói (voiced) chưa chạy');
+      const you = String(U.sval('people', 'you') || '').trim();
+      recBusy = what; U.soon();
+      let body;
+      try { body = await window.voiceRecord(what === 'rec' ? 5 : 3); }   // gọi ngay trong cú chạm: iOS mới cho mở micro
+      catch (e) { recBusy = ''; U.soon(); return U.toast(e.message); }
+      recBusy = ''; U.soon();
+      const r = await U.api(what === 'rec' ? '/voice/people?you=' + encodeURIComponent(you) : '/voice/people/check',
+        {method: 'POST', headers: {'Content-Type': 'audio/wav'}, body});
+      if (!r.ok) return U.toast(r.status === 404 ? 'Trợ lý giọng nói (voiced) chưa chạy' : await r.text());
+      const j = await r.json();
+      if (what === 'check') return U.toast(j.who ? `Nhận ra ${j.who} (độ giống ${num(j.score)})`
+        : `Chưa nhận ra giọng${j.score != null ? ` (giống nhất ${num(j.score)})` : ''}`);
+      U.toast(`Đã ghi mẫu ${j.samples} của ${j.you}${j.score != null ? `, giống các mẫu trước ${num(j.score)}` : ''}`);
+      people = null; loadPeople();
     }});
 
   // Đọc thông báo: mỗi loại (kind của notify trong config.yaml) một công tắc, lưu nhóm "notify" ({"<kind>": false} = tắt).

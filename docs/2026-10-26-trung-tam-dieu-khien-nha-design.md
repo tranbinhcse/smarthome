@@ -520,6 +520,32 @@ Chủ nhà chọn: nghe gọi tên ở cả iPad và loa vệ tinh (làm iPad tr
 
 **Chưa kiểm:** gọi tên bằng giọng thật qua micro iPad trong quán ồn (mới thử bằng giọng tổng hợp); ngưỡng năng lượng là số cố định trong `voice.js`, có thể phải chỉnh. Loa vệ tinh ESP32-S3 dùng cùng `/voice/ask?listen=1`, chưa làm firmware.
 
+#### 15.2.4 Bản 4: hội thoại liền mạch, giọng người nhà (2026-10-28)
+
+Chủ nhà phản ánh: trợ lý hỏi xác nhận rồi im, phải chạm hay gọi tên lại; trợ lý chưa nhớ giọng chủ nhà. Chủ nhà chọn: trợ lý nhận ra người đang nói để xưng hô đúng người, và (khi bật) chỉ làm theo giọng người nhà, bỏ qua TV và khách.
+
+| Phần | Cách làm |
+|---|---|
+| Hội thoại | Chạm nút nói hay gọi tên thì vào hội thoại: sau mỗi câu trả lời, câu kế không cần gọi tên, không cần chạm, tới khi im 8 giây kể từ lúc trợ lý đọc xong. Tiếng ồn (STT không ra chữ) không kéo dài hội thoại. Kiểm bằng `scripts/test_voice_js.py` (chạy `voice.js` thật trong QuickJS) |
+| Nhận người nói | CAM++ zh_en 16k (3D-Speaker, Apache License 2.0, 28 MB, bản ONNX của sherpa-onnx), chạy trong `voiced`, không thêm container. Mỗi người đọc 3 câu ở Cài đặt → Giọng người nhà; vân giọng = tổng vector mẫu đã chuẩn hoá, lưu `voices.json` ở volume `voiced-data`, API không trả ra |
+| Xưng hô | Nhận ra ai thì gọi theo cách gọi của người đó; đã có người đăng ký mà không nhận ra thì gọi "bạn"; chưa ai đăng ký thì như cũ |
+| Chỉ người nhà | `voice.only_people`: giọng lạ khi gọi tên thì im, khi chạm nút nói thì chỉ báo bằng chữ (không đọc, không kéo dài hội thoại), không ghi lời người lạ vào log |
+| Câu ngắn | "có", "không" quá ngắn để nhận người: câu dưới 1 giây trong hội thoại (cùng màn hình, 60 giây) của người vừa nhận ra thì chỉ cần giống người đó tới ngưỡng − 0,2 |
+
+Đo trên hub (28/10, CAM++, 25 giọng VieNeu: mỗi giọng 3 câu đăng ký, 2 câu lệnh 1,1–2,3 s, 1 tiếng "có" 0,4–0,9 s; người khác = so với 24 giọng còn lại):
+
+| Thử | Ngưỡng | Đúng người được nhận | Người khác bị nhận nhầm |
+|---|---|---|---|
+| Câu lệnh | 0,45 | 50/50 | 153/1200 |
+| Câu lệnh | **0,55 (mặc định, "Vừa")** | 50/50 | 19/1200 |
+| Câu lệnh | 0,60 | 49/50 | 5/1200 |
+| "có" | 0,55 | 1/25 | 0/600 |
+| "có" | 0,35 (nới trong hội thoại) | 22/25 | 38/600 |
+
+Mỗi câu 22 ms (trung vị, 45 ms chậm nhất), RAM tăng 83 MB. Độ khắt khe chỉnh được ở Cài đặt (Thoáng 0,45 / Vừa 0,55 / Chặt 0,65); nút Thử nhận giọng hiện độ giống để chủ nhà chọn.
+
+**Chưa kiểm:** giọng thật qua micro iPad (số trên là giọng tổng hợp: cùng bộ tạo tiếng nên có thể khác giọng người thật cả hai chiều); giọng người nhà phát lại qua loa (ghi âm, video) vẫn được nhận, đây không phải xác thực chống giả mạo, lệnh có khoá vẫn cần PIN của màn hình.
+
 ## 16. Chất lượng nước uống (máy lọc RO)
 
 Chủ nhà bổ sung ngày 2026-10-26. Hồ cá đã bỏ khỏi phạm vi. Phần này làm cùng Giai đoạn 4.

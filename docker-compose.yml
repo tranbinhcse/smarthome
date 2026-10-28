@@ -130,9 +130,11 @@ services:
       MQTT_PASS: ${VOICED_MQTT_PASS:-}
     volumes:
       - voiced-cache:/cache   # âm thanh đã đọc (cache theo câu)
+      - voiced-data:/data     # vân giọng người nhà (voices.json): chỉ ở hub, không sao lưu kèm cấu hình
 
 volumes:
   mosquitto-data:
   hubd-db:
   tuya-state:
   voiced-cache:
+  voiced-data:

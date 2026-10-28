@@ -732,6 +732,126 @@ class TestServer(unittest.TestCase):
         self.assertTrue((Path(self.tmp.name) / f"{self.app.tts.key('Có khói ở bếp', 'Hải Đăng')}.wav").exists())
 
 
+def voice_wav(k, seconds=2.0, rate=16000):
+    """Giọng giả số k (biên độ k × 1000): fake_embed đọc lại k, mỗi k là một người."""
+    b = io.BytesIO()
+    with wave.open(b, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(rate)
+        w.writeframes((np.sin(np.arange(int(rate * seconds)) / 10) * 1000 * k).astype("<i2").tobytes())
+    return b.getvalue()
+
+
+def fake_embed(rate, a):
+    """Câu dài: đúng người giống 1,0, người khác 0. Câu ngắn (dưới 1 giây, như "có") chỉ giống đúng người 0,45: giống đo
+    thật trên hub (25 giọng: "có" trung vị 0,447, dưới ngưỡng 0,55 của câu thường)."""
+    e = np.zeros(16)
+    e[int(round(np.abs(a).max() * 32.768))] = 1.0
+    if len(a) < rate:
+        e = 0.45 * e + 0.893 * np.eye(16)[15]
+    return e
+
+
+class TestVoices(unittest.TestCase):
+    """Giọng người nhà: trợ lý nhận ra ai đang nói để xưng hô đúng người, và (khi bật) bỏ qua giọng lạ như TV, khách."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.said = {"v": "BẬT ĐÈN KHO"}
+        def synth(text, path, voice):
+            path.write_bytes(wav_bytes(seconds=0.1))
+        self.app = voiced.App(FakeHub(), None, lambda rate, a, hot="": self.said["v"], voiced.TTS(Path(self.tmp.name), synth),
+                              voiced.Voices(Path(self.tmp.name) / "voices.json", fake_embed))
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), voiced.handler(self.app))
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.srv.server_port}"
+
+    def tearDown(self):
+        self.srv.shutdown(), self.srv.server_close(), self.tmp.cleanup()
+
+    def call(self, method, path, body=None):
+        req = urllib.request.Request(self.base + path, data=body, method=method, headers={"Content-Type": "audio/wav"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    def enroll(self, you, k):
+        code, out = self.call("POST", "/voice/people?you=" + urllib.parse.quote(you), voice_wav(k))
+        self.assertEqual(code, 200, out)
+        return json.loads(out)
+
+    def ask(self, k, q=""):
+        return json.loads(self.call("POST", "/voice/ask" + q, voice_wav(k))[1])
+
+    def settings(self, **s):
+        self.app.hub.voice = s
+        self.app.load_voice()
+
+    def test_enroll_list_check_remove_and_persist(self):
+        self.assertEqual(self.enroll("anh Bình", 1), {"you": "anh Bình", "samples": 1, "score": None})
+        self.assertEqual(self.enroll("anh Bình", 1)["score"], 1.0)   # mẫu sau so với vân giọng đã có: người ghi thấy có khớp
+        self.enroll("anh Bình", 1)
+        self.enroll("chị Lan", 2)
+        code, out = self.call("GET", "/voice/people")
+        self.assertEqual(json.loads(out), [{"you": "anh Bình", "samples": 3}, {"you": "chị Lan", "samples": 1}])
+        self.assertNotIn("emb", out)   # vân giọng không ra khỏi hub
+        check = lambda k: json.loads(self.call("POST", "/voice/people/check", voice_wav(k))[1])
+        self.assertEqual((check(2)["who"], check(2)["score"]), ("chị Lan", 1.0))
+        self.assertIsNone(check(3)["who"])
+        self.assertEqual(self.call("DELETE", "/voice/people?you=" + urllib.parse.quote("chị Lan"))[0], 204)
+        self.assertEqual(self.call("DELETE", "/voice/people?you=ai")[0], 404)
+        self.assertEqual(voiced.Voices(Path(self.tmp.name) / "voices.json", fake_embed).people(), [{"you": "anh Bình", "samples": 3}])
+        for path, body in (("/voice/people", voice_wav(1)), ("/voice/people?you=" + "a" * 41, voice_wav(1)),
+                           ("/voice/people?you=x", b"khong-phai-wav"), ("/voice/people?you=x", voice_wav(1, seconds=0.5))):
+            self.assertEqual(self.call("POST", path, body)[0], 400, path)   # thiếu tên, tên dài, không phải WAV, mẫu quá ngắn
+
+    def test_reply_addresses_whoever_speaks(self):
+        self.settings(owner="anh Bình")
+        self.enroll("anh Bình", 1)
+        self.enroll("chị Lan", 2)
+        self.assertEqual(self.ask(2)["reply"], "Dạ chị Lan, đã bật Đèn Kho.")
+        self.assertEqual(self.ask(1)["reply"], "Dạ anh Bình, đã bật Đèn Kho.")
+        self.assertEqual(self.ask(3)["reply"], "Đã bật Đèn Kho.")   # giọng lạ, chưa bật chỉ nghe người nhà: vẫn làm, gọi "bạn"
+        self.assertEqual(sum(c[1] == "/cmd" for c in self.app.hub.calls), 3)
+
+    def test_only_people_ignores_strangers(self):
+        self.settings(name="Mây", owner="anh Bình", only_people=True)
+        self.said["v"] = "BẬT ĐÈN KHO"
+        self.assertEqual(self.ask(3)["reply"], "Dạ anh Bình, đã bật Đèn Kho.")   # chưa ai đăng ký giọng: chưa lọc được ai
+        self.enroll("anh Bình", 1)
+        self.app.hub.calls.clear()
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.said["v"] = "MÂY ƠI BẬT ĐÈN KHO"
+            self.assertEqual(self.ask(3, "?listen=1"), {"ignored": True})   # TV, khách gọi tên: im lặng
+            self.said["v"] = "BẬT ĐÈN KHO"
+            r = self.ask(3)   # chạm nút nói / câu nối tiếp: báo bằng chữ, không đọc, không kéo dài hội thoại (heard rỗng)
+        self.assertEqual((r["heard"], r["reply"], r.get("audio")), ("", voiced.STRANGER, None))
+        self.assertNotIn("ĐÈN KHO", log.getvalue().upper())   # không ghi lại lời của người lạ
+        self.assertFalse(any(c[1] == "/cmd" for c in self.app.hub.calls))
+        self.said["v"] = "MÂY ƠI BẬT ĐÈN KHO"
+        self.assertEqual(self.ask(1, "?listen=1")["reply"], "Dạ anh Bình, đã bật Đèn Kho.")
+        self.assertTrue(any(c[1] == "/cmd" for c in self.app.hub.calls))
+
+    def test_short_answer_counts_for_whoever_is_talking(self):
+        # "có" quá ngắn để nhận người. Đang hội thoại với người vừa nhận ra (cùng màn hình) thì chỉ cần giống người đó ở mức
+        # nới (ngưỡng − 0,2); người lạ nói "có" vẫn bị từ chối, kể cả chen vào hội thoại của chủ nhà.
+        self.settings(owner="anh Bình", only_people=True)
+        self.enroll("anh Bình", 1)
+        talk = lambda k, text, seconds=2.0, sid="ipad": (self.said.__setitem__("v", text), json.loads(self.call_sid(
+            "/voice/ask", voice_wav(k, seconds), sid)))[1]
+        self.assertEqual(talk(1, "có", 0.6, "dien-thoai")["reply"], voiced.STRANGER)   # chưa nói gì trước: không đoán
+        r = talk(1, "TẮT CB TỔNG BẾP")
+        self.assertIn("confirm", r)
+        self.assertEqual(talk(3, "có", 0.6)["reply"], voiced.STRANGER)   # người lạ chen vào
+        r = talk(1, "có", 0.6)
+        self.assertEqual(r["execute"]["ids"], ["tuya_eb6564a5a81a53bb8ayyzs"])
+
+    def call_sid(self, path, body, sid):
+        req = urllib.request.Request(self.base + path, data=body, headers={"Content-Type": "audio/wav", "X-Voice-Session": sid})
+        return urllib.request.urlopen(req).read().decode()
+
+
 class TestWake(unittest.TestCase):
     def test_wake_name(self):
         # Tên có dấu khớp đúng, hoặc không dấu nhưng ngay sau là "ơi" (STT hay sai dấu); cho phép một tiếng đệm phía trước.

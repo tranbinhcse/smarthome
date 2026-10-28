@@ -7,7 +7,10 @@ lưu trong hubd nhóm "ai") → mọi thao tác đi qua API trợ lý của hubd
 cần PIN → câu trả lời đọc bằng VieNeu-TTS (giọng Nam/Nữ chọn ở Cài đặt), cache theo giọng + câu.
 Cảnh báo nghe từ MQTT hubd/alert, đẩy tới loa (iPad) qua SSE; câu cảnh báo cố định tạo sẵn âm thanh lúc khởi động.
 Cấu hình đọc qua GET /api/assistant/settings/{ai,voice}, đọc lại khi MQTT hubd/settings/<nhóm> = changed:
-nhóm "ai" (URL, khoá, model), nhóm "voice" (giọng, cách gọi chủ nhà, tên trợ lý, tốc độ đọc, giờ yên lặng).
+nhóm "ai" (URL, khoá, model), nhóm "voice" (giọng, cách gọi chủ nhà, tên trợ lý, tốc độ đọc, giờ yên lặng, chỉ nghe
+người nhà, độ khắt khe khi nhận giọng).
+Giọng người nhà: mỗi người đọc vài câu ở Cài đặt; câu nói sau đó được nhận ra là của ai (CAM++, Voices) để xưng hô đúng
+người, và khi bật "chỉ nghe người nhà" thì bỏ qua giọng lạ (TV, khách). Vân giọng chỉ lưu trên hub (VOICED_DATA).
 
 HTTP (chỉ trong mạng docker; dashboard đi qua hubd /voice/*, không mở cổng ra LAN):
   POST /voice/ask       body audio/wav (PCM 16-bit, tần số bất kỳ) hoặc JSON {"text": "..."}
@@ -17,6 +20,10 @@ HTTP (chỉ trong mạng docker; dashboard đi qua hubd /voice/*, không mở c�
   POST /voice/brief     tóm tắt tình hình (thời tiết, không khí, điện/pin, cảnh báo) → {"reply", "audio"}
   POST /voice/ai/check  JSON {url, api_key, model} (ô trống = giá trị đã lưu) → {"ok", "models", "message"}
   POST /voice/preview   JSON {voice, owner, name} (đang nhập, chưa lưu) → lời chào thử {"reply", "audio"}
+  GET  /voice/people    → [{"you", "samples"}] (người đã đăng ký giọng; không trả vân giọng)
+  POST /voice/people?you=<cách gọi>  body audio/wav (một câu đọc, ≥ 1 giây) → {"you", "samples", "score"}
+  POST /voice/people/check  body audio/wav → {"who" | null, "score"} (nút Thử nhận giọng)
+  DELETE /voice/people?you=<cách gọi>  → 204, 404 nếu không có
   GET  /voice/tts/<key>.wav
   GET  /voice/events    SSE: {"type": "alert", "level", "text", "audio": [...] | null} | {"type": "ack"}
 """
@@ -51,6 +58,7 @@ NOT_HEARD = "{Me} chưa nghe rõ, {you} nói lại nhé."
 FIXED_ONLY = "Chưa cài AI nên {me} chỉ làm được lệnh cố định, như bật đèn kho hay pin còn bao nhiêu."
 AI_KEY = "Khoá API của AI bị từ chối, hãy kiểm tra trong Cài đặt."
 AI_ERROR = "Trợ lý trực tuyến đang lỗi, bạn thử lại sau."
+STRANGER = "Xin lỗi, tôi chỉ làm theo giọng người nhà đã đăng ký."
 ON_RE = re.compile(r"^\s*(on|1|true)\s*$", re.I)
 CLOCK = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 UNITS = {"%": "phần trăm", "W": "oát", "kW": "ki lô oát", "kWh": "ki lô oát giờ", "V": "vôn", "A": "am pe",
@@ -116,6 +124,16 @@ class Conv:
 
     def __init__(self, now=time.monotonic):
         self.now, self.turns, self.at, self._pending, self.out = now, [], now(), None, {}
+        self._who = None   # (cách gọi, lúc nhận ra): người vừa nói trong hội thoại này
+
+    @property
+    def who(self):
+        """Người vừa được nhận ra giọng trong hội thoại này, nếu chưa quá WAIT giây."""
+        return self._who[0] if self._who and self.now() - self._who[1] <= self.WAIT else None
+
+    @who.setter
+    def who(self, you):
+        self._who = (you, self.now()) if you else None
 
     def history(self):
         return [m for u, a in self.turns for m in ({"role": "user", "content": u}, {"role": "assistant", "content": a})]
@@ -135,6 +153,67 @@ class Conv:
         """Phần gửi kèm câu trả lời cho màn hình ({"confirm": ...} hay {"execute": ...}), lấy một lần."""
         out, self.out = self.out, {}
         return out
+
+
+# ---------- Giọng người nhà ----------
+
+class Voices:
+    """Mỗi người nhà (theo cách gọi, "anh Bình") một vân giọng = tổng các vector mẫu đã chuẩn hoá; lưu ở path trên hub,
+    API không trả vân giọng. who() nhận người đang nói: độ giống (cosin) cao nhất và ≥ threshold.
+    Đo 28/10 trên hub, 25 giọng VieNeu, CAM++ (mục 15.2.4 thiết kế): câu lệnh 1–2 giây ở ngưỡng 0,55 nhận đúng 50/50, nhận
+    nhầm 19/1200; "có" (dưới 1 giây) chỉ nhận đúng 1/25, nên câu ngắn trong hội thoại của người vừa nhận ra chỉ cần giống
+    người đó tới threshold − RELAX (0,35: đúng 22/25, nhầm 38/600)."""
+    MIN, SHORT, RELAX = 1.0, 1.0, 0.2   # giây: mẫu đăng ký ngắn nhất; câu ngắn; mức nới cho câu ngắn
+
+    def __init__(self, path, embed, threshold=0.55):
+        self.path, self.embed, self.threshold, self.lock = Path(path), embed, threshold, threading.Lock()
+        try:
+            self.db = {k: {"sum": np.array(v["sum"], dtype=float), "n": int(v["n"])} for k, v in json.loads(self.path.read_text()).items()}
+        except FileNotFoundError:
+            self.db = {}
+
+    def people(self):
+        with self.lock:
+            return [{"you": k, "samples": v["n"]} for k, v in sorted(self.db.items())]
+
+    def vec(self, rate, samples):
+        e = np.asarray(self.embed(rate, samples), dtype=float)
+        return e / (np.linalg.norm(e) or 1.0)
+
+    def scores(self, e):
+        with self.lock:
+            return {k: round(float(e @ v["sum"] / np.linalg.norm(v["sum"])), 3) for k, v in self.db.items()}
+
+    def add(self, you, rate, samples):
+        e = self.vec(rate, samples)
+        score = self.scores(e).get(you)
+        with self.lock:
+            cur = self.db.get(you, {"sum": np.zeros_like(e), "n": 0})
+            self.db[you] = {"sum": cur["sum"] + e, "n": cur["n"] + 1}
+            self.save()
+            return {"you": you, "samples": self.db[you]["n"], "score": score}
+
+    def remove(self, you):
+        with self.lock:
+            if self.db.pop(you, None) is None:
+                return False
+            self.save()
+            return True
+
+    def save(self):  # gọi khi đang giữ lock
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({k: {"sum": v["sum"].tolist(), "n": v["n"]} for k, v in self.db.items()}))
+        tmp.replace(self.path)
+
+    def who(self, rate, samples, talking=None):
+        """(người, độ giống) — người là None nếu không ai đủ giống. talking: người vừa nói trong hội thoại này (Conv.who)."""
+        s = self.scores(self.vec(rate, samples))
+        best = max(s, key=s.get, default=None)
+        if best is not None and s[best] >= self.threshold:
+            return best, s[best]
+        if talking in s and len(samples) < self.SHORT * rate and s[talking] >= self.threshold - self.RELAX:
+            return talking, s[talking]
+        return None, s.get(best)
 
 
 YES = ("có", "đồng ý", "xác nhận", "ừ", "ok", "oke", "đúng rồi", "làm đi", "chắc chắn", "được")
@@ -765,6 +844,21 @@ def sherpa_stt():
     return stt
 
 
+def sherpa_speaker():
+    import sherpa_onnx
+    # CAM++ (3D-Speaker, Apache-2.0, fetch_models.py): vector 192 chiều; đo trên hub 22 ms một câu, thêm 83 MB RAM.
+    ex = sherpa_onnx.SpeakerEmbeddingExtractor(sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        model=str(MODELS / "speaker" / "campplus.onnx"), num_threads=int(os.environ.get("VOICED_THREADS", "4"))))
+    lock = threading.Lock()
+    def embed(rate, samples):
+        with lock:
+            s = ex.create_stream()
+            s.accept_waveform(rate, samples)  # sherpa tự đổi tần số về 16 kHz
+            s.input_finished()
+            return ex.compute(s)
+    return embed
+
+
 def read_wav(b):
     with wave.open(io.BytesIO(b)) as w:
         if w.getsampwidth() != 2 or not 8000 <= w.getframerate() <= 192000:
@@ -776,8 +870,9 @@ def read_wav(b):
 # ---------- Dịch vụ ----------
 
 class App:
-    def __init__(self, hub, ai, stt, tts):
-        self.hub, self.ai, self.stt, self.tts = hub, ai, stt, tts
+    def __init__(self, hub, ai, stt, tts, voices=None):
+        self.hub, self.ai, self.stt, self.tts, self.voices = hub, ai, stt, tts, voices
+        self.voice_cfg, self.only_people = {}, False
         self.listeners, self.lock = set(), threading.Lock()
         self.persona, self.phrases, self.warming = Persona(), [], None
         self.now = lambda: datetime.now(VN)
@@ -812,8 +907,21 @@ class App:
         code, s = self.hub("GET", "/settings/voice")
         if code != 200:
             return print(f"không đọc được cấu hình giọng: HTTP {code}", flush=True) or False
-        old, self.persona = self.persona, Persona(s)
+        old, self.persona, self.voice_cfg = self.persona, Persona(s), s
+        self.only_people = s.get("only_people") is True
+        if self.voices:
+            try:
+                self.voices.threshold = min(0.9, max(0.2, float(s.get("speaker_threshold") or 0.55)))
+            except (TypeError, ValueError):
+                self.voices.threshold = 0.55
         return (old.voice, old.owner) != (self.persona.voice, self.persona.owner)
+
+    def persona_for(self, who):
+        """Xưng hô theo người đang nói. Đã có người đăng ký giọng mà không nhận ra (giọng lạ) thì gọi "bạn", không gọi nhầm
+        tên chủ nhà; chưa ai đăng ký thì như cũ (cách gọi chủ nhà trong Cài đặt)."""
+        if who is None and not (self.voices and self.voices.people()):
+            return self.persona
+        return Persona({**self.voice_cfg, "owner": who or ""})
 
     def load_ai(self):
         """Đọc cấu hình AI (nhóm "ai" của hubd) bằng token trợ lý. Không in khoá."""
@@ -891,6 +999,24 @@ def handler(app):
             u = urlsplit(self.path)
             if u.path == "/voice/ask":
                 return self.ask(body, parse_qs(u.query).get("listen") == ["1"])
+            if u.path == "/voice/people":
+                you = self.you()
+                if not app.voices or you is None:
+                    return self.send(400, "cần ?you=<cách gọi>, 1–40 ký tự".encode(), "text/plain; charset=utf-8")
+                try:
+                    rate, a = read_wav(body)
+                except Exception:
+                    return self.send(400, "cần WAV PCM 16-bit".encode(), "text/plain; charset=utf-8")
+                if len(a) < Voices.MIN * rate:
+                    return self.send(400, "mẫu quá ngắn: đọc trọn câu, ít nhất 1 giây".encode(), "text/plain; charset=utf-8")
+                return self.json(app.voices.add(you, rate, a))
+            if self.path == "/voice/people/check":
+                try:
+                    rate, a = read_wav(body)
+                except Exception:
+                    return self.send(400, "cần WAV PCM 16-bit".encode(), "text/plain; charset=utf-8")
+                who, score = app.voices.who(rate, a) if app.voices else (None, None)
+                return self.json({"who": who, "score": score})
             if self.path == "/voice/brief":
                 try:
                     reply = summary(app.hub, app.persona)
@@ -914,37 +1040,58 @@ def handler(app):
                     return self.json({"ok": False, "models": [], "message": f"Lỗi: {e}"})
             self.send_error(404)
 
+        def you(self):
+            v = (parse_qs(urlsplit(self.path).query).get("you") or [""])[0].strip()
+            return v if 0 < len(v) <= 40 and v.isprintable() else None
+
+        def do_DELETE(self):
+            u = urlsplit(self.path)
+            if u.path != "/voice/people" or not app.voices:
+                return self.send_error(404)
+            you = self.you()
+            if you is None or not app.voices.remove(you):
+                return self.send_error(404)
+            self.send_response(204)
+            self.end_headers()
+
         def json(self, obj):
             self.send(200, json.dumps(obj, ensure_ascii=False).encode())
 
         def ask(self, body, listen=False):
-            t0 = time.perf_counter()
+            t0, wav = time.perf_counter(), None
             try:
                 if self.headers.get("Content-Type", "").startswith("application/json"):
                     heard = str(json.loads(body)["text"])
                 else:
-                    rate, a = read_wav(body)
+                    rate, a = wav = read_wav(body)
                     # chạm rồi gửi ngay: âm thanh quá ngắn làm STT lỗi, coi như chưa nghe gì
                     heard = app.stt(rate, a, app.hot()).strip().lower() if len(a) >= rate * 0.3 else ""
             except Exception:
                 return self.send(400, "cần WAV PCM 16-bit hoặc JSON {\"text\": ...}".encode(), "text/plain; charset=utf-8")
             conv = app.conv(self.headers.get("X-Voice-Session", ""))
+            rest = wake(heard, app.persona) if listen else heard
+            if rest is None:  # người trong nhà/quán nói chuyện, không gọi trợ lý: bỏ qua, không ghi log
+                return self.json({"ignored": True})
+            p = app.persona
+            if wav and heard and app.voices and app.voices.people():   # ai đang nói (khi đã có người đăng ký giọng)
+                who = app.voices.who(*wav, talking=conv.who)[0]
+                if who is None and app.only_people:   # TV, khách: không làm, không ghi lời họ nói
+                    print("giọng lạ: bỏ qua", flush=True)
+                    return self.json({"ignored": True} if listen else {"heard": "", "reply": STRANGER})
+                conv.who, p = who, app.persona_for(who)
             if listen:
-                rest = wake(heard, app.persona)
-                if rest is None:  # người trong nhà/quán nói chuyện, không gọi trợ lý: bỏ qua, không ghi log
-                    return self.json({"ignored": True})
                 if not rest:
-                    reply = app.persona.greet()
-                    return self.json({"heard": heard, "reply": reply, "audio": app.speak(reply), "awaiting": True})
+                    reply = p.greet()
+                    return self.json({"heard": heard, "reply": reply, "audio": app.speak(reply, p.voice), "awaiting": True})
                 heard = rest
             t1 = time.perf_counter()
             try:
-                reply = answer(heard, app.hub, app.ai, app.persona, conv)
+                reply = answer(heard, app.hub, app.ai, p, conv)
             except Exception as e:
                 print(f"lỗi khi trả lời {heard!r}: {e!r}", flush=True)
                 reply = "Có lỗi, bạn thử lại sau."
             t2 = time.perf_counter()
-            audio = app.speak(reply)
+            audio = app.speak(reply, p.voice)
             ms = lambda a, b: f"{(b - a) * 1000:.0f} ms"
             print(f"nghe: {heard!r} → {reply!r} (STT {ms(t0, t1)}, xử lý {ms(t1, t2)}, TTS {ms(t2, time.perf_counter())})", flush=True)
             self.json({"heard": heard, "reply": reply, "audio": audio, **conv.take()})
@@ -957,6 +1104,8 @@ def handler(app):
                     print(f"TTS lỗi: {e}", flush=True)
                     p = None
                 return self.send(200, p.read_bytes(), "audio/wav") if p else self.send_error(404)
+            if self.path == "/voice/people":
+                return self.json(app.voices.people() if app.voices else [])
             if self.path == "/voice/healthz":
                 return self.send(200, b"ok", "text/plain")
             if self.path != "/voice/events":
@@ -992,7 +1141,8 @@ def handler(app):
 def main():
     import paho.mqtt.client as mqtt
     hub = Hub(os.environ.get("HUBD_URL", "http://hubd:8080"), os.environ["HUBD_ASSISTANT_TOKEN"])
-    app = App(hub, None, sherpa_stt(), TTS(Path(os.environ.get("VOICED_CACHE", "/cache")), vieneu_synth()))
+    app = App(hub, None, sherpa_stt(), TTS(Path(os.environ.get("VOICED_CACHE", "/cache")), vieneu_synth()),
+              Voices(Path(os.environ.get("VOICED_DATA", "/data")) / "voices.json", sherpa_speaker()))
     threading.Thread(target=app.warm, daemon=True).start()
 
     c = mqtt.Client("voiced")

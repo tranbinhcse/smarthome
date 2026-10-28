@@ -90,7 +90,7 @@
   // ponytail: ngưỡng năng lượng cố định, quán ồn/TV to mà gửi nhiều đoạn thừa thì nâng 0.01 hoặc thay bằng VAD có mô hình.
   const EAR = 'hubd.listen', FOLLOW = 8000;
   const wantEar = () => { try { return localStorage.getItem(EAR) === '1'; } catch (_) { return false; } };
-  let mic = null, wake = false, until = 0;
+  let mic = null, wake = false, until = 0, recording = false;
   const talking = () => Date.now() < until;
   const mark = () => { btn.classList.toggle('rec', !!mic && talking()); btn.classList.toggle('ear', !!mic && wake && !talking()); };
 
@@ -118,6 +118,7 @@
     let floor = 0.01, pre = [], seg = [], quiet = 0, busy = false;
     node.onaudioprocess = e => {
       const x = new Float32Array(e.inputBuffer.getChannelData(0)), rms = Math.sqrt(x.reduce((a, v) => a + v * v, 0) / x.length);
+      if (recording) { seg = []; return; }   // đang ghi mẫu giọng ở Cài đặt: câu mẫu không phải lệnh
       if (busy || !player.paused) { seg = []; if (until) until = Date.now() + FOLLOW; return; }   // lượt tính từ lúc đọc xong
       if (until && !talking()) until = 0;   // hết lượt
       if (!seg.length && !wake && !until) return m.stop();   // không nghe gọi tên: tắt micro
@@ -164,6 +165,23 @@
     toast(talking() ? 'Đang nghe…' : 'Đang nghe gọi tên');
   }
   window.voiceEar = {on: () => wake, set: ear};   // cho nút trong Cài đặt (setup-ai.js)
+
+  // Ghi một mẫu giọng (Cài đặt → Giọng người nhà): đủ sec giây, cùng chế độ micro như lúc nghe lệnh để vân giọng khớp.
+  // Gọi ngay trong cú chạm (iOS). Trong lúc ghi, bộ nghe lệnh tạm bỏ qua mọi tiếng.
+  window.voiceRecord = async sec => {
+    if (!navigator.mediaDevices) throw new Error(`Micro cần trang HTTPS: mở https://${location.hostname}:8443`);
+    const ctx = new AudioContext();
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}}); }
+    catch { ctx.close(); throw new Error('Chưa được phép dùng micro'); }
+    const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(4096, 1, 1), chunks = [];
+    node.onaudioprocess = e => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(node); node.connect(ctx.destination);
+    recording = true;
+    try { await new Promise(r => setTimeout(r, sec * 1000)); }
+    finally { recording = false; node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close(); }
+    return wav(chunks, ctx.sampleRate);
+  };
 
   // WAV PCM 16-bit mono, giữ tần số gốc (voiced tự đổi về 16 kHz).
   function wav(chunks, rate) {
