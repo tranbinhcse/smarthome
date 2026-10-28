@@ -1,5 +1,7 @@
 # hubd — trung tâm điều khiển nhà
 
+![Dashboard trên iPad: tổng quan cả nhà với ngữ cảnh, điều hoà, chiếu sáng, không khí, camera, an ninh (dữ liệu mẫu)](docs/images/tong-quan.webp)
+
 Máy Ubuntu `192.168.1.254` chạy 3 container (Docker Compose): `hub-mosquitto` (MQTT), `hubd` (web + lịch sử + luật), `tuya-bridge` (Tuya ⇄ MQTT); thêm `hub-go2rtc` và `hikbridge` khi bật camera (mục Camera Hikvision), `voiced` khi bật trợ lý giọng nói (tuỳ chọn). Màn hình = iPad mở `http://192.168.1.254:8080`.
 
 ## Chạy lần đầu
@@ -12,6 +14,12 @@ docker compose up -d --build
 ```
 
 iPad: Safari → mở địa chỉ trên → nhập PIN → Chia sẻ → **Thêm vào Màn hình chính** (chạy toàn màn hình).
+
+<p>
+  <img src="docs/images/tang-tret.webp" width="32%" alt="Một tầng: các phòng, thao tác nhanh theo loại thiết bị, không khí, nước lọc">
+  <img src="docs/images/phong-khu-cafe.webp" width="32%" alt="Một phòng: đèn, khí hậu, điện đo tại MCB, điều hoà, quạt, TV, loa và trình phát nhạc">
+  <img src="docs/images/tong-quan-dem.webp" width="32%" alt="Tổng quan cả nhà ở chế độ ban đêm">
+</p>
 
 ## Kết nối thiết bị Tuya
 
@@ -42,6 +50,8 @@ Topic: `tuya/<id>/state` (ON/OFF), `tuya/<id>/dps` (JSON), `tuya/<id>/online`, `
 
 CB/ổ đo điện không tự báo W/V/A và `status()` trả số cũ, nên bridge gửi `updatedps` mỗi 10 giây. Thiết bị không trả lời gì (kể cả heartbeat) quá 30 giây thì báo `offline` và nối lại. Tổng kWh (cộng các lần thiết bị báo `add_ele`) lưu ở volume `tuya-state`.
 
+![Biểu đồ công suất và điện áp 24 giờ của một MCB (dữ liệu mẫu)](docs/images/bieu-do-dien.webp)
+
 ## Node ESP32 (cảm biến + hồng ngoại)
 
 Firmware ESPHome trong `firmware/`, cách nạp, tài khoản MQTT riêng từng node, học mã hồng ngoại: [firmware/README.md](firmware/README.md).
@@ -49,6 +59,8 @@ Trang Cài đặt → Node ESP32: danh sách node, tạo/khoá/xoá tài khoản
 rồi `docker compose up -d mosquitto hubd`, xem mục Tài khoản MQTT của node), chọn hãng máy lạnh, gán mã hồng ngoại vừa học.
 `POST /api/cmd` nhận thêm mã nút hồng ngoại (`{"device":"cafe_ml","to":"temp_24"}`) cho thiết bị `kind` `tv`/`speaker`/`fan`/`ac`; hub giữ trạng thái giả định vì hồng ngoại một chiều.
 Giả lập node chưa lắp (trỏ vào broker thử, không phải trung tâm thật): `PUB="mosquitto_pub -h <broker> -u <user> -P <mật khẩu>" scripts/sim-nodes.sh`.
+
+<img src="docs/images/dieu-hoa.webp" width="320" alt="Điều khiển máy lạnh hồng ngoại: nhiệt độ, chế độ, tốc độ gió, từng máy trong phòng">
 
 ## Camera Hikvision
 
@@ -96,6 +108,8 @@ Hành động `{ notify: "câu", level: info|warn|urgent, kind: co2 }` gửi câ
 ## Trợ lý giọng nói (`voiced`)
 
 Thiết kế: mục 15.2 của `docs/2026-10-26-trung-tam-dieu-khien-nha-design.md`. Container thứ 4, tắt đi thì lõi vẫn chạy đủ.
+
+![Cài đặt → Trợ lý & giọng nói: địa chỉ API, khoá, model của trợ lý AI (dữ liệu mẫu, chưa cài)](docs/images/cai-dat-tro-ly.webp)
 
 - **Nói:** nút micro trên thanh trên của dashboard. Chạm một lần để bắt đầu hội thoại: nói xong tự gửi, trợ lý đọc câu trả lời rồi nghe tiếp câu kế (trả lời "có" khi được hỏi xác nhận, "tắt nó đi"...) mà không cần chạm lại hay gọi tên. Im 8 giây sau khi trợ lý đọc xong thì hết lượt; chạm lần nữa để thôi. Âm thanh đi qua hubd `/voice/*` (cần đăng nhập PIN) tới `voiced`, không mở cổng nào khác.
 - **Gọi tên:** bật "Nghe gọi tên ở màn hình này" (Cài đặt → Giọng và xưng hô, riêng từng màn hình, cần HTTPS, để màn hình sáng). Micro mở liên tục, dashboard chỉ gửi đoạn có tiếng nói; `voiced` nhận dạng trong nhà và chỉ làm theo câu mở đầu bằng tên trợ lý: "Mây ơi, bật đèn kho" (chưa đặt tên thì "trợ lý ơi"). Câu khác bị bỏ qua, không trả lời, không ghi log. Sau mỗi câu trả lời thì vào hội thoại như khi chạm nút: câu kế không cần gọi tên cho tới khi im 8 giây. Viền xanh trên nút micro = đang nghe.
