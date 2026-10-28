@@ -97,18 +97,19 @@
       return `<p class="note">Mỗi người đọc ${READ.length} câu dưới đây, mỗi lần bấm ghi 5 giây; nói như lúc ra lệnh, đứng cách màn hình như thường ngày.
           Trợ lý nhận ra ai đang nói để xưng hô đúng người. Vân giọng chỉ lưu trên hub.</p>
         ${U.sinput('people', 'you', 'Cách gọi người này', {ph: 'vd anh Bình, chị Lan'})}
-        ${you ? `<p class="note">Câu ${n % READ.length + 1}: <b>“${U.esc(READ[n % READ.length])}”</b></p>` : ''}
-        <div class="kv"><button class="pill amber" data-sact="people:rec"${recBusy || !you ? ' disabled' : ''}>${recBusy === 'rec' ? 'Đang ghi… đọc câu trên'
+        <p class="note">Câu ${n % READ.length + 1}: <b>“${U.esc(READ[n % READ.length])}”</b></p>
+        <div class="kv"><button class="pill amber" data-sact="people:rec"${recBusy ? ' disabled' : ''}>${recBusy === 'rec' ? 'Đang ghi… đọc câu trên'
             : n ? `Ghi thêm (đã có ${n} mẫu)` : 'Ghi câu 1'}</button>
           <button class="pill" data-sact="people:check"${recBusy || !people?.length ? ' disabled' : ''}>${recBusy === 'check' ? 'Đang nghe… nói một câu' : 'Thử nhận giọng'}</button></div>
         ${people?.length ? `<div class="list">${people.map(p => `<div class="setrow"><span>${U.esc(p.you)}<small>${p.samples} mẫu${p.samples < READ.length
             ? `, nên ghi đủ ${READ.length}` : ''}</small></span><button class="pill sm" data-sact="people:del" data-you="${U.esc(p.you)}">Xoá</button></div>`).join('')}</div>` : ''}
-        <label class="setrow"><span>Chỉ làm theo giọng người nhà<small>Giọng lạ (TV, khách) bị bỏ qua; bấm nút nói thì trợ lý chỉ báo bằng chữ</small></span>
+        <label class="setrow"><span>Chỉ nghe người nhà<small>bỏ qua TV, khách</small></span>
           <input type="checkbox" data-sfield="voice.only_people"${U.sval('voice', 'only_people') === true ? ' checked' : ''}></label>
         ${U.sselect('voice', 'speaker_threshold', 'Độ khắt khe khi nhận giọng', LEVELS)}
         <div class="kv">${U.ssave('voice')}</div>
         <p class="note">Thử nhận giọng cho biết độ giống (0 đến 1, từ 0,55 là cùng người ở mức Vừa). Người nhà hay bị báo giọng lạ thì ghi thêm mẫu
-          hoặc chọn Thoáng; người lạ vẫn lọt thì chọn Chặt. Câu rất ngắn như "có" được tính cho người vừa nói trong cùng cuộc trò chuyện.</p>`;
+          hoặc chọn Thoáng; người lạ vẫn lọt thì chọn Chặt. Câu rất ngắn như "có" được tính cho người vừa nói trong cùng cuộc trò chuyện.
+          Bật Chỉ nghe người nhà: giọng lạ gọi tên thì trợ lý im, bấm nút nói thì trợ lý chỉ báo bằng chữ.</p>`;
     },
     act: async (what, el) => {
       if (U.DEMO) return U.toast('Chế độ dữ liệu mẫu không ghi âm');
@@ -121,6 +122,7 @@
       if (recBusy) return;
       if (!window.voiceRecord) return U.toast('Trợ lý giọng nói (voiced) chưa chạy');
       const you = String(U.sval('people', 'you') || '').trim();
+      if (what === 'rec' && !you) return U.toast('Nhập cách gọi người này trước, vd anh Bình');
       recBusy = what; U.soon();
       let body;
       try { body = await window.voiceRecord(what === 'rec' ? 5 : 3); }   // gọi ngay trong cú chạm: iOS mới cho mở micro
