@@ -674,7 +674,13 @@ Chi phí là **ước lượng cho một khu**, chưa tra giá cửa hàng lúc 
 - **Hub Center tự là máy phát nhạc.** Bộ phát nằm ngay trong `hubd`, không chạy dịch vụ Docker riêng, để sau này chạy được trên thiết bị Hub Center cấu hình thấp. Cách ở 18.2 (chỉ điều khiển một thiết bị Spotify Connect đang mở như iPhone, Chrome) không đủ: phải có app mở ở đâu đó mới phát được. Phần chọn bài, playlist, hàng đợi của 18.2 vẫn dùng lại.
 - **Amply các phòng có AUX/RCA và Bluetooth, không có Chromecast/AirPlay/DLNA.** Mỗi amply thêm một đầu nhận cắm AUX/RCA. Không phát Bluetooth từ hub: tầm ngắn, không tới được mọi phòng, không đồng bộ nhiều phòng.
 - **Chia nhạc:** `hubd` có máy chủ giao thức Snapcast viết bằng Go thuần (PCM 44,1 kHz/16 bit, khoảng 1,4 Mbit/s mỗi đầu nhận trong LAN). Đầu nhận chạy snapclient có sẵn: ESP32 (nên có PSRAM) + DAC I2S PCM5102A, khoảng 0,3–0,5 triệu; hoặc Raspberry Pi Zero 2 W + DAC, khoảng 1–1,5 triệu (ước lượng, chưa tra giá). Các khu phát đồng bộ; `hubd` bật/tắt, chỉnh âm lượng từng khu. Amply vẫn bật/tắt, đổi nguồn vào bằng hồng ngoại.
-- **Một luồng = cùng một nhạc cho các khu đang bật.** Khu khác nhạc cùng lúc thì thêm luồng; mỗi luồng Spotify cần một tài khoản Premium riêng.
+- **Đầu nhận khu quán (chủ nhà chốt 2026-10-28), thay luôn cục đẩy cũ:** ESP32-S3 N16R8 (chỉ bảng mạch) + DAC I2S PCM5102A + mạch công suất ZK-TB21 (TPA3116D2, 2.1, 2×50 W + 100 W, Bluetooth 5.0, AUX 3,5 mm, nguồn 12–24 V). Danh sách mua: `docs/danh-sach-mua.md`.
+  - Loa: 4 JBL Control 1 Pro (4 Ω, 87 dB 1 W/1 m, 150 W/cặp) nối tiếp từng cặp, mỗi kênh 8 Ω, ở 24 V khoảng 2×30 W (mỗi loa ~15 W, ~99 dB ở 1 m). Sub: loa 3 tấc thụ động đang có, cọc S. Chưa nối song song (2 Ω) vì không cần.
+  - Nối: jack PCM5102A → AUX ZK-TB21 bằng dây 3,5 mm đực–đực. PCM5102A phải hàn cầu FLT, DEMP, FMT = L; XSMT = H; SCK nối GND (mạch bán ra hay để trống, cắm vào không có tiếng). ESP32-S3 bản R8: không dùng GPIO 35–37 cho I2S (PSRAM chiếm).
+  - Nguồn 24 V 6–8 A qua đầu cọc vít (jack DC loại thường chỉ ~5 A). ESP32 nuôi bằng mạch hạ áp 24 → 5 V chịu đầu vào ≥ 35 V, hoặc củ sạc USB.
+  - Đặt lúc đầu: Main volume ~1/2 (âm lượng hằng ngày chỉnh ở khu trên hub), FREQ sub ~80–100 Hz (JBL xuống tới 80 Hz), treble/bass L/R ở giữa.
+  - Bluetooth cho khách dùng Bluetooth của ZK-TB21 (ESP32-S3 chỉ có BLE, không nhận nhạc Bluetooth). Mạch ưu tiên AUX hay Bluetooth khi cả hai có tín hiệu: chưa biết, thử khi nhận hàng.
+  - Mua một bộ thử trước: firmware snapclient cho ESP32-S3 chưa chạy thử với máy chủ Snapcast của `hubd`.- **Một luồng = cùng một nhạc cho các khu đang bật.** Khu khác nhạc cùng lúc thì thêm luồng; mỗi luồng Spotify cần một tài khoản Premium riêng.
 - **Phạm vi chốt (chủ nhà, 2026-10-27):** Hub Center là sản phẩm nhà thông minh; quán cafe chỉ là nơi demo. Nguồn nhạc dành cho nghe cá nhân, phi thương mại. Người dùng phát nhạc thương mại tự chịu trách nhiệm giấy phép và tài khoản họ kết nối. Hai nguồn được hỗ trợ:
 
 | Nguồn | Cách lấy âm thanh | Ghi chú |

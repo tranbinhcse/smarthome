@@ -149,6 +149,20 @@ Mỗi node cắm 220V qua module nhỏ ra 5V. Với node gắn trần, module đ
 | ➕ | Dung dịch chuẩn TDS 342 ppm (hiệu chỉnh) | 1 | | tìm "dung dịch chuẩn TDS 342" | ~100.000 ₫ |
 | ➕ | Nhựa in **PETG** (vỏ trong nhà) + **ASA** (chắn bức xạ) | tuỳ | Chủ nhà tự in | — | — |
 
+## Bộ phát nhạc khu quán (Shopee, chủ nhà chốt 2026-10-28)
+
+Một bộ, thay cục đẩy cũ, kéo 4 loa JBL Control 1 Pro (nối tiếp từng cặp) + loa sub 3 tấc đang có. Cách nối và đặt núm: mục 18.3 thiết kế. Mua một bộ thử trước (firmware ESP32-S3 chưa thử với hub).
+
+| TT | Món | SL | Giá thấy trên Shopee | Lưu ý |
+|---|---|---|---|---|
+| ➕ | Mạch công suất ZK-TB21 (TPA3116D2, 2.1, Bluetooth 5.0) | 1 | ~200.000 ₫ | Chọn đúng ZK-TB21 (cùng trang có ZK-MT21). Không kèm nguồn |
+| ➕ | ESP32-S3 N16R8, phân loại "Bảng phát triển ESP32-S3" | 1 | chưa tra (bản kèm camera 302.500 ₫) | Không lấy bản kèm camera |
+| ➕ | DAC I2S PCM5102A (GY-PCM5102, mạch tím có jack 3,5 mm) | 1 | 60.059 ₫ | Hàn cầu: FLT, DEMP, FMT = L; XSMT = H; SCK nối GND |
+| ➕ | Nguồn 24 V 6–8 A | 1 | chưa tra | Cấp qua đầu cọc vít, không qua jack DC |
+| ➕ | Mạch hạ áp 24 → 5 V 3 A (đầu vào ≥ 35 V), hoặc củ sạc USB | 1 | chưa tra | Nuôi ESP32 |
+| ➕ | Dây 3,5 mm stereo đực–đực, ngắn | 1 | chưa tra | PCM5102A → AUX ZK-TB21 |
+| ♻ | 4 loa JBL Control 1 Pro, loa sub 3 tấc thụ động | — | — | Đang có |
+
 ## Tái dùng, không mua
 
 | TT | Thứ | Dùng làm |

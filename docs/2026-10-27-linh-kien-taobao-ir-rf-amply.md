@@ -70,6 +70,8 @@ Mục G đã có 3 bộ cho 3 node không khí: VS1838B, LED 940 nm, S8050 + tr�
 
 ### 3. Bộ nối máy phát nhạc với cục đẩy: phương án A + E của mục 18
 
+> **Đã thay (chủ nhà chốt 2026-10-28):** ESP32-S3 + PCM5102A + mạch công suất 2.1 ZK-TB21, thay cả Pi Zero 2 W lẫn cục đẩy cũ, mua ở Shopee. Xem mục 18.3 thiết kế và `docs/danh-sach-mua.md`. Phần dưới giữ để tham khảo.
+
 **Chọn A (Pi Zero 2 W + DAC PCM5102A) + E (bật/tắt nguồn), vì khớp ba điều chủ nhà chốt:**
 
 - **Jack 3.5 mm vào AUX:** mạch PCM5102A có sẵn jack 3.5 mm, mức ra ~2,1 Vrms, đủ kéo ngõ AUX của cục đẩy.
