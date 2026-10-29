@@ -608,3 +608,54 @@ func TestTelegramApproveKeepsPendingWhenSaveFails(t *testing.T) {
 		t.Fatalf("thử lại phải 204, được %d", code)
 	}
 }
+
+func TestDailyReportOncePerDay(t *testing.T) {
+	tg, f, clock := newTgEnv(t, nil)
+	code := 200
+	hits := 0
+	voiced := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/voice/brief" {
+			t.Errorf("voiced nhận %s %s", r.Method, r.URL.Path)
+		}
+		hits++
+		w.WriteHeader(code)
+		io.WriteString(w, `{"reply":"Ngoài trời 30 độ.","audio":[]}`)
+	}))
+	t.Cleanup(voiced.Close)
+	t.Setenv("HUBD_VOICED_URL", voiced.URL)
+	tg.db.PutSetting("telegram", map[string]any{"bot_token": "TOK", "daily_at": "07:00"})
+
+	at := func(d, h, m, s int) { *clock = time.Date(2026, 10, d, h, m, s, 0, tgICT) }
+	step := func(d, h, m, s int) int {
+		at(d, h, m, s)
+		tg.daily()
+		drain(tg, clock)
+		return len(f.got)
+	}
+	if n := step(27, 6, 59, 0); n != 0 {
+		t.Fatalf("06:59 đã gửi %d tin", n)
+	}
+	if n := step(27, 7, 0, 0); n != 2 || f.got[0].Text != "Ngoài trời 30 độ." { // 2 chat đã duyệt
+		t.Fatalf("07:00 gửi %d tin: %+v", n, f.got)
+	}
+	if n := step(27, 7, 0, 30); n != 2 {
+		t.Fatalf("07:00:30 gửi thêm: %d", n)
+	}
+	if n := step(28, 7, 0, 5); n != 4 {
+		t.Fatalf("hôm sau gửi %d tin, muốn 4", n)
+	}
+
+	// daily_at rỗng: tắt
+	tg.db.PutSetting("telegram", map[string]any{"bot_token": "TOK", "daily_at": ""})
+	h := hits
+	if n := step(29, 7, 0, 0); n != 4 || hits != h {
+		t.Fatalf("daily_at rỗng vẫn gửi")
+	}
+
+	// voiced lỗi: không gửi
+	tg.db.PutSetting("telegram", map[string]any{"bot_token": "TOK", "daily_at": "07:00"})
+	code = 502
+	if n := step(30, 7, 0, 0); n != 4 {
+		t.Fatalf("voiced 502 vẫn gửi")
+	}
+}

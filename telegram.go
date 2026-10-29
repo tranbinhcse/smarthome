@@ -58,6 +58,8 @@ type Telegram struct {
 	lastTok string     // token của lần hỏi trước, để biết token đã đổi
 	bot     string     // username của bot (getMe)
 	errMsg  string     // lỗi hiện trên trang Cài đặt, rỗng = ổn
+
+	dailyDay string // ngày (giờ Việt Nam) đã gửi báo cáo hằng ngày; chỉ vòng run đụng tới nên không cần khoá
 }
 
 func newTelegram(db *DB, now func() time.Time) *Telegram {
@@ -132,6 +134,7 @@ func (t *Telegram) Send(text string, dedup bool) {
 func (t *Telegram) run(ctx context.Context) {
 	go t.pollLoop(ctx)
 	for {
+		t.daily()
 		w := t.deliver()
 		if w == 0 {
 			w = time.Minute
