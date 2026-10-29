@@ -105,10 +105,18 @@ func TestTelegramDedup30Minutes(t *testing.T) {
 	if len(f.got) != 4 {
 		t.Fatalf("lần 3 phải gửi: %d", len(f.got))
 	}
+	tg.Send("c", true)
+	tg.mu.Lock()
+	n := len(tg.last)
+	tg.mu.Unlock()
+	if n != 2 { // "a" (lần 3) và "c"; không còn khoá cũ
+		t.Fatalf("khoá gom trùng cũ phải bị dọn: %d", n)
+	}
+	drain(tg, clock)
 	tg.Send("b", false)
 	tg.Send("b", false)
 	drain(tg, clock)
-	if len(f.got) != 8 {
+	if len(f.got) != 10 {
 		t.Fatalf("dedup=false không được gom: %d", len(f.got))
 	}
 }
@@ -211,5 +219,36 @@ func TestTelegramTruncatesLongText(t *testing.T) {
 	r := []rune(f.got[0].Text)
 	if len(r) != 4096 || r[4095] != '…' {
 		t.Fatalf("cần 4096 rune kết bằng …, được %d", len(r))
+	}
+}
+
+func TestTelegramSendDoesNotBlockDuringPost(t *testing.T) {
+	in, release := make(chan struct{}, 1), make(chan struct{})
+	tg, f, clock := newTgEnv(t, nil)
+	f.reply = func(chat int64, n int) (int, string) {
+		if n == 1 {
+			in <- struct{}{}
+			f.mu.Unlock() // nhả khoá của handler để chờ mà không chặn các lần gọi khác
+			<-release
+			f.mu.Lock()
+		}
+		return 200, `{"ok":true}`
+	}
+	tg.Send("một", false)
+	done := make(chan struct{})
+	go func() { tg.deliver(); close(done) }()
+	<-in // deliver đang kẹt giữa lệnh post
+	sent := make(chan struct{})
+	go func() { tg.Send("hai", false); close(sent) }()
+	select {
+	case <-sent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send bị chặn khi đang post")
+	}
+	close(release)
+	<-done
+	drain(tg, clock)
+	if len(f.got) != 4 {
+		t.Fatalf("cần 4 tin: %d", len(f.got))
 	}
 }

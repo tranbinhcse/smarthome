@@ -94,6 +94,11 @@ func (t *Telegram) Send(text string, dedup bool) {
 	}
 	now := t.now()
 	t.mu.Lock()
+	for k, at := range t.last { // chữ quá 30 phút không còn tác dụng gom, bỏ cho khỏi phình
+		if now.Sub(at) >= tgDedup {
+			delete(t.last, k)
+		}
+	}
 	if dedup {
 		if at, ok := t.last[text]; ok && now.Sub(at) < tgDedup {
 			t.mu.Unlock()
@@ -127,43 +132,50 @@ func (t *Telegram) run(ctx context.Context) {
 // deliver gửi một lượt mọi thứ đang đến hạn, trả về bao lâu nữa nên gọi lại (0 = hàng đợi trống).
 // Lỗi tạm hoặc 429 dừng lượt để giữ thứ tự; chat bị chặn (4xx) chỉ bị gạt khỏi tin đó.
 func (t *Telegram) deliver() time.Duration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	now := t.now()
-	if now.Before(t.hold) {
-		return t.hold.Sub(now)
-	}
-	tok := t.token()
-	for len(t.q) > 0 {
-		it := t.q[0]
-		if now.Sub(it.at) > tgExpire || tok == "" {
+	for {
+		// Lấy việc kế tiếp dưới khoá, nhả khoá khi gọi HTTP để Send không bị chặn.
+		t.mu.Lock()
+		now := t.now()
+		if now.Before(t.hold) {
+			defer t.mu.Unlock()
+			return t.hold.Sub(now)
+		}
+		tok := t.token()
+		for len(t.q) > 0 && (now.Sub(t.q[0].at) > tgExpire || tok == "" || len(t.q[0].to) == 0) {
 			t.q = t.q[1:]
-			continue
 		}
-		for len(it.to) > 0 {
-			code, retry := t.post(tok, it.to[0], it.text)
-			switch {
-			case code == 200:
-				t.fails = 0
-			case code == 429:
-				if retry < time.Second {
-					retry = time.Second
-				}
-				t.hold = now.Add(retry)
-				return retry
-			case code >= 400 && code < 500: // bị chặn, chat không còn: không thử lại
-				log.Printf("telegram: sendMessage %d, bỏ chat %d", code, it.to[0])
-			default:
-				t.fails++
-				w := 5 * time.Second << min(t.fails-1, 6)
-				t.hold = now.Add(w)
-				return w
+		if len(t.q) == 0 {
+			t.mu.Unlock()
+			return 0
+		}
+		it, chat := t.q[0], t.q[0].to[0] // chỉ deliver bỏ phần tử đầu hàng nên it còn nguyên khi ta quay lại
+		t.mu.Unlock()
+
+		code, retry := t.post(tok, chat, it.text)
+
+		t.mu.Lock()
+		switch {
+		case code == 200:
+			t.fails = 0
+		case code == 429:
+			if retry < time.Second {
+				retry = time.Second
 			}
-			it.to = it.to[1:]
+			t.hold = t.now().Add(retry)
+			t.mu.Unlock()
+			return retry
+		case code >= 400 && code < 500: // bị chặn, chat không còn: không thử lại
+			log.Printf("telegram: sendMessage %d, bỏ chat %d", code, chat)
+		default:
+			t.fails++
+			w := 5 * time.Second << min(t.fails-1, 6)
+			t.hold = t.now().Add(w)
+			t.mu.Unlock()
+			return w
 		}
-		t.q = t.q[1:]
+		it.to = it.to[1:]
+		t.mu.Unlock()
 	}
-	return 0
 }
 
 // post gọi sendMessage; code 0 = lỗi mạng. Không ghi URL vì token nằm trong đó.
