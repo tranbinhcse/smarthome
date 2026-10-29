@@ -392,6 +392,8 @@ Chủ nhà bổ sung ngày 2026-10-26. Cả hai phần **làm sau lõi** (Giai �
 
 ### 15.1 Camera Hikvision
 
+> **Đã thay một phần (chủ nhà chốt 2026-10-29):** bỏ đầu thu. Hub nhận thẳng camera, tự ghi hình vào ổ cứng lắp thêm, báo động theo khu bằng còi trong cụm cảm biến, gửi tin Telegram. Thiết kế: [`docs/superpowers/specs/2026-10-29-camera-bao-dong-telegram-design.md`](superpowers/specs/2026-10-29-camera-bao-dong-telegram-design.md). Ý "ghi hình vẫn do NVR đảm nhận" dưới đây không còn hiệu lực; xem trực tiếp qua go2rtc và lấy sự kiện từ camera vẫn giữ nguyên.
+
 **Nguyên tắc: không làm lại việc NVR và camera đã làm.**
 - Ghi hình vẫn do NVR đảm nhận, trung tâm không ghi.
 - Nhận diện người/xe dùng tính năng có sẵn trên camera (nếu model có). Không chạy Frigate hay AI nhận diện trên trung tâm.
