@@ -211,7 +211,7 @@ devices:
 #     on_clear: [ { set: tuya_xxx, to: off } ]
 
 # Cảnh báo pin 3 pack JK (ngưỡng khởi điểm cho LiFePO4, chỉnh lại sau 2 tuần chạy thật — thiết kế mục 10).
-# alert: hiện ở chuông trên dashboard (state "alert:<id>"); chưa gửi Telegram. Kịch bản thử: testdata/jk/.
+# alert: hiện ở chuông trên dashboard (state "alert:<id>") và đọc to. Gửi Telegram theo Cài đặt → Thông báo (khoá `tg:khac` trong nhóm `notify`, vì luật alert không có `kind`). Kịch bản thử: testdata/jk/.
 rules:
   - { id: pin_yeu,         entity: jk.soc,        below: 20,   clear_above: 25,   for: 1m,  alert: "Pin lưu trữ dưới 20%" }
   - { id: pin_cell_thap,   entity: jk.cell_min,   below: 2900, clear_above: 3000, for: 30s, alert: "Có cell pin dưới 2,90 V" }

@@ -105,6 +105,16 @@ Khai báo trong `config.yaml` mục `rules:` (xem ví dụ trong file): `above`/
 Luật có `alert: "lời cảnh báo"` (không cần `then`) hiện ở chuông dashboard khi bật, tự nhả khi qua ngưỡng `clear_*`; đang dùng cho pin JK (`pin_*`, xem `firmware/jk-bms/README.md`).
 Hành động `{ notify: "câu", level: info|warn|urgent, kind: co2 }` gửi câu lên MQTT `hubd/alert` để trợ lý đọc thành tiếng. Có sẵn luật đọc CO₂ cao (`kind: co2`), bụi mịn (`bui`), trời bắt đầu mưa (`mua`), nóng bất thường (`nong`); bật/tắt từng `kind` ở Cài đặt → Đọc thông báo (loại bị tắt không đọc, lệnh tới thiết bị của luật vẫn chạy). `notify` không có `kind` luôn đọc.
 
+## Thông báo qua Telegram
+
+1. **Tạo bot:** mở @BotFather trong Telegram, gửi `/newbot` và đặt tên. Chép token, dán vào Cài đặt → Thông báo → Telegram, bấm **Lưu**.
+2. **Người nhận:** người muốn nhận tin nhắn gửi `/start` cho bot. Trên màn hình nhà vào Cài đặt → Thông báo, bấm **Duyệt** rồi nhập PIN. Bỏ người nhận bằng nút **Bỏ**.
+3. **Chọn loại tin:** mỗi loại trong "Đọc thông báo" có ô **Telegram** riêng, độc lập với **Đọc**. Dòng **Khác** (khói, rò nước…) nhận cảnh báo không thuộc loại nào.
+4. **Báo cáo hằng ngày:** đặt giờ ở "Báo cáo hằng ngày lúc" (để trống là tắt). Nội dung giống nút **Đọc tình hình**; cần `voiced` chạy.
+5. **Gửi thử:** bấm **Gửi thử** để kiểm tra bot và người nhận.
+
+Ghi chú: hub chỉ gọi ra `api.telegram.org`, không mở cổng. Token không hiện lại và không nằm trong bản sao lưu. Tin trùng nội dung được gom trong 30 phút. Mất mạng thì tin chờ tối đa 24 giờ. Hàng đợi và yêu cầu chờ duyệt nằm trong RAM, khởi động lại hub thì mất.
+
 ## Trợ lý giọng nói (`voiced`)
 
 Thiết kế: mục 15.2 của `docs/2026-10-26-trung-tam-dieu-khien-nha-design.md`. Container thứ 4, tắt đi thì lõi vẫn chạy đủ.
@@ -261,5 +271,5 @@ Inverter (Deye, LuxPower, Lumentree) đọc qua RS485 bằng node ESPHome: xem [
 ## Chưa làm / giới hạn
 
 - Cảm biến Tuya Wi-Fi chạy pin thường ngủ, không nhận kết nối local: chỉ cảm biến cắm điện mới đọc được ổn định.
-- Telegram, kịch bản một chạm, báo cháy CBX: chưa làm. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận.
+- Kịch bản một chạm, báo cháy CBX: chưa làm. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận.
 - Cổng 1883 và 8080 mở trong LAN; không mở ra internet. PIN dùng chung, khoá 1 phút sau 5 lần sai.

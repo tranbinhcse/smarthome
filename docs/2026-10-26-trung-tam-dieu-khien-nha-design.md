@@ -403,7 +403,7 @@ Chủ nhà bổ sung ngày 2026-10-26. Cả hai phần **làm sau lõi** (Giai �
 | Việc | Cách làm |
 |---|---|
 | Xem trực tiếp trên iPad | `go2rtc` (một file binary) chạy trên trung tâm, chuyển RTSP của NVR sang WebRTC/MSE cho trình duyệt. Dùng luồng phụ H.264 để không phải chuyển mã. Trình duyệt đi qua `hubd` (PIN), không gọi thẳng go2rtc hay NVR. Giao diện: widget **Camera** (ảnh chụp mỗi phút) và bảng xem trực tiếp từng camera |
-| Nhận sự kiện | Cầu nối nhỏ `hikbridge` đọc luồng sự kiện ISAPI `/ISAPI/Event/notification/alertStream` của NVR, gửi MQTT `hik/<kênh>/<sự kiện>` = ON/OFF. `hubd` coi đó là cảm biến thường (ON/OFF = 1/0). Luật viết trong `config.yaml`, ví dụ: có người ở cổng thì bật đèn sân và báo Telegram (khung giờ, Telegram: chưa có trong `hubd`) |
+| Nhận sự kiện | Cầu nối nhỏ `hikbridge` đọc luồng sự kiện ISAPI `/ISAPI/Event/notification/alertStream` của NVR, gửi MQTT `hik/<kênh>/<sự kiện>` = ON/OFF. `hubd` coi đó là cảm biến thường (ON/OFF = 1/0). Luật viết trong `config.yaml`, ví dụ: có người ở cổng thì bật đèn sân và báo Telegram (khung giờ). Telegram đã có trong `hubd`: gửi cảnh báo của luật theo loại; ảnh kèm tin an ninh làm ở Phần 3 của [`docs/superpowers/specs/2026-10-29-camera-bao-dong-telegram-design.md`](superpowers/specs/2026-10-29-camera-bao-dong-telegram-design.md) |
 | Ảnh kèm cảnh báo | Lấy ảnh chụp từ `/ISAPI/Streaming/channels/<id>/picture`, gửi kèm tin Telegram |
 
 **Bảo mật camera:**
