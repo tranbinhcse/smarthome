@@ -173,7 +173,7 @@ func (t *Telegram) deliver() time.Duration {
 		switch {
 		case code == 200:
 			t.fails = 0
-			t.setErr("")
+			t.setErr(tok, "")
 		case code == 429:
 			if retry < time.Second {
 				retry = time.Second
@@ -183,7 +183,7 @@ func (t *Telegram) deliver() time.Duration {
 			return retry
 		case code >= 400 && code < 500: // bị chặn, chat không còn: không thử lại
 			if code == 401 {
-				t.setErr(tgBadTok)
+				t.setErr(tok, tgBadTok)
 			}
 			log.Printf("telegram: sendMessage %d, bỏ chat %d", code, chat)
 		default:
@@ -220,10 +220,13 @@ func (t *Telegram) post(tok string, chat int64, text string) (int, time.Duration
 	return resp.StatusCode, time.Duration(r.Parameters.RetryAfter) * time.Second
 }
 
-func (t *Telegram) setErr(m string) {
+// setErr đặt lỗi hiện trên trang Cài đặt, chỉ khi token đang dùng vẫn là tok (kết quả của token cũ bị bỏ).
+func (t *Telegram) setErr(tok, m string) {
 	t.pmu.Lock()
-	t.errMsg = m
-	t.pmu.Unlock()
+	defer t.pmu.Unlock()
+	if t.token() == tok {
+		t.errMsg = m
+	}
 }
 
 func (t *Telegram) pollLoop(ctx context.Context) {
@@ -260,7 +263,7 @@ func (t *Telegram) poll() time.Duration {
 	tok := t.token()
 	t.pmu.Lock()
 	if tok != t.lastTok {
-		t.lastTok, t.offset, t.bot, t.errMsg = tok, 0, "", ""
+		t.lastTok, t.offset, t.bot, t.errMsg, t.pending = tok, 0, "", "", nil
 	}
 	off, bot := t.offset, t.bot
 	t.pmu.Unlock()
@@ -275,13 +278,15 @@ func (t *Telegram) poll() time.Duration {
 		}
 		switch code := t.get(tok, "getMe", url.Values{}, &me); {
 		case code == 401:
-			t.setErr(tgBadTok)
+			t.setErr(tok, tgBadTok)
 			return 10 * time.Second
 		case code != 200:
 			return 5 * time.Second
 		}
 		t.pmu.Lock()
-		t.bot = me.Result.Username
+		if t.token() == tok { // token đã đổi trong lúc chờ thì bỏ kết quả của token cũ
+			t.bot = me.Result.Username
+		}
 		t.pmu.Unlock()
 	}
 	var up struct {
@@ -301,18 +306,28 @@ func (t *Telegram) poll() time.Duration {
 	q := url.Values{"timeout": {strconv.Itoa(tgMaxWait)}, "offset": {strconv.FormatInt(off, 10)}}
 	switch code := t.get(tok, "getUpdates", q, &up); {
 	case code == 401:
-		t.setErr(tgBadTok)
+		t.setErr(tok, tgBadTok)
 		return 10 * time.Second
 	case code != 200:
 		return 5 * time.Second
 	}
-	t.setErr("")
-	for _, u := range up.Result {
-		t.pmu.Lock()
-		t.offset = max(t.offset, u.ID+1)
+	t.pmu.Lock()
+	if t.token() != tok { // token đã đổi trong lúc chờ: bỏ cả lượt, không đụng offset, tên bot, lỗi, danh sách chờ
 		t.pmu.Unlock()
+		return 0
+	}
+	t.errMsg = ""
+	for _, u := range up.Result {
+		t.offset = max(t.offset, u.ID+1)
+	}
+	t.pmu.Unlock()
+	for _, u := range up.Result {
 		c := u.Message.Chat
-		if cmd, _, _ := strings.Cut(strings.Fields(u.Message.Text + " ")[0], "@"); cmd == "/start" {
+		f := strings.Fields(u.Message.Text) // tin không chữ (ảnh, nhãn dán) hoặc không có message thì f rỗng
+		if len(f) == 0 {
+			continue
+		}
+		if cmd, _, _ := strings.Cut(f[0], "@"); cmd == "/start" {
 			name := firstNonEmpty(c.FirstName, firstNonEmpty(c.Username, firstNonEmpty(c.Title, strconv.FormatInt(c.ID, 10))))
 			t.start(tok, tgChat{c.ID, name})
 		}
@@ -334,6 +349,10 @@ func (t *Telegram) start(tok string, c tgChat) {
 	if !slices.ContainsFunc(t.chats(), func(a tgChat) bool { return a.ID == c.ID }) {
 		reply = "Đã gửi yêu cầu, chờ chủ nhà duyệt trên màn hình nhà."
 		t.pmu.Lock()
+		if t.token() != tok {
+			t.pmu.Unlock()
+			return
+		}
 		if !slices.ContainsFunc(t.pending, func(a tgChat) bool { return a.ID == c.ID }) && len(t.pending) < tgMaxPend {
 			t.pending = append(t.pending, c)
 		}
@@ -388,7 +407,6 @@ func mountTelegram(mux *http.ServeMux, t *Telegram, a *Auth) {
 		var c tgChat
 		if i >= 0 {
 			c = t.pending[i]
-			t.pending = slices.Delete(t.pending, i, i+1)
 		}
 		t.pmu.Unlock()
 		if i < 0 {
@@ -399,7 +417,14 @@ func mountTelegram(mux *http.ServeMux, t *Telegram, a *Auth) {
 			http.Error(w, "không lưu được", 500)
 			return
 		}
-		t.post(t.token(), c.ID, "Đã được duyệt nhận cảnh báo của iNIX Smart.")
+		t.pmu.Lock() // chỉ bỏ khỏi danh sách chờ sau khi đã lưu, lưu lỗi thì còn thử lại được
+		if i := slices.IndexFunc(t.pending, func(p tgChat) bool { return p.ID == c.ID }); i >= 0 {
+			t.pending = slices.Delete(t.pending, i, i+1)
+		}
+		t.pmu.Unlock()
+		if code, _ := t.post(t.token(), c.ID, "Đã được duyệt nhận cảnh báo của iNIX Smart."); code != 200 {
+			log.Printf("telegram: không gửi được tin xác nhận tới chat %d", c.ID)
+		}
 		w.WriteHeader(204)
 	}))
 	mux.HandleFunc("DELETE /api/telegram/chats/{id}", a.Require(func(w http.ResponseWriter, r *http.Request) {

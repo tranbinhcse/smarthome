@@ -262,6 +262,8 @@ type tgBot struct {
 	paths   []string         // "<token>/<method>" của mọi lần gọi
 	offsets []string
 	sent    []tgSent
+	only    string            // khác rỗng: chỉ token này nhận được update
+	gate    func(path string) // gọi trước khi xử lý, để chặn một lệnh gọi giữa chừng
 }
 
 func (b *tgBot) calls(method string) (n int) {
@@ -285,6 +287,9 @@ func (b *tgBot) start(id int, chat int64, name, text string) {
 func newTgApp(t *testing.T) (*Telegram, *tgBot, func(method, url, body string) (int, string)) {
 	b := &tgBot{good: map[string]bool{"TOK": true, "NEW": true}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if b.gate != nil {
+			b.gate(strings.TrimPrefix(r.URL.Path, "/bot"))
+		}
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		p := strings.TrimPrefix(r.URL.Path, "/bot")
@@ -297,14 +302,14 @@ func newTgApp(t *testing.T) (*Telegram, *tgBot, func(method, url, body string) (
 		}
 		switch method {
 		case "getMe":
-			io.WriteString(w, `{"ok":true,"result":{"username":"inix_bot"}}`)
+			io.WriteString(w, `{"ok":true,"result":{"username":"inix_`+strings.ToLower(tok)+`"}}`)
 		case "getUpdates":
 			off := r.URL.Query().Get("offset")
 			b.offsets = append(b.offsets, off)
 			n, _ := strconv.Atoi(off)
 			res := []map[string]any{}
 			for _, u := range b.updates {
-				if u["update_id"].(int) >= n {
+				if u["update_id"].(int) >= n && (b.only == "" || b.only == tok) {
 					res = append(res, u)
 				}
 			}
@@ -361,7 +366,7 @@ func TestTelegramStartApproveRemove(t *testing.T) {
 	bot.start(2, 666, "Hùng", "xin chào") // tin khác /start bị bỏ qua
 	tg.poll()
 	st := tgState(t, req)
-	if st.Bot != "inix_bot" || !st.TokenSet || len(st.Pending) != 1 || st.Pending[0].ID != 555 || st.Pending[0].Name != "Lan" {
+	if st.Bot != "inix_tok" || !st.TokenSet || len(st.Pending) != 1 || st.Pending[0].ID != 555 || st.Pending[0].Name != "Lan" {
 		t.Fatalf("cần 1 mục chờ của Lan: %+v", st)
 	}
 	if len(bot.sent) != 1 || bot.sent[0].Chat != 555 || bot.sent[0].Text != "Đã gửi yêu cầu, chờ chủ nhà duyệt trên màn hình nhà." {
@@ -447,7 +452,7 @@ func TestTelegramStartTwiceOnePending(t *testing.T) {
 func TestTelegramTokenChangeWithoutRestart(t *testing.T) {
 	tg, bot, req := newTgApp(t)
 	tg.poll()
-	if bot.calls("getUpdates") != 1 || tgState(t, req).Bot != "inix_bot" {
+	if bot.calls("getUpdates") != 1 || tgState(t, req).Bot != "inix_tok" {
 		t.Fatalf("lần đầu phải getMe + getUpdates")
 	}
 	if code, _ := req("PUT", "/api/settings/telegram", `{"bot_token":null}`); code != 204 {
@@ -473,7 +478,7 @@ func TestTelegramTokenChangeWithoutRestart(t *testing.T) {
 	if last != "NEW/getUpdates" {
 		t.Fatalf("phải dùng token mới ngay: %s", last)
 	}
-	if st := tgState(t, req); st.Error != "" || st.Bot != "inix_bot" {
+	if st := tgState(t, req); st.Error != "" || st.Bot != "inix_new" {
 		t.Fatalf("token đúng thì hết lỗi: %+v", st)
 	}
 	// sendMessage 401 cũng hiện lỗi, gửi được thì xoá
@@ -519,5 +524,87 @@ func TestTelegramRoutesNeedLogin(t *testing.T) {
 				t.Fatalf("%s %s bearer=%q: %d, cần 401", r[0], r[1], bearer, w.Code)
 			}
 		}
+	}
+}
+
+// Tin không chữ, hoặc update không có message, không được làm sập hubd và vẫn phải đẩy offset.
+func TestTelegramUpdatesWithoutTextDoNotPanic(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.mu.Lock()
+	bot.updates = append(bot.updates,
+		map[string]any{"update_id": 5, "message": map[string]any{"chat": map[string]any{"id": 1}}},
+		map[string]any{"update_id": 6, "edited_message": map[string]any{"text": "/start", "chat": map[string]any{"id": 2}}},
+		map[string]any{"update_id": 7, "my_chat_member": map[string]any{}})
+	bot.mu.Unlock()
+	tg.poll()
+	tg.poll()
+	if st := tgState(t, req); len(st.Pending) != 0 {
+		t.Fatalf("không được có mục chờ: %+v", st.Pending)
+	}
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	if len(bot.offsets) != 2 || bot.offsets[1] != "8" {
+		t.Fatalf("offset phải qua update cuối: %v", bot.offsets)
+	}
+}
+
+// getUpdates của token cũ trả về sau khi đổi token không được ghi đè trạng thái của token mới.
+func TestTelegramStaleTokenResultDiscarded(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		tg, bot, req := newTgApp(t)
+		entered, release := make(chan struct{}), make(chan struct{})
+		bot.only = "TOK"
+		bot.gate = func(p string) {
+			if p == "TOK/getUpdates" {
+				entered <- struct{}{}
+				<-release
+			}
+		}
+		bot.start(7, 9, "Cũ", "/start")
+		done := make(chan struct{})
+		go func() { tg.poll(); close(done) }()
+		<-entered
+		req("PUT", "/api/settings/telegram", `{"bot_token":"NEW"}`)
+		if revoked {
+			bot.mu.Lock()
+			bot.good["TOK"] = false
+			bot.mu.Unlock()
+		}
+		tg.poll() // lượt của token mới
+		close(release)
+		<-done
+		st := tgState(t, req)
+		tg.pmu.Lock()
+		off := tg.offset
+		tg.pmu.Unlock()
+		if off != 0 || st.Bot != "inix_new" || len(st.Pending) != 0 || st.Error != "" {
+			t.Fatalf("revoked=%v: kết quả token cũ lọt vào: offset=%d %+v", revoked, off, st)
+		}
+		for _, s := range bot.sent {
+			if s.Chat == 9 {
+				t.Fatalf("revoked=%v: trả lời bằng token cũ: %+v", revoked, bot.sent)
+			}
+		}
+	}
+}
+
+// Lưu người nhận lỗi thì yêu cầu vẫn còn trong danh sách chờ để duyệt lại.
+func TestTelegramApproveKeepsPendingWhenSaveFails(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.start(1, 555, "Lan", "/start")
+	tg.poll()
+	tg.db.sql.Exec(`DROP TABLE telegram_chats`)
+	if code, _ := req("POST", "/api/telegram/approve", `{"id":555,"pin":"1234"}`); code != 500 {
+		t.Fatalf("lưu lỗi phải 500, được %d", code)
+	}
+	tg.pmu.Lock()
+	n := len(tg.pending)
+	tg.pmu.Unlock()
+	if n != 1 {
+		t.Fatalf("yêu cầu bị mất khi lưu lỗi: %d", n)
+	}
+	tg.db.sql.Exec(`CREATE TABLE telegram_chats(id INTEGER PRIMARY KEY, name TEXT NOT NULL, added INTEGER NOT NULL)`)
+	if code, _ := req("POST", "/api/telegram/approve", `{"id":555,"pin":"1234"}`); code != 204 {
+		t.Fatalf("thử lại phải 204, được %d", code)
 	}
 }
