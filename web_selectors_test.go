@@ -188,4 +188,10 @@ func TestTelegramSettingsWired(t *testing.T) {
 	if strings.Contains(read("setup-telegram.js"), "pin\" data-sfield") || strings.Contains(read("setup-telegram.js"), "telegram.pin") {
 		t.Error("setup-telegram.js để PIN đi qua data-sfield")
 	}
+	// api() coi 401 là phiên hết hạn và gửi lại; PIN sai cũng trả 401 nên lệnh duyệt phải dùng fetch thường.
+	for _, l := range strings.Split(read("setup-telegram.js"), "\n") {
+		if strings.Contains(l, "/api/telegram/approve") && (strings.Contains(l, "U.api") || !strings.Contains(l, "fetch(")) {
+			t.Errorf("lệnh duyệt phải dùng fetch thường: %s", strings.TrimSpace(l))
+		}
+	}
 }

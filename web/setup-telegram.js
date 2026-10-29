@@ -48,7 +48,8 @@
       const box = document.getElementById('tg-pin'), pin = box?.value || '';
       if (box) box.value = '';
       if (!pin) return U.toast('Nhập PIN của hub');
-      const r = await U.api('/api/telegram/approve', json('POST', {id: cid, pin}));
+      // fetch thường, không qua U.api: api() coi 401 là phiên hết hạn, hiện ô đăng nhập rồi gửi lại cùng PIN sai
+      const r = await fetch('/api/telegram/approve', json('POST', {id: cid, pin}));
       if (r.status === 401) return U.toast('Sai PIN');
       if (r.status === 429) return U.toast('Nhập sai nhiều lần, thử lại sau ít phút');
       if (!r.ok) return U.toast(await r.text());
