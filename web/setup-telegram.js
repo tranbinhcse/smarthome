@@ -9,7 +9,11 @@
     at = Date.now();
     if (U.DEMO) { T = DEMO_T; return U.soon(); }
     const r = await fetch('/api/telegram');
-    if (r.ok) { T = await r.json(); U.soon(); }
+    if (r.ok) {
+      T = await r.json();
+      if (pinFor !== null && !T.pending.some(c => Number(c.id) === pinFor)) pinFor = null; // yêu cầu đã mất (hub khởi động lại, đổi token)
+      U.soon();
+    }
   };
   const meta = () => !T ? '' : !T.token_set ? 'Chưa có bot' : T.error ? 'Lỗi' : `${T.chats.length} người nhận`;
 
@@ -17,9 +21,10 @@
     // không nạp lại khi đang nhập PIN: màn hình vẽ lại sẽ xoá ô PIN
     if (!pinFor && Date.now() - at > 10000) load();
     const id = c => Number(c.id);
-    const chats = (T?.chats || []).map(c => `<div class="setrow"><span>${U.esc(c.name)}</span>
+    const who = c => `${U.esc(c.name)}${c.username ? ` <small>@${U.esc(c.username)}</small>` : ''}${c.group ? ' <b>(nhóm)</b>' : ''}`;
+    const chats = (T?.chats || []).map(c => `<div class="setrow"><span>${who(c)}</span>
       <button class="pill" data-sact="telegram:remove:${id(c)}">Bỏ</button></div>`).join('');
-    const pend = (T?.pending || []).map(c => `<div class="setrow"><span>${U.esc(c.name)}</span>
+    const pend = (T?.pending || []).map(c => `<div class="setrow"><span>${who(c)}</span>
       ${pinFor === id(c)
         ? `<input id="tg-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN hub" style="width:110px">
            <button class="pill amber" data-sact="telegram:approve:${id(c)}">Xác nhận</button>`
@@ -32,7 +37,7 @@
       ${U.sinput('telegram', 'bot_token', 'Token bot', {secret: true, ph: 'Dán token từ BotFather'})}
       ${U.sinput('telegram', 'daily_at', 'Báo cáo hằng ngày lúc (để trống là tắt)', {type: 'time'})}
       <div class="kv">${U.ssave('telegram')}<button class="pill" data-sact="telegram:test">Gửi thử</button></div>
-      ${T?.error ? `<p class="note bad">${U.esc(T.error)}</p>` : T?.bot ? `<p class="note">Bot: <b>@${U.esc(T.bot)}</b>. Mở bot trong Telegram và gửi một tin bất kỳ, người đó sẽ hiện ở danh sách chờ duyệt.</p>` : ''}
+      ${T?.error ? `<p class="note bad">${U.esc(T.error)}</p>` : T?.bot ? `<p class="note">Bot: <b>@${U.esc(T.bot)}</b>. Mở bot trong Telegram, bấm <b>Start</b> (hoặc gửi <b>/start</b>), người đó sẽ hiện ở danh sách chờ duyệt. Kiểm tra tên và @username trước khi duyệt; nhóm thì cả nhóm sẽ nhận cảnh báo.</p>` : ''}
       <h4 class="mh">Người nhận</h4>
       ${chats ? `<div class="list">${chats}</div>` : '<p class="note">Chưa có người nhận.</p>'}
       ${pend ? `<h4 class="mh">Chờ duyệt</h4><div class="list">${pend}</div><p class="note">Duyệt cần PIN của hub.</p>` : ''}
@@ -52,6 +57,7 @@
       const r = await fetch('/api/telegram/approve', json('POST', {id: cid, pin}));
       if (r.status === 401) return U.toast('Sai PIN');
       if (r.status === 429) return U.toast('Nhập sai nhiều lần, thử lại sau ít phút');
+      if (r.status === 404) { pinFor = null; U.toast('Yêu cầu không còn, nhờ người đó gửi /start lại'); return load(); }
       if (!r.ok) return U.toast(await r.text());
       pinFor = null; U.toast('Đã duyệt'); return load();
     }

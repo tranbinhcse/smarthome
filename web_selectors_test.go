@@ -195,3 +195,22 @@ func TestTelegramSettingsWired(t *testing.T) {
 		}
 	}
 }
+
+// Chỉ /start mới tạo yêu cầu chờ duyệt: gợi ý trên trang Cài đặt phải nói đúng; nhãn dòng "Khác" phải cho biết có cả pin.
+func TestTelegramHintsAccurate(t *testing.T) {
+	rd := func(f string) string {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if !strings.Contains(rd("web/setup-telegram.js"), "/start") {
+		t.Error("gợi ý Telegram phải nhắc /start")
+	}
+	for _, f := range []string{"web/setup-ai.js", "README.md"} {
+		if !strings.Contains(rd(f), "Pin và cảnh báo khác") {
+			t.Errorf("%s: dòng Khác phải ghi \"Pin và cảnh báo khác\"", f)
+		}
+	}
+}

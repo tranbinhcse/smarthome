@@ -108,8 +108,8 @@ Hành động `{ notify: "câu", level: info|warn|urgent, kind: co2 }` gửi câ
 ## Thông báo qua Telegram
 
 1. **Tạo bot:** mở @BotFather trong Telegram, gửi `/newbot` và đặt tên. Chép token, dán vào Cài đặt → Thông báo → Telegram, bấm **Lưu**.
-2. **Người nhận:** người muốn nhận tin nhắn gửi `/start` cho bot. Trên màn hình nhà vào Cài đặt → Thông báo, bấm **Duyệt** rồi nhập PIN. Bỏ người nhận bằng nút **Bỏ**.
-3. **Chọn loại tin:** mỗi loại trong "Đọc thông báo" có ô **Telegram** riêng, độc lập với **Đọc**. Dòng **Khác** (khói, rò nước…) nhận cảnh báo không thuộc loại nào.
+2. **Người nhận:** người muốn nhận mở bot rồi bấm **Start** (hoặc gửi `/start`); chỉ `/start` mới tạo yêu cầu, tin khác bị bỏ qua. Trên màn hình nhà vào Cài đặt → Thông báo → Telegram, đối chiếu tên và @username (nhóm có ghi "(nhóm)" và cả nhóm sẽ nhận cảnh báo), bấm **Duyệt** rồi nhập PIN. Bỏ người nhận bằng nút **Bỏ**.
+3. **Chọn loại tin:** mỗi loại trong "Đọc thông báo" có ô **Telegram** riêng, độc lập với **Đọc**. Dòng **Pin và cảnh báo khác** (khói, rò nước, pin…) nhận mọi cảnh báo không thuộc loại nào ở trên, kể cả pin.
 4. **Báo cáo hằng ngày:** đặt giờ ở "Báo cáo hằng ngày lúc" (để trống là tắt). Nội dung giống nút **Đọc tình hình**; cần `voiced` chạy.
 5. **Gửi thử:** bấm **Gửi thử** để kiểm tra bot và người nhận.
 

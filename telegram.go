@@ -17,17 +17,22 @@ import (
 )
 
 const (
-	tgDedup   = 30 * time.Minute // cùng chữ trong khoảng này chỉ gửi một lần (khi dedup=true)
-	tgExpire  = 24 * time.Hour   // tin chờ quá lâu thì bỏ, không báo "rò nước" của hôm qua
-	tgMaxText = 4096             // giới hạn của sendMessage, tính theo ký tự
-	tgMaxWait = 50               // giây giữ máy chủ Telegram trong một lần getUpdates
-	tgMaxPend = 50               // số yêu cầu chờ duyệt tối đa, người lạ spam /start không làm phình RAM
-	tgBadTok  = "Telegram từ chối token: kiểm tra lại token của bot."
+	tgDedup    = 30 * time.Minute // cùng chữ trong khoảng này chỉ gửi một lần (khi dedup=true)
+	tgExpire   = 24 * time.Hour   // tin chờ quá lâu thì bỏ, không báo "rò nước" của hôm qua
+	tgMaxText  = 4096             // giới hạn của sendMessage, tính theo ký tự
+	tgMaxWait  = 50               // giây giữ máy chủ Telegram trong một lần getUpdates
+	tgMaxPend  = 50               // số yêu cầu chờ duyệt tối đa, người lạ spam /start không làm phình RAM
+	tgBadTok   = "Telegram từ chối token: kiểm tra lại token của bot."
+	tgConflict = "Bot đang có webhook hoặc một máy khác đang dùng token này."
+	tgOffline  = "Hub chưa kết nối được Telegram."
+	tgMaxBack  = time.Minute // chờ lùi tối đa khi lỗi tạm, để tin tới sớm khi mạng về
 )
 
 type tgChat struct {
-	ID   int64
-	Name string
+	ID    int64
+	Name  string
+	User  string // @username (chỉ yêu cầu chờ duyệt): tên hiển thị do người gửi tự đặt nên chủ nhà cần thêm cái này để nhận ra
+	Group bool   // nhóm/kênh: cả nhóm sẽ nhận cảnh báo
 }
 
 type tgItem struct {
@@ -75,7 +80,7 @@ func newTelegram(db *DB, now func() time.Time) *Telegram {
 
 func (t *Telegram) token() string {
 	s, _ := t.db.Setting("telegram")["bot_token"].(string)
-	return s
+	return strings.TrimSpace(s) // dán thừa khoảng trắng/xuống dòng sẽ làm hỏng URL
 }
 
 func (t *Telegram) chats() []tgChat {
@@ -185,14 +190,14 @@ func (t *Telegram) deliver() time.Duration {
 			t.hold = t.now().Add(retry)
 			t.mu.Unlock()
 			return retry
-		case code >= 400 && code < 500: // bị chặn, chat không còn: không thử lại
+		case code >= 400 && code < 500 && code != 401: // bị chặn, chat không còn: không thử lại
+			log.Printf("telegram: sendMessage %d, bỏ chat %d", code, chat)
+		default: // lỗi tạm hoặc 401 (token sai/đang đổi): giữ tin, chờ lùi; quá 24 giờ thì bị bỏ ở đầu vòng
 			if code == 401 {
 				t.setErr(tok, tgBadTok)
 			}
-			log.Printf("telegram: sendMessage %d, bỏ chat %d", code, chat)
-		default:
 			t.fails++
-			w := 5 * time.Second << min(t.fails-1, 6)
+			w := min(5*time.Second<<min(t.fails-1, 6), tgMaxBack)
 			t.hold = t.now().Add(w)
 			t.mu.Unlock()
 			return w
@@ -261,6 +266,21 @@ func (t *Telegram) get(tok, method string, q url.Values, out any) int {
 	return resp.StatusCode
 }
 
+// pollFail ghi lỗi cho trang Cài đặt theo mã trả về (0 = không có phản hồi) và trả thời gian chờ trước lượt sau.
+// 401 và 404 (token sai hoặc cụt) cùng là token hỏng; 409 là webhook hoặc người hỏi khác cùng token.
+func (t *Telegram) pollFail(tok string, code int) time.Duration {
+	switch code {
+	case 401, 404:
+		t.setErr(tok, tgBadTok)
+		return 10 * time.Second
+	case 409:
+		t.setErr(tok, tgConflict)
+	case 0:
+		t.setErr(tok, tgOffline)
+	}
+	return 5 * time.Second
+}
+
 // poll hỏi một lượt (getMe nếu chưa biết tên bot, rồi getUpdates), trả về bao lâu nữa nên hỏi lại (0 = ngay).
 // Đọc token mỗi lượt nên token mới có hiệu lực ở lượt kế; token đổi thì bỏ offset, tên bot và lỗi cũ.
 func (t *Telegram) poll() time.Duration {
@@ -280,12 +300,8 @@ func (t *Telegram) poll() time.Duration {
 				Username string `json:"username"`
 			} `json:"result"`
 		}
-		switch code := t.get(tok, "getMe", url.Values{}, &me); {
-		case code == 401:
-			t.setErr(tok, tgBadTok)
-			return 10 * time.Second
-		case code != 200:
-			return 5 * time.Second
+		if code := t.get(tok, "getMe", url.Values{}, &me); code != 200 {
+			return t.pollFail(tok, code)
 		}
 		t.pmu.Lock()
 		if t.token() == tok { // token đã đổi trong lúc chờ thì bỏ kết quả của token cũ
@@ -300,6 +316,7 @@ func (t *Telegram) poll() time.Duration {
 				Text string `json:"text"`
 				Chat struct {
 					ID        int64  `json:"id"`
+					Type      string `json:"type"`
 					FirstName string `json:"first_name"`
 					Username  string `json:"username"`
 					Title     string `json:"title"`
@@ -308,12 +325,8 @@ func (t *Telegram) poll() time.Duration {
 		} `json:"result"`
 	}
 	q := url.Values{"timeout": {strconv.Itoa(tgMaxWait)}, "offset": {strconv.FormatInt(off, 10)}}
-	switch code := t.get(tok, "getUpdates", q, &up); {
-	case code == 401:
-		t.setErr(tok, tgBadTok)
-		return 10 * time.Second
-	case code != 200:
-		return 5 * time.Second
+	if code := t.get(tok, "getUpdates", q, &up); code != 200 {
+		return t.pollFail(tok, code)
 	}
 	t.pmu.Lock()
 	if t.token() != tok { // token đã đổi trong lúc chờ: bỏ cả lượt, không đụng offset, tên bot, lỗi, danh sách chờ
@@ -333,7 +346,7 @@ func (t *Telegram) poll() time.Duration {
 		}
 		if cmd, _, _ := strings.Cut(f[0], "@"); cmd == "/start" {
 			name := firstNonEmpty(c.FirstName, firstNonEmpty(c.Username, firstNonEmpty(c.Title, strconv.FormatInt(c.ID, 10))))
-			t.start(tok, tgChat{c.ID, name})
+			t.start(tok, tgChat{ID: c.ID, Name: name, User: c.Username, Group: c.Type != "" && c.Type != "private"})
 		}
 	}
 	return 0
@@ -366,14 +379,16 @@ func (t *Telegram) start(tok string, c tgChat) {
 }
 
 type tgJSON struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username,omitempty"`
+	Group    bool   `json:"group,omitempty"`
 }
 
 func tgList(cs []tgChat) []tgJSON {
 	out := []tgJSON{}
 	for _, c := range cs {
-		out = append(out, tgJSON{c.ID, c.Name})
+		out = append(out, tgJSON{c.ID, c.Name, c.User, c.Group})
 	}
 	return out
 }

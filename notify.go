@@ -7,7 +7,7 @@ import (
 
 // Loại thông báo: notify trong luật có `kind` (co2, bui, mua, nong...). Trang Cài đặt tắt từng loại bằng nhóm cấu hình
 // "notify" ({"<kind>": false}); loại bị tắt không lên hubd/alert (trợ lý không đọc), lệnh tới thiết bị của luật vẫn chạy.
-// notify không có kind (khói, rò nước...) luôn báo.
+// notify không có kind (khói, rò nước...) luôn báo; gửi Telegram thì có ô riêng "tg:khac" (xem tgOn).
 
 func (h *Hub) muted(kind string) bool {
 	return kind != "" && h.db.Setting("notify")[kind] == false

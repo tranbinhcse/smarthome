@@ -264,6 +264,7 @@ type tgBot struct {
 	sent    []tgSent
 	only    string            // khác rỗng: chỉ token này nhận được update
 	gate    func(path string) // gọi trước khi xử lý, để chặn một lệnh gọi giữa chừng
+	force   map[string]int    // method -> mã HTTP ép trả (token tốt), vd 404/409
 }
 
 func (b *tgBot) calls(method string) (n int) {
@@ -284,6 +285,14 @@ func (b *tgBot) start(id int, chat int64, name, text string) {
 		"text": text, "chat": map[string]any{"id": chat, "first_name": name}}})
 }
 
+// startFrom như start nhưng thêm @username và loại chat.
+func (b *tgBot) startFrom(id int, chat int64, name, user, typ, text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.updates = append(b.updates, map[string]any{"update_id": id, "message": map[string]any{
+		"text": text, "chat": map[string]any{"id": chat, "first_name": name, "username": user, "type": typ}}})
+}
+
 func newTgApp(t *testing.T) (*Telegram, *tgBot, func(method, url, body string) (int, string)) {
 	b := &tgBot{good: map[string]bool{"TOK": true, "NEW": true}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +307,10 @@ func newTgApp(t *testing.T) (*Telegram, *tgBot, func(method, url, body string) (
 		if !b.good[tok] {
 			w.WriteHeader(401)
 			io.WriteString(w, `{"ok":false,"error_code":401,"description":"Unauthorized"}`)
+			return
+		}
+		if c := b.force[method]; c != 0 {
+			w.WriteHeader(c)
 			return
 		}
 		switch method {
@@ -347,8 +360,10 @@ func tgState(t *testing.T, req func(string, string, string) (int, string)) (st s
 		Name string
 	}
 	Pending []struct {
-		ID   int64
-		Name string
+		ID       int64
+		Name     string
+		Username string
+		Group    bool
 	}
 	Error string
 }) {
@@ -490,6 +505,9 @@ func TestTelegramTokenChangeWithoutRestart(t *testing.T) {
 		t.Fatalf("sendMessage 401 phải hiện lỗi: %+v", st)
 	}
 	req("PUT", "/api/settings/telegram", `{"bot_token":"TOK"}`)
+	tg.mu.Lock()
+	tg.hold = time.Time{} // 401 giữ tin và chờ lùi; bỏ chờ để thử ngay với token đúng
+	tg.mu.Unlock()
 	tg.Send("y", false)
 	tg.deliver()
 	if st := tgState(t, req); st.Error != "" {
@@ -730,5 +748,96 @@ func TestDailyReportDoesNotBlockDelivery(t *testing.T) {
 	drain(tg, clock)
 	if len(f.got) != 4 || f.got[2].Text != "Tóm tắt." {
 		t.Fatalf("brief không gửi sau khi nhả: %+v", f.got)
+	}
+}
+
+func TestTelegramErrorsAreShown(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.force = map[string]int{"getMe": 404}
+	tg.poll()
+	if st := tgState(t, req); !strings.Contains(st.Error, "token") {
+		t.Fatalf("getMe 404 phải báo token sai: %+v", st)
+	}
+	bot.mu.Lock()
+	bot.force = map[string]int{"getUpdates": 409}
+	bot.mu.Unlock()
+	tg.poll()
+	if st := tgState(t, req); !strings.Contains(st.Error, "webhook") {
+		t.Fatalf("getUpdates 409 phải báo webhook/máy khác: %+v", st)
+	}
+	bot.mu.Lock()
+	bot.force = nil
+	bot.mu.Unlock()
+	tg.poll()
+	if st := tgState(t, req); st.Error != "" {
+		t.Fatalf("thành công phải xoá lỗi: %+v", st)
+	}
+	// lỗi mạng: máy chủ không có ai nghe
+	t.Setenv("HUBD_TELEGRAM_API", "http://127.0.0.1:1")
+	tg2 := newTelegram(tg.db, time.Now)
+	tg2.poll()
+	tg2.pmu.Lock()
+	m := tg2.errMsg
+	tg2.pmu.Unlock()
+	if !strings.Contains(m, "chưa kết nối") {
+		t.Fatalf("lỗi mạng phải báo: %q", m)
+	}
+}
+
+func TestTelegramTokenTrimmed(t *testing.T) {
+	tg, bot, _ := newTgApp(t)
+	tg.db.PutSetting("telegram", map[string]any{"bot_token": " TOK \n"})
+	tg.poll()
+	if bot.calls("getMe") != 1 || tg.bot != "inix_tok" {
+		t.Fatalf("token có khoảng trắng phải được cắt: bot=%q", tg.bot)
+	}
+}
+
+func TestTelegramPendingShowsUsernameAndGroup(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.startFrom(1, 555, "Lan", "lan_x", "private", "/start")
+	bot.startFrom(2, -100, "", "", "supergroup", "/start")
+	tg.poll()
+	st := tgState(t, req)
+	if len(st.Pending) != 2 || st.Pending[0].Username != "lan_x" || st.Pending[0].Group || !st.Pending[1].Group {
+		t.Fatalf("cần username và cờ nhóm: %+v", st.Pending)
+	}
+}
+
+func TestTelegramSend401KeepsQueue(t *testing.T) {
+	bad := true
+	tg, f, clock := newTgEnv(t, func(chat int64, n int) (int, string) {
+		if bad {
+			return 401, `{"ok":false}`
+		}
+		return 200, `{"ok":true}`
+	})
+	tg.Send("quan trọng", false)
+	if w := tg.deliver(); w == 0 {
+		t.Fatal("401 phải chờ rồi thử lại, không bỏ tin")
+	}
+	tg.pmu.Lock()
+	m := tg.errMsg
+	tg.pmu.Unlock()
+	if m != tgBadTok {
+		t.Fatalf("401 phải hiện lỗi token: %q", m)
+	}
+	bad = false
+	drain(tg, clock)
+	if len(f.got) != 2 {
+		t.Fatalf("sau khi hết 401 tin phải tới 2 người: %+v", f.got)
+	}
+}
+
+func TestTelegramBackoffCapped60s(t *testing.T) {
+	tg, _, clock := newTgEnv(t, func(chat int64, n int) (int, string) { return 500, `` })
+	tg.Send("x", false)
+	var w time.Duration
+	for i := 0; i < 12; i++ {
+		w = tg.deliver()
+		*clock = clock.Add(w)
+	}
+	if w != 60*time.Second {
+		t.Fatalf("chờ tối đa 60 s, được %v", w)
 	}
 }

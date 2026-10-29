@@ -156,7 +156,7 @@
       return `<div class="list">${kinds.map(k => `<div class="setrow"><span>${U.esc(LABEL[k.kind] || k.kind)}
           <small>${k.texts.length > 1 ? `${k.texts.length} chỗ đo` : U.esc(k.texts[0])}</small></span>
           <label class="tgk">Đọc <input type="checkbox" data-sfield="notify.${U.esc(k.kind)}"${on(k) ? ' checked' : ''}></label>${tg(k.kind)}</div>`).join('')}
-          <div class="setrow"><span>Khác (khói, rò nước…)<small>Cảnh báo không thuộc loại nào ở trên</small></span>${tg('khac')}</div></div>
+          <div class="setrow"><span>Pin và cảnh báo khác (khói, rò nước…)<small>Cảnh báo không thuộc loại nào ở trên, gồm cả pin</small></span>${tg('khac')}</div></div>
         <div class="kv">${U.ssave('notify')}</div>
         <p class="note">Loại bị tắt thì không đọc thành tiếng, luật vẫn bật tắt thiết bị như cũ. Cảnh báo pin và an toàn luôn đọc.
           Đọc trên mọi màn hình đang mở dashboard (HTTP cũng được, chạm màn hình một lần sau khi mở).</p>`;
