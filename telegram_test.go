@@ -629,6 +629,7 @@ func TestDailyReportOncePerDay(t *testing.T) {
 	step := func(d, h, m, s int) int {
 		at(d, h, m, s)
 		tg.daily()
+		tg.dailyWG.Wait()
 		drain(tg, clock)
 		return len(f.got)
 	}
@@ -657,5 +658,77 @@ func TestDailyReportOncePerDay(t *testing.T) {
 	code = 502
 	if n := step(30, 7, 0, 0); n != 4 {
 		t.Fatalf("voiced 502 vẫn gửi")
+	}
+}
+
+func TestDailyReportCatchUpWindow(t *testing.T) {
+	tg, f, clock := newTgEnv(t, nil)
+	voiced := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"reply":"Tóm tắt."}`)
+	}))
+	t.Cleanup(voiced.Close)
+	t.Setenv("HUBD_VOICED_URL", voiced.URL)
+	tg.db.PutSetting("telegram", map[string]any{"bot_token": "TOK", "daily_at": "7:00"})
+	tick := func(d, h, m, s int) int {
+		*clock = time.Date(2026, 10, d, h, m, s, 0, tgICT)
+		tg.daily()
+		tg.dailyWG.Wait()
+		drain(tg, clock)
+		return len(f.got)
+	}
+	// nhịp trượt qua cả phút 07:00 vẫn gửi đúng một lần
+	if n := tick(27, 6, 59, 59); n != 0 {
+		t.Fatalf("06:59:59 đã gửi %d", n)
+	}
+	if n := tick(27, 7, 1, 1); n != 2 {
+		t.Fatalf("07:01:01 gửi %d tin, muốn 2", n)
+	}
+	if n := tick(27, 7, 2, 1); n != 2 {
+		t.Fatalf("gửi lặp: %d", n)
+	}
+	// nhịp đầu tiên đã quá cửa sổ bù: bỏ hôm đó
+	if n := tick(28, 7, 6, 0); n != 2 {
+		t.Fatalf("07:06 vẫn gửi: %d", n)
+	}
+}
+
+func TestDailyReportDoesNotBlockDelivery(t *testing.T) {
+	tg, f, clock := newTgEnv(t, nil)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	voiced := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		io.WriteString(w, `{"reply":"Tóm tắt."}`)
+	}))
+	t.Cleanup(voiced.Close)
+	t.Setenv("HUBD_VOICED_URL", voiced.URL)
+	tg.db.PutSetting("telegram", map[string]any{"bot_token": "TOK", "daily_at": "07:00"})
+	*clock = time.Date(2026, 10, 27, 7, 0, 0, 0, tgICT)
+
+	returned := make(chan struct{})
+	go func() { tg.daily(); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("daily() chặn chờ voiced")
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("voiced không được gọi")
+	}
+	tg.Send("Rò nước!", true)
+	drain(tg, clock)
+	if len(f.got) != 2 || f.got[0].Text != "Rò nước!" {
+		close(release)
+		t.Fatalf("cảnh báo không tới khi brief còn chờ: %+v", f.got)
+	}
+	close(release)
+	tg.dailyWG.Wait()
+	drain(tg, clock)
+	if len(f.got) != 4 || f.got[2].Text != "Tóm tắt." {
+		t.Fatalf("brief không gửi sau khi nhả: %+v", f.got)
 	}
 }

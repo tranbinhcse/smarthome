@@ -59,7 +59,8 @@ type Telegram struct {
 	bot     string     // username của bot (getMe)
 	errMsg  string     // lỗi hiện trên trang Cài đặt, rỗng = ổn
 
-	dailyDay string // ngày (giờ Việt Nam) đã gửi báo cáo hằng ngày; chỉ vòng run đụng tới nên không cần khoá
+	dailyWG  sync.WaitGroup // brief chạy nền; test chờ bằng cái này
+	dailyDay string         // ngày (giờ Việt Nam) đã gửi báo cáo hằng ngày; chỉ vòng run đụng tới nên không cần khoá
 }
 
 func newTelegram(db *DB, now func() time.Time) *Telegram {
