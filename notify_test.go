@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Tắt từng loại thông báo trong Cài đặt (nhóm "notify", khoá = kind của notify): loại bị tắt không lên hubd/alert
@@ -139,4 +140,59 @@ func TestConfigYAMLNotifyRules(t *testing.T) {
 		}
 	}
 	t.Logf("%d luật notify, theo loại %v", n, kinds)
+}
+
+// tgHub: hub có Telegram trỏ vào máy chủ giả (2 chat đã duyệt); sent là các tin MQTT, tgGot đếm tin Telegram đã tới.
+func tgHub(t *testing.T, cfg Config) (h *Hub, sent *[]string, tgGot func() int) {
+	t.Helper()
+	tg, fk, clock := newTgEnv(t, nil)
+	var s []string
+	h = NewHub(cfg, tg.db, func(tp, p string) { s = append(s, tp+" "+p) })
+	h.tg = tg
+	return h, &s, func() int { drain(tg, clock); return len(fk.got) }
+}
+
+// Cảnh báo của luật tới Telegram theo loại, độc lập với đọc to: tắt đọc (notify[kind]=false) không tắt Telegram,
+// tắt Telegram (notify["tg:"+kind]=false) không tắt đọc. Không kind dùng "tg:khac". Luật alert: chỉ báo khi kích hoạt.
+func TestRuleNotifyReachesTelegramByKind(t *testing.T) {
+	co2 := func(kind string) Config {
+		return Config{Rules: []Rule{{ID: "c", Entity: "co2", Above: f(1000), Then: []Action{{Notify: "CO2 cao", Level: "warn", Kind: kind}}}}}
+	}
+	for _, c := range []struct {
+		name     string
+		cfg      Config
+		set      map[string]any
+		wantTG   bool
+		wantRead bool
+	}{
+		{"kind co2", co2("co2"), nil, true, true},
+		{"tắt đọc vẫn có Telegram", co2("co2"), map[string]any{"co2": false}, true, false},
+		{"tắt Telegram vẫn đọc", co2("co2"), map[string]any{"tg:co2": false}, false, true},
+		{"không kind", co2(""), nil, true, true},
+		{"không kind, tg:khac tắt", co2(""), map[string]any{"tg:khac": false}, false, true},
+		{"tg:khac tắt không chặn kind khác", co2("co2"), map[string]any{"tg:khac": false}, true, true},
+	} {
+		h, sent, got := tgHub(t, c.cfg)
+		if c.set != nil {
+			h.db.PutSetting("notify", c.set)
+		}
+		h.Ingest("co2", "1500", t0)
+		if read := strings.Contains(strings.Join(*sent, "\n"), "hubd/alert "); read != c.wantRead {
+			t.Errorf("%s: đọc=%v, muốn %v", c.name, read, c.wantRead)
+		}
+		if tg := got() > 0; tg != c.wantTG {
+			t.Errorf("%s: Telegram=%v, muốn %v", c.name, tg, c.wantTG)
+		}
+	}
+
+	h, _, got := tgHub(t, Config{Rules: []Rule{{ID: "pin", Entity: "soc", Below: f(20), ClearAbove: f(25), Alert: "Pin yếu"}}})
+	h.Ingest("soc", "10", t0)
+	if n := got(); n == 0 {
+		t.Fatal("alert: kích hoạt phải có tin Telegram")
+	}
+	n := got()
+	h.Ingest("soc", "30", t0.Add(time.Minute))
+	if got() != n {
+		t.Fatal("alert: nhả không được gửi Telegram")
+	}
 }

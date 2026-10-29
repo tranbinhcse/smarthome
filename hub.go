@@ -25,6 +25,8 @@ type Hub struct {
 	val  map[string]string
 	subs map[chan []byte]struct{}
 
+	tg *Telegram // nil: không gửi Telegram (telegram.go)
+
 	alerts []Alert // cảnh báo chưa ai xác nhận (assistant.go), khoá bằng mu
 
 	nodes  map[string]*nodeSeen                   // node ESP32 đã gửi tin (nodes.go), khoá bằng mu
@@ -171,12 +173,12 @@ func (h *Hub) run(acts []Action) {
 			log.Printf("cảnh báo %s: %q", a.Alert, a.Text)
 			h.set("alert:"+a.Alert, a.Text)
 			if a.Text != "" { // bật cảnh báo: cũng lên hubd/alert để trợ lý giọng nói đọc; nhả thì thôi
-				h.alert("warn", a.Text)
+				h.notify("warn", "", a.Text)
 			}
 			continue
 		}
-		if a.Notify != "" && !h.muted(a.Kind) { // loại thông báo bị tắt trong Cài đặt: không đọc (notify.go)
-			h.alert(a.Level, a.Notify)
+		if a.Notify != "" {
+			h.notify(a.Level, a.Kind, a.Notify)
 		}
 		if a.Set == "" {
 			continue

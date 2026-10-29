@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"io/fs"
@@ -55,6 +56,9 @@ func main() {
 			client.Publish(topic, 1, false, payload)
 		}
 	})
+
+	hub.tg = newTelegram(db, time.Now)
+	go hub.tg.run(context.Background())
 
 	if u := os.Getenv("HUBD_MQTT_ADMIN_USER"); u != "" && os.Getenv("HUBD_MQTT_ADMIN_PASS") != "" {
 		hub.dynsec = mqttDynsec(cfg.MQTT.Broker, u, os.Getenv("HUBD_MQTT_ADMIN_PASS")) // tài khoản node ESP32 (nodes.go)

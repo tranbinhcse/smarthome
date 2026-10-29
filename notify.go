@@ -13,6 +13,24 @@ func (h *Hub) muted(kind string) bool {
 	return kind != "" && h.db.Setting("notify")[kind] == false
 }
 
+// tgOn: loại này có gửi Telegram không. Khoá "tg:<kind>" trong nhóm notify, kind rỗng là "tg:khac"; chỉ false mới tắt.
+func (h *Hub) tgOn(kind string) bool {
+	if kind == "" {
+		kind = "khac"
+	}
+	return h.db.Setting("notify")["tg:"+kind] != false
+}
+
+// notify đưa một thông báo của luật tới hai đường độc lập: đọc to (hubd/alert) và Telegram, mỗi đường có công tắc riêng.
+func (h *Hub) notify(level, kind, text string) {
+	if !h.muted(kind) {
+		h.alert(level, text)
+	}
+	if h.tg != nil && h.tgOn(kind) {
+		h.tg.Send(text, true)
+	}
+}
+
 type notifyKind struct {
 	Kind  string   `json:"kind"`
 	Texts []string `json:"texts"`
