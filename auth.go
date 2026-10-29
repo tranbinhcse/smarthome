@@ -55,29 +55,39 @@ func (a *Auth) Require(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// CheckPIN so PIN nhập lại (đăng nhập, duyệt người nhận Telegram, tắt còi) và dùng chung bộ đếm khoá:
+// sai 5 lần thì khoá 1 phút; đang khoá thì không so, trả locked=true.
+func (a *Auth) CheckPIN(pin string) (ok bool, locked bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.now().Before(a.lock) {
+		return false, true
+	}
+	if a.pin != "" && subtle.ConstantTimeCompare([]byte(pin), []byte(a.pin)) == 1 {
+		a.fail = 0
+		return true, false
+	}
+	if a.fail++; a.fail >= 5 {
+		a.fail, a.lock = 0, a.now().Add(time.Minute)
+	}
+	return false, false
+}
+
 func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
 	var body struct{ PIN string }
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil {
 		http.Error(w, "bad json", 400)
 		return
 	}
-	a.mu.Lock()
-	if a.now().Before(a.lock) {
-		a.mu.Unlock()
+	ok, locked := a.CheckPIN(body.PIN)
+	if locked {
 		http.Error(w, "thử lại sau ít phút", http.StatusTooManyRequests)
 		return
 	}
-	ok := a.pin != "" && subtle.ConstantTimeCompare([]byte(body.PIN), []byte(a.pin)) == 1
 	if !ok {
-		if a.fail++; a.fail >= 5 {
-			a.fail, a.lock = 0, a.now().Add(time.Minute)
-		}
-		a.mu.Unlock()
 		http.Error(w, "sai PIN", http.StatusUnauthorized)
 		return
 	}
-	a.fail = 0
-	a.mu.Unlock()
 	b := make([]byte, 32)
 	rand.Read(b)
 	tok := hex.EncodeToString(b)
