@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -250,5 +251,273 @@ func TestTelegramSendDoesNotBlockDuringPost(t *testing.T) {
 	drain(tg, clock)
 	if len(f.got) != 4 {
 		t.Fatalf("cần 4 tin: %d", len(f.got))
+	}
+}
+
+// tgBot: máy chủ Telegram giả có getMe/getUpdates/sendMessage; token nào ngoài `good` thì trả 401.
+type tgBot struct {
+	mu      sync.Mutex
+	good    map[string]bool
+	updates []map[string]any // update_id tăng dần; chỉ trả những cái có update_id >= offset
+	paths   []string         // "<token>/<method>" của mọi lần gọi
+	offsets []string
+	sent    []tgSent
+}
+
+func (b *tgBot) calls(method string) (n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, p := range b.paths {
+		if strings.HasSuffix(p, "/"+method) {
+			n++
+		}
+	}
+	return
+}
+
+func (b *tgBot) start(id int, chat int64, name, text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.updates = append(b.updates, map[string]any{"update_id": id, "message": map[string]any{
+		"text": text, "chat": map[string]any{"id": chat, "first_name": name}}})
+}
+
+func newTgApp(t *testing.T) (*Telegram, *tgBot, func(method, url, body string) (int, string)) {
+	b := &tgBot{good: map[string]bool{"TOK": true, "NEW": true}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		p := strings.TrimPrefix(r.URL.Path, "/bot")
+		b.paths = append(b.paths, p)
+		tok, method, _ := strings.Cut(p, "/")
+		if !b.good[tok] {
+			w.WriteHeader(401)
+			io.WriteString(w, `{"ok":false,"error_code":401,"description":"Unauthorized"}`)
+			return
+		}
+		switch method {
+		case "getMe":
+			io.WriteString(w, `{"ok":true,"result":{"username":"inix_bot"}}`)
+		case "getUpdates":
+			off := r.URL.Query().Get("offset")
+			b.offsets = append(b.offsets, off)
+			n, _ := strconv.Atoi(off)
+			res := []map[string]any{}
+			for _, u := range b.updates {
+				if u["update_id"].(int) >= n {
+					res = append(res, u)
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": res})
+		case "sendMessage":
+			var m struct {
+				ChatID int64  `json:"chat_id"`
+				Text   string `json:"text"`
+			}
+			json.NewDecoder(r.Body).Decode(&m)
+			b.sent = append(b.sent, tgSent{m.ChatID, m.Text, time.Time{}})
+			io.WriteString(w, `{"ok":true}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("HUBD_TELEGRAM_API", srv.URL)
+	h := NewHub(Config{}, newDB(t), func(string, string) {})
+	h.db.PutSetting("telegram", map[string]any{"bot_token": "TOK"})
+	h.tg = newTelegram(h.db, time.Now)
+	a := NewAuth("1234", h.db)
+	a.assistant = testTok
+	mux := newMux(h, a)
+	ck := call(mux, "POST", "/api/login", `{"pin":"1234"}`, "").Result().Cookies()
+	return h.tg, b, func(method, url, body string) (int, string) {
+		w := call(mux, method, url, body, "", ck...)
+		return w.Code, w.Body.String()
+	}
+}
+
+func tgState(t *testing.T, req func(string, string, string) (int, string)) (st struct {
+	TokenSet bool `json:"token_set"`
+	Bot      string
+	Chats    []struct {
+		ID   int64
+		Name string
+	}
+	Pending []struct {
+		ID   int64
+		Name string
+	}
+	Error string
+}) {
+	t.Helper()
+	code, body := req("GET", "/api/telegram", "")
+	if code != 200 || json.Unmarshal([]byte(body), &st) != nil {
+		t.Fatalf("GET /api/telegram: %d %s", code, body)
+	}
+	return
+}
+
+func TestTelegramStartApproveRemove(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.start(1, 555, "Lan", "/start")
+	bot.start(2, 666, "Hùng", "xin chào") // tin khác /start bị bỏ qua
+	tg.poll()
+	st := tgState(t, req)
+	if st.Bot != "inix_bot" || !st.TokenSet || len(st.Pending) != 1 || st.Pending[0].ID != 555 || st.Pending[0].Name != "Lan" {
+		t.Fatalf("cần 1 mục chờ của Lan: %+v", st)
+	}
+	if len(bot.sent) != 1 || bot.sent[0].Chat != 555 || bot.sent[0].Text != "Đã gửi yêu cầu, chờ chủ nhà duyệt trên màn hình nhà." {
+		t.Fatalf("thiếu lời đáp /start: %+v", bot.sent)
+	}
+	if code, _ := req("POST", "/api/telegram/approve", `{"id":555,"pin":"0000"}`); code != 401 {
+		t.Fatalf("PIN sai phải 401, được %d", code)
+	}
+	if st := tgState(t, req); len(st.Chats) != 0 || len(st.Pending) != 1 {
+		t.Fatalf("PIN sai không được thêm: %+v", st)
+	}
+	if code, _ := req("POST", "/api/telegram/approve", `{"id":999,"pin":"1234"}`); code != 404 {
+		t.Fatalf("id không chờ phải 404, được %d", code)
+	}
+	if code, _ := req("POST", "/api/telegram/approve", `{"id":555,"pin":"1234"}`); code != 204 {
+		t.Fatalf("PIN đúng phải 204, được %d", code)
+	}
+	st = tgState(t, req)
+	if len(st.Chats) != 1 || st.Chats[0].ID != 555 || len(st.Pending) != 0 {
+		t.Fatalf("cần 555 trong chats: %+v", st)
+	}
+	if n := len(bot.sent); n != 2 || bot.sent[1].Chat != 555 || bot.sent[1].Text != "Đã được duyệt nhận cảnh báo của iNIX Smart." {
+		t.Fatalf("thiếu tin xác nhận: %+v", bot.sent)
+	}
+	// đã duyệt rồi mà /start lại: báo đã nhận, không thêm chờ
+	bot.start(3, 555, "Lan", "/start")
+	tg.poll()
+	if st := tgState(t, req); len(st.Pending) != 0 || bot.sent[len(bot.sent)-1].Text != "Bạn đã nhận cảnh báo rồi." {
+		t.Fatalf("/start của người đã duyệt: %+v %+v", st, bot.sent)
+	}
+	// kiểm tra tin thử
+	if code, _ := req("POST", "/api/telegram/test", ""); code != 204 {
+		t.Fatalf("test phải 204, được %d", code)
+	}
+	tg.deliver()
+	if l := bot.sent[len(bot.sent)-1]; l.Chat != 555 || l.Text != "Tin thử từ iNIX Smart." {
+		t.Fatalf("thiếu tin thử: %+v", bot.sent)
+	}
+	for _, c := range []struct {
+		url  string
+		want int
+	}{{"/api/telegram/chats/abc", 400}, {"/api/telegram/chats/777", 404}, {"/api/telegram/chats/555", 204}} {
+		if code, _ := req("DELETE", c.url, ""); code != c.want {
+			t.Fatalf("DELETE %s: %d, cần %d", c.url, code, c.want)
+		}
+	}
+	if st := tgState(t, req); len(st.Chats) != 0 {
+		t.Fatalf("chưa xoá: %+v", st)
+	}
+	if code, _ := req("POST", "/api/telegram/test", ""); code != 409 {
+		t.Fatalf("chưa có người nhận phải 409, được %d", code)
+	}
+}
+
+func TestTelegramApproveLockout(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.start(1, 555, "Lan", "/start")
+	tg.poll()
+	for i := 0; i < 5; i++ {
+		req("POST", "/api/telegram/approve", `{"id":555,"pin":"0000"}`)
+	}
+	if code, _ := req("POST", "/api/telegram/approve", `{"id":555,"pin":"1234"}`); code != 429 {
+		t.Fatalf("đang khoá phải 429, được %d", code)
+	}
+}
+
+func TestTelegramStartTwiceOnePending(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	bot.start(1, 555, "Lan", "/start")
+	bot.start(2, 555, "Lan", "/start@inix_bot")
+	tg.poll()
+	tg.poll() // offset đã qua hết, không xử lý lại
+	if st := tgState(t, req); len(st.Pending) != 1 {
+		t.Fatalf("hai /start chỉ được một mục chờ: %+v", st.Pending)
+	}
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	if len(bot.offsets) != 2 || bot.offsets[0] != "0" || bot.offsets[1] != "3" {
+		t.Fatalf("offset phải nhảy tới update_id cuối + 1: %v", bot.offsets)
+	}
+}
+
+func TestTelegramTokenChangeWithoutRestart(t *testing.T) {
+	tg, bot, req := newTgApp(t)
+	tg.poll()
+	if bot.calls("getUpdates") != 1 || tgState(t, req).Bot != "inix_bot" {
+		t.Fatalf("lần đầu phải getMe + getUpdates")
+	}
+	if code, _ := req("PUT", "/api/settings/telegram", `{"bot_token":null}`); code != 204 {
+		t.Fatalf("xoá token: %d", code)
+	}
+	if w := tg.poll(); w != 10*time.Second || bot.calls("getUpdates") != 1 {
+		t.Fatalf("không token: nghỉ 10 s và không gọi getUpdates (%v, %d)", w, bot.calls("getUpdates"))
+	}
+	if st := tgState(t, req); st.TokenSet || st.Bot != "" {
+		t.Fatalf("không token thì không có bot: %+v", st)
+	}
+	// token bị Telegram từ chối: báo lỗi cho trang Cài đặt
+	req("PUT", "/api/settings/telegram", `{"bot_token":"SAI"}`)
+	tg.poll()
+	if st := tgState(t, req); !strings.Contains(st.Error, "token") {
+		t.Fatalf("401 phải hiện lỗi: %+v", st)
+	}
+	req("PUT", "/api/settings/telegram", `{"bot_token":"NEW"}`)
+	tg.poll()
+	bot.mu.Lock()
+	last := bot.paths[len(bot.paths)-1]
+	bot.mu.Unlock()
+	if last != "NEW/getUpdates" {
+		t.Fatalf("phải dùng token mới ngay: %s", last)
+	}
+	if st := tgState(t, req); st.Error != "" || st.Bot != "inix_bot" {
+		t.Fatalf("token đúng thì hết lỗi: %+v", st)
+	}
+	// sendMessage 401 cũng hiện lỗi, gửi được thì xoá
+	tg.db.sql.Exec(`INSERT INTO telegram_chats(id,name,added) VALUES(1,'n',0)`)
+	req("PUT", "/api/settings/telegram", `{"bot_token":"SAI"}`)
+	tg.Send("x", false)
+	tg.deliver()
+	if st := tgState(t, req); !strings.Contains(st.Error, "token") {
+		t.Fatalf("sendMessage 401 phải hiện lỗi: %+v", st)
+	}
+	req("PUT", "/api/settings/telegram", `{"bot_token":"TOK"}`)
+	tg.Send("y", false)
+	tg.deliver()
+	if st := tgState(t, req); st.Error != "" {
+		t.Fatalf("gửi được thì hết lỗi: %+v", st)
+	}
+}
+
+func TestTelegramChatsNotWritableBySettingsAPI(t *testing.T) {
+	_, _, req := newTgApp(t)
+	req("PUT", "/api/settings/telegram", `{"chats":[{"id":9,"name":"x"}]}`)
+	if st := tgState(t, req); len(st.Chats) != 0 {
+		t.Fatalf("Cài đặt không được thêm người nhận: %+v", st.Chats)
+	}
+	_, body := req("GET", "/api/settings/telegram", "")
+	if !strings.Contains(body, `"bot_token_set":true`) || strings.Contains(body, "TOK") {
+		t.Fatalf("GET settings phải che token: %s", body)
+	}
+	if _, body := req("GET", "/api/backup", ""); strings.Contains(body, "TOK") {
+		t.Fatalf("sao lưu chứa token: %s", body)
+	}
+}
+
+func TestTelegramRoutesNeedLogin(t *testing.T) {
+	h := NewHub(Config{}, newDB(t), func(string, string) {})
+	h.tg = newTelegram(h.db, time.Now)
+	a := NewAuth("1234", h.db)
+	a.assistant = testTok
+	mux := newMux(h, a)
+	for _, r := range [][2]string{{"GET", "/api/telegram"}, {"POST", "/api/telegram/approve"}, {"DELETE", "/api/telegram/chats/1"}, {"POST", "/api/telegram/test"}} {
+		for _, bearer := range []string{"", testTok} {
+			if w := call(mux, r[0], r[1], `{"id":1,"pin":"1234"}`, bearer); w.Code != 401 {
+				t.Fatalf("%s %s bearer=%q: %d, cần 401", r[0], r[1], bearer, w.Code)
+			}
+		}
 	}
 }

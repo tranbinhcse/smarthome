@@ -179,6 +179,9 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	hub.music = mountMusic(mux, hub, auth)
 	mountNodes(mux, hub, auth)
 	mountNotify(mux, hub, auth)
+	if hub.tg != nil {
+		mountTelegram(mux, hub.tg, auth)
+	}
 	mountTLS(mux, hub.db, auth)
 	return mux
 }
