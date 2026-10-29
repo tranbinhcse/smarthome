@@ -152,9 +152,11 @@
     body: () => {
       if (!kinds) loadKinds();
       if (!kinds?.length) return '<p class="note">Chưa có luật notify nào có kind trong config.yaml.</p>';
-      return `<div class="list">${kinds.map(k => `<label class="setrow"><span>${U.esc(LABEL[k.kind] || k.kind)}
+      const tg = (key, name) => `<label class="tgk">Telegram <input type="checkbox" data-sfield="notify.tg:${U.esc(key)}"${U.sval('notify', 'tg:' + key) !== false ? ' checked' : ''}></label>`;
+      return `<div class="list">${kinds.map(k => `<div class="setrow"><span>${U.esc(LABEL[k.kind] || k.kind)}
           <small>${k.texts.length > 1 ? `${k.texts.length} chỗ đo` : U.esc(k.texts[0])}</small></span>
-          <input type="checkbox" data-sfield="notify.${U.esc(k.kind)}"${on(k) ? ' checked' : ''}></label>`).join('')}</div>
+          <label class="tgk">Đọc <input type="checkbox" data-sfield="notify.${U.esc(k.kind)}"${on(k) ? ' checked' : ''}></label>${tg(k.kind)}</div>`).join('')}
+          <div class="setrow"><span>Khác (khói, rò nước…)<small>Cảnh báo không thuộc loại nào ở trên</small></span>${tg('khac')}</div></div>
         <div class="kv">${U.ssave('notify')}</div>
         <p class="note">Loại bị tắt thì không đọc thành tiếng, luật vẫn bật tắt thiết bị như cũ. Cảnh báo pin và an toàn luôn đọc.
           Đọc trên mọi màn hình đang mở dashboard (HTTP cũng được, chạm màn hình một lần sau khi mở).</p>`;

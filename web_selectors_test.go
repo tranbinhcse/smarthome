@@ -165,3 +165,27 @@ func TestDashJSStartsAfterAllScripts(t *testing.T) {
 		t.Fatal("index.html phải nạp settings.js sau dash.js")
 	}
 }
+
+// Mục Telegram của Cài đặt phải được nạp, xếp vào nhóm Thông báo, và mỗi loại thông báo có ô Telegram riêng.
+func TestTelegramSettingsWired(t *testing.T) {
+	read := func(f string) string {
+		b, err := os.ReadFile(filepath.Join("web", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if !regexp.MustCompile(`<script src="/setup-telegram\.js\?v=\d+"></script>`).MatchString(read("index.html")) {
+		t.Error("index.html chưa nạp setup-telegram.js?v=")
+	}
+	if !strings.Contains(read("settings.js"), "telegram: 'thongbao'") {
+		t.Error("settings.js thiếu telegram: 'thongbao' trong SETUP_SEC")
+	}
+	if !strings.Contains(read("setup-ai.js"), "notify.tg:") {
+		t.Error("setup-ai.js thiếu ô notify.tg:<kind>")
+	}
+	// PIN duyệt người nhận không được đi qua data-sfield (sẽ vào DRAFT rồi bị "Lưu" ghi xuống cấu hình).
+	if strings.Contains(read("setup-telegram.js"), "pin\" data-sfield") || strings.Contains(read("setup-telegram.js"), "telegram.pin") {
+		t.Error("setup-telegram.js để PIN đi qua data-sfield")
+	}
+}

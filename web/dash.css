@@ -755,3 +755,4 @@ button.sub { text-align: left; text-decoration: underline dotted; text-underline
   .rthumb { height: 62px; }
   .ssearch { flex-basis: 100%; }
 }
+.tgk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); }
