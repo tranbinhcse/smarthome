@@ -25,7 +25,8 @@ func OpenDB(path string) (*DB, error) {
 CREATE TABLE IF NOT EXISTS samples(ts INTEGER NOT NULL, id TEXT NOT NULL, v REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS samples_id_ts ON samples(id, ts);
 CREATE TABLE IF NOT EXISTS tokens(token TEXT PRIMARY KEY, created INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS settings(ns TEXT PRIMARY KEY, json TEXT NOT NULL);`)
+CREATE TABLE IF NOT EXISTS settings(ns TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS telegram_chats(id INTEGER PRIMARY KEY, name TEXT NOT NULL, added INTEGER NOT NULL);`)
 	if err != nil {
 		return nil, err
 	}
