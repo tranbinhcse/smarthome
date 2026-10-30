@@ -393,10 +393,10 @@ func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
 	}
 	fail := func(msg string) { writeJSON(w, map[string]any{"ok": false, "message": msg}) }
 	if b.Kind == "rtsp" { // chụp một khung thật qua go2rtc: sai đường dẫn, mật khẩu hay mẫu hãng đều hỏng ở đây
+		c.rtspTest.Lock() // đồng hồ 10 giây tính từ lúc tới lượt, không tính lúc chờ lần thử trước
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		c.rtspTest.Lock()
 		_, _, se := c.grabFrame(ctx, "_camtest", b.rtsp(true))
+		cancel()
 		c.rtspTest.Unlock()
 		if se != nil {
 			if se.msg == "go2rtc chưa chạy" {
