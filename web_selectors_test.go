@@ -214,3 +214,35 @@ func TestTelegramHintsAccurate(t *testing.T) {
 		}
 	}
 }
+
+// Camera nối thẳng: mục Camera gọi đúng route, mật khẩu camera không đi qua data-sfield/DRAFT, mọi thẻ ?v= trong index.html cùng một giá trị.
+func TestCameraSetupWired(t *testing.T) {
+	read := func(f string) string {
+		b, err := os.ReadFile(filepath.Join("web", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	js := read("setup-camera.js")
+	for _, p := range []string{"/api/cameras", "/api/cameras/scan", "/api/cameras/test"} {
+		if !strings.Contains(js, "'"+p+"'") {
+			t.Errorf("setup-camera.js không gọi %s", p)
+		}
+	}
+	for _, l := range strings.Split(js, "\n") {
+		if strings.Contains(l, "cam-pass") && (strings.Contains(l, "data-sfield") || strings.Contains(l, "sinput")) {
+			t.Errorf("ô mật khẩu camera đi qua data-sfield: %s", strings.TrimSpace(l))
+		}
+	}
+	if strings.Contains(js, "camera', 'pass") || strings.Contains(js, "camera.pass") {
+		t.Error("setup-camera.js để mật khẩu camera vào bản nháp chung")
+	}
+	vs := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\?v=(\d+)`).FindAllStringSubmatch(read("index.html"), -1) {
+		vs[m[1]] = true
+	}
+	if len(vs) != 1 {
+		t.Errorf("index.html phải dùng một ?v= duy nhất, đang có %d giá trị", len(vs))
+	}
+}
