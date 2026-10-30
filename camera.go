@@ -33,11 +33,12 @@ import (
 // không có thì NVR_HOST/NVR_USER/NVR_PASS trong .env. go2rtc không giữ tài khoản: hubd đưa nguồn RTSP mỗi lần mở luồng.
 // Camera = thiết bị có `channel` (số kênh trên đầu ghi); luồng go2rtc tên ch<kênh>.
 type cams struct {
-	db     *DB
-	go2rtc *url.URL
-	byID   map[string]Device
-	direct map[string]bool // id thiết bị camera nối thẳng (không có channel); bản ghi đọc từ camstore mỗi lần dùng
-	token  string          // HUBD_CAMERA_TOKEN: hikbridge đọc cấu hình đầu ghi qua /api/service/nvr; rỗng = tắt
+	db        *DB
+	go2rtc    *url.URL
+	byID      map[string]Device
+	testSlots chan struct{}   // giới hạn camTestMax lần Thử kết nối cùng lúc (camstore.go)
+	direct    map[string]bool // id thiết bị camera nối thẳng (không có channel); bản ghi đọc từ camstore mỗi lần dùng
+	token     string          // HUBD_CAMERA_TOKEN: hikbridge đọc cấu hình đầu ghi qua /api/service/nvr; rỗng = tắt
 
 	mu      sync.Mutex
 	clients map[string]*http.Client                                  // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
@@ -54,7 +55,7 @@ var snapPaths = []string{"/ISAPI/Streaming/channels/%d01/picture", "/ISAPI/Conte
 
 func newCams(devs []Device, db *DB) *cams {
 	c := &cams{db: db, byID: map[string]Device{}, token: os.Getenv("HUBD_CAMERA_TOKEN"), clients: map[string]*http.Client{},
-		direct: map[string]bool{}, snaps: map[string]snapEntry{}, flights: map[string]*snapFlight{}}
+		direct: map[string]bool{}, testSlots: make(chan struct{}, camTestMax), snaps: map[string]snapEntry{}, flights: map[string]*snapFlight{}}
 	g := os.Getenv("GO2RTC_URL")
 	if g == "" {
 		g = "http://go2rtc:1984" // chỉ trong mạng Docker, không mở ra LAN
@@ -102,7 +103,9 @@ func (c *cams) clientFor(host, user, pass string) *http.Client {
 	defer c.mu.Unlock()
 	k := host + "\n" + user + "\n" + pass
 	if c.clients[k] == nil { // ponytail: mỗi tài khoản đã thử một mục, mất khi hubd khởi động lại; đủ cho nhập tay
-		c.clients[k] = &http.Client{Timeout: 10 * time.Second, Transport: &isapi.Transport{User: user, Pass: pass}}
+		c.clients[k] = &http.Client{Timeout: 10 * time.Second, Transport: &isapi.Transport{User: user, Pass: pass},
+			// đầu ghi/camera không cần chuyển hướng; theo 30x thì Digest có thể bị gửi sang máy khác
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	return c.clients[k]
 }

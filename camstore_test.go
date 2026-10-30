@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -471,5 +472,128 @@ func TestCamerasScanRoutes(t *testing.T) {
 	}
 	if w := call(mux, "GET", "/api/cameras/scan", "", "", ck); w.Code != 200 || !strings.Contains(w.Body.String(), `"found":[]`) {
 		t.Fatalf("GET: %d %s", w.Code, w.Body)
+	}
+}
+
+// Quét qua route: 202 rồi 409 khi đang quét, GET thấy kết quả sau khi xong; Running không kẹt khi quét lỗi.
+func TestCamerasScanRouteLifecycle(t *testing.T) {
+	var sc *camScan
+	camScanHook = func(s *camScan) { sc = s }
+	defer func() { camScanHook = nil }()
+	h, mux, ck := apiEnv(t)
+	h.db.PutSetting("camera", map[string]any{"lan_cidr": "192.168.1.0/24"})
+	f := newScanFakes(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	sc.hostsOf = func(string) ([]string, error) { return []string{"10.0.0.1"}, nil }
+	sc.dial = func(ctx context.Context, n, a string) (net.Conn, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return f.dial(ctx, n, a)
+	}
+	if w := call(mux, "POST", "/api/cameras/scan", "", "", ck); w.Code != 202 {
+		t.Fatalf("POST đầu: %d %s", w.Code, w.Body)
+	}
+	<-started
+	if w := call(mux, "POST", "/api/cameras/scan", "", "", ck); w.Code != 409 {
+		t.Fatalf("POST khi đang quét: %d %s", w.Code, w.Body)
+	}
+	if w := call(mux, "GET", "/api/cameras/scan", "", "", ck); !strings.Contains(w.Body.String(), `"running":true`) {
+		t.Fatalf("GET đang quét: %s", w.Body)
+	}
+	close(release)
+	var out scanStatus
+	for i := 0; i < 100; i++ {
+		w := call(mux, "GET", "/api/cameras/scan", "", "", ck)
+		json.Unmarshal(w.Body.Bytes(), &out)
+		if !out.Running {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if out.Running || len(out.Found) != 1 || out.Found[0].Kind != "onvif" || out.Error != "" {
+		t.Fatalf("kết quả: %+v", out)
+	}
+	// quét panic: Running phải được gỡ và có lời báo lỗi
+	sc.dial = func(context.Context, string, string) (net.Conn, error) { panic("hỏng") }
+	sc.hostsOf = func(string) ([]string, error) { return []string{"10.0.0.1"}, nil }
+	if w := call(mux, "POST", "/api/cameras/scan", "", "", ck); w.Code != 202 {
+		t.Fatalf("POST panic: %d", w.Code)
+	}
+	for i := 0; i < 100; i++ {
+		json.Unmarshal(call(mux, "GET", "/api/cameras/scan", "", "", ck).Body.Bytes(), &out)
+		if !out.Running {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if out.Running || out.Error == "" {
+		t.Fatalf("sau panic: %+v", out)
+	}
+	if w := call(mux, "POST", "/api/cameras/scan", "", "", ck); w.Code != 202 {
+		t.Fatalf("POST sau panic phải nhận lại được: %d", w.Code)
+	}
+}
+
+// Thử kết nối: tối đa 4 lần cùng lúc, lần thừa 429.
+func TestCamerasTestConcurrencyCap(t *testing.T) {
+	_, mux, ck := apiEnv(t)
+	release := make(chan struct{})
+	arrived := make(chan struct{}, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	u, _ := url.Parse(srv.URL)
+	p, _ := strconv.Atoi(u.Port())
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			call(mux, "POST", "/api/cameras/test", testBody("127.0.0.1", p, ""), "", ck)
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		select {
+		case <-arrived:
+		case <-time.After(3 * time.Second):
+			t.Fatal("4 lần thử đầu chưa tới camera giả")
+		}
+	}
+	w := call(mux, "POST", "/api/cameras/test", testBody("127.0.0.1", p, ""), "", ck)
+	if w.Code != 429 || !strings.Contains(w.Body.String(), "Đang thử") {
+		t.Fatalf("lần thứ 5: %d %s", w.Code, w.Body)
+	}
+	release <- struct{}{}
+	release <- struct{}{}
+	release <- struct{}{}
+	release <- struct{}{}
+	wg.Wait()
+}
+
+// Camera trả 30x tới máy khác: không theo, máy kia không nhận gì (digest không được gửi sang máy lạ).
+func TestCamerasTestDoesNotFollowRedirect(t *testing.T) {
+	_, mux, ck := apiEnv(t)
+	var hits int
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer b.Close()
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, b.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer a.Close()
+	u, _ := url.Parse(a.URL)
+	p, _ := strconv.Atoi(u.Port())
+	w := call(mux, "POST", "/api/cameras/test", testBody("127.0.0.1", p, `,"pass":"x"`), "", ck)
+	if hits != 0 || !strings.Contains(w.Body.String(), `"ok":false`) {
+		t.Fatalf("chuyển hướng: hits=%d %s", hits, w.Body)
 	}
 }

@@ -263,6 +263,11 @@ func (c camRec) snapURL() string {
 
 // mountCameras: API trang Cài đặt → Camera nối thẳng. Mọi route cần phiên đăng nhập (cookie); token trợ lý không dùng được.
 // Lời báo lỗi cho trình duyệt là tiếng Việt, không kèm lỗi DB thô, địa chỉ hay mật khẩu (chi tiết ghi log phía hub).
+// camScanHook: test lấy bộ dò mountCameras vừa dựng để tiêm máy chủ giả.
+var camScanHook func(*camScan)
+
+const camTestMax = 4
+
 func mountCameras(mux *http.ServeMux, c *cams, h *Hub, a *Auth) {
 	zoneOK := func(z string) bool { // theo cấu hình đang chạy; phòng mới thêm có hiệu lực sau khi hub khởi động lại
 		for _, x := range h.cfg.Zones {
@@ -336,13 +341,24 @@ func mountCameras(mux *http.ServeMux, c *cams, h *Hub, a *Auth) {
 	}))
 	mux.HandleFunc("POST /api/cameras/test", a.Require(c.camTest))
 	sc := newCamScan(c)
+	if camScanHook != nil {
+		camScanHook(sc)
+	}
 	mux.HandleFunc("POST /api/cameras/scan", a.Require(sc.post))
 	mux.HandleFunc("GET /api/cameras/scan", a.Require(sc.get))
 }
 
-// camTest: nút "Thử kết nối". Ô mật khẩu để trống mà có id thì dùng mật khẩu đã lưu, chỉ khi host không đổi
+// camTest: nút "Thử kết nối". Chủ nhà đã đăng nhập (PIN) được thử mọi địa chỉ:cổng với đường dẫn cố định và hạn 10 giây;
+// quyết định chấp nhận, bù lại tối đa camTestMax lần cùng lúc. Ô mật khẩu để trống mà có id thì dùng mật khẩu đã lưu, chỉ khi host không đổi
 // (không gửi mật khẩu cũ tới máy khác). Kết quả luôn là JSON; câu báo không chứa địa chỉ hay mật khẩu.
 func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
+	select {
+	case c.testSlots <- struct{}{}:
+		defer func() { <-c.testSlots }()
+	default:
+		http.Error(w, "Đang thử kết nối nhiều camera cùng lúc, đợi một lát rồi thử lại", http.StatusTooManyRequests)
+		return
+	}
 	var b camRec
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b) != nil {
 		http.Error(w, "cần JSON {host, http_port, rtsp_port, user, pass, kind, id?}", 400)

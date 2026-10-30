@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -122,6 +123,11 @@ func (s *camScan) start() (int, string) {
 	cidr, _ := s.c.db.Setting("camera")["lan_cidr"].(string)
 	hosts, err := s.hostsOf(cidr)
 	if err != nil {
+		s.mu.Lock()
+		if !s.st.Running {
+			s.st = scanStatus{Found: []scanHit{}, Error: err.Error()}
+		}
+		s.mu.Unlock()
 		return 400, err.Error()
 	}
 	s.mu.Lock()
@@ -131,7 +137,17 @@ func (s *camScan) start() (int, string) {
 	}
 	s.st = scanStatus{Running: true, Found: []scanHit{}}
 	s.mu.Unlock()
-	go s.run(s.scanHosts(hosts))
+	go func() {
+		defer func() { // panic cũng phải gỡ cờ Running, không thì không quét lại được
+			if r := recover(); r != nil {
+				log.Printf("dò camera: lỗi %v", r)
+				s.mu.Lock()
+				s.st = scanStatus{Found: []scanHit{}, Error: "Dò camera gặp lỗi, thử lại"}
+				s.mu.Unlock()
+			}
+		}()
+		s.run(s.scanHosts(hosts))
+	}()
 	return 202, ""
 }
 
@@ -146,13 +162,21 @@ func (s *camScan) run(hosts []string) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, scanMaxConc)
 	var mu sync.Mutex
+	var failed atomic.Bool
 	best := map[string]scanHit{} // mỗi máy một kết quả: hik_cam hơn onvif
 	for _, h := range hosts {
 		for _, p := range s.ports {
 			wg.Add(1)
 			sem <- struct{}{}
 			go func(h string, p int) {
-				defer func() { <-sem; wg.Done() }()
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("dò camera: lỗi %v", r)
+						failed.Store(true)
+					}
+					<-sem
+					wg.Done()
+				}()
 				hit, ok := s.probe(cl, h, p)
 				if !ok {
 					return
@@ -174,6 +198,9 @@ func (s *camScan) run(hosts []string) {
 	}
 	s.mu.Lock()
 	s.st = scanStatus{Found: found}
+	if failed.Load() {
+		s.st.Error = "Dò camera gặp lỗi, thử lại"
+	}
 	s.mu.Unlock()
 }
 
