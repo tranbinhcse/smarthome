@@ -40,6 +40,8 @@ type cams struct {
 	direct    map[string]bool // id thiết bị camera nối thẳng (không có channel); bản ghi đọc từ camstore mỗi lần dùng
 	token     string          // HUBD_CAMERA_TOKEN: hikbridge đọc cấu hình đầu ghi qua /api/service/nvr; rỗng = tắt
 
+	rtspTest sync.Mutex // Thử RTSP dùng chung luồng go2rtc _camtest: chạy lần lượt để không lấy nhầm hình của nhau
+
 	mu      sync.Mutex
 	clients map[string]*http.Client                                  // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
 	fetch   func(context.Context, camRec) ([]byte, string, *snapErr) // nil = theo loại camera; test thay để mô phỏng lỗi

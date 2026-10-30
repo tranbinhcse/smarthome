@@ -395,7 +395,10 @@ func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
 	if b.Kind == "rtsp" { // chụp một khung thật qua go2rtc: sai đường dẫn, mật khẩu hay mẫu hãng đều hỏng ở đây
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		if _, _, se := c.grabFrame(ctx, "_camtest", b.rtsp(true)); se != nil {
+		c.rtspTest.Lock()
+		_, _, se := c.grabFrame(ctx, "_camtest", b.rtsp(true))
+		c.rtspTest.Unlock()
+		if se != nil {
 			if se.msg == "go2rtc chưa chạy" {
 				fail("go2rtc chưa chạy: hub chưa thử được camera RTSP, kiểm tra dịch vụ go2rtc")
 			} else {
