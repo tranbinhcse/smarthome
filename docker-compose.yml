@@ -45,6 +45,7 @@ services:
       # Nhạc trên hub (mục 18.3, music.go): file MP3 trong ./music và USB tự gắn dưới /media; đầu nhận Snapcast nối cổng 1704.
       HUBD_MUSIC_DIRS: /music:/media
       HUBD_SNAP_LISTEN: ":1704"
+      HUBD_REC_DIR: /rec
     volumes:
       - ./config.yaml:/data/config.yaml:ro
       - ./music:/music:ro
@@ -52,6 +53,12 @@ services:
       - tuya-state:/gen   # tuya.yaml do tuya-bridge sinh (energy.json bên cạnh chỉ là số kWh); hubd chỉ ghi camera.yaml
       - hubd-db:/db
       - ./tls:/tls:ro
+      # Ổ ghi hình camera: gắn ổ cứng riêng vào /srv/hubd-video của máy chủ rồi chạy lại `docker compose up -d hubd`.
+      # Thư mục tự tạo trên ổ hệ thống bị recDiskCheck từ chối (không ghi đầy ổ hệ thống).
+      - type: bind
+        source: ${HUBD_REC_HOST:-/srv/hubd-video}
+        target: /rec
+        bind: {create_host_path: true}
       # Loa Bluetooth (hubout.go): bluetoothd của máy chủ qua D-Bus hệ thống. hubd chạy root nên chỉ gắn socket này cùng profile
       # AppArmor inix-hubd (bên dưới), không bao giờ cùng apparmor=unconfined. create_host_path: false: thiếu thì báo lỗi.
       - { type: bind, source: /run/dbus/system_bus_socket, target: /run/dbus/system_bus_socket, bind: { create_host_path: false } }

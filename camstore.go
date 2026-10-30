@@ -447,3 +447,13 @@ func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"ok": true, "model": di.Model, "firmware": di.Firmware})
 }
+
+// camPolicies: chính sách ghi hình theo id camera nối thẳng (Task 5 thêm chế độ riêng từng camera).
+func camPolicies(db *DB) map[string]recPolicy {
+	out := map[string]recPolicy{}
+	cams, _ := camList(db)
+	for _, c := range cams {
+		out[c.ID] = recPolicy{Mode: "always"}
+	}
+	return out
+}

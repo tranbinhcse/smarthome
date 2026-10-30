@@ -183,6 +183,8 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	hub.music = mountMusic(mux, hub, auth)
 	mountNodes(mux, hub, auth)
 	mountNotify(mux, hub, auth)
+	cfgPath := os.Getenv("HUBD_CONFIG")
+	mountRecStorage(mux, hub.db, auth, func() recDisk { return recDiskCheck(os.Getenv("HUBD_REC_DIR"), cfgPath) })
 	if hub.tg != nil {
 		mountTelegram(mux, hub.tg, auth)
 	}
