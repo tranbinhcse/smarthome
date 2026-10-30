@@ -2,14 +2,18 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -586,5 +590,222 @@ func TestCamGenKeepsFileOnStoreError(t *testing.T) {
 	}
 	if got := genIDs(t, dir); !reflect.DeepEqual(got, []string{a.ID}) {
 		t.Fatalf("file bị đổi khi lỗi DB: %v", got)
+	}
+}
+
+// ---- camera nối thẳng: ảnh chụp và xem trực tiếp ----
+
+const camPass = "mat-khau-cam-9"
+
+// Camera ISAPI giả: Digest; ok=false thì từ chối mọi mật khẩu. n đếm yêu cầu đã kèm Authorization.
+func fakeHikCam(t *testing.T, n *int, ok bool) *httptest.Server {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" || !ok {
+			if r.Header.Get("Authorization") != "" {
+				*n++
+			}
+			w.Header().Set("WWW-Authenticate", `Digest realm="CAM", nonce="n1", qop="auth"`)
+			w.WriteHeader(401)
+			return
+		}
+		*n++
+		if r.URL.Path != "/ISAPI/Streaming/channels/101/picture" {
+			t.Errorf("đường dẫn ảnh: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(jpeg)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func hikRec(t *testing.T, name string, srv *httptest.Server) camRec {
+	u, _ := url.Parse(srv.URL)
+	p, _ := strconv.Atoi(u.Port())
+	return camRec{Name: name, Zone: "kho", Kind: "hik_cam", Host: u.Hostname(), HTTPPort: p, User: "admin", Pass: camPass}
+}
+
+// directEnv: hub có thiết bị camera nối thẳng (id lưu trong kho) và cams dùng chung kho đó.
+func directEnv(t *testing.T, recs ...camRec) (*cams, http.Handler, *http.Cookie, []string) {
+	db := camTestDB(t)
+	var devs []Device
+	var ids []string
+	for _, r := range recs {
+		s, err := camSave(db, r, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, s.ID)
+		devs = append(devs, Device{ID: s.ID, Name: s.Name, Kind: "camera", Zone: s.Zone})
+	}
+	devs = append(devs, Device{ID: "cam_da_xoa", Name: "Đã xoá", Kind: "camera", Zone: "kho"}) // có thiết bị, không có trong kho
+	c := newCams(devs, db)
+	auth := NewAuth("1234", db)
+	mux := http.NewServeMux()
+	c.register(mux, auth)
+	mux.HandleFunc("POST /api/login", auth.Login)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"pin":"1234"}`)))
+	return c, mux, w.Result().Cookies()[0], ids
+}
+
+func TestDirectCamSnapshotHikvision(t *testing.T) {
+	var hits int
+	cam := fakeHikCam(t, &hits, true)
+	c, mux, ck, ids := directEnv(t, hikRec(t, "Cổng", cam))
+	for i := 0; i < 3; i++ {
+		w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
+		if w.Code != 200 || w.Body.String() != string(jpeg) || w.Header().Get("Content-Type") != "image/jpeg" {
+			t.Fatalf("lần %d: code=%d type=%q body=%q", i, w.Code, w.Header().Get("Content-Type"), w.Body)
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("3 lần xem trong 10 giây mà camera nhận %d lần, muốn 1", hits)
+	}
+	b, ct, err := c.freshSnapshot(context.Background(), ids[0])
+	if err != nil || string(b) != string(jpeg) || ct != "image/jpeg" || hits != 2 {
+		t.Fatalf("freshSnapshot: %q %q %v, camera nhận %d lần, muốn 2", b, ct, err, hits)
+	}
+	// hết hạn bộ đệm thì gọi lại camera
+	c.mu.Lock()
+	e := c.snaps[ids[0]]
+	e.at = e.at.Add(-11 * time.Second)
+	c.snaps[ids[0]] = e
+	c.mu.Unlock()
+	get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
+	if hits != 3 {
+		t.Fatalf("bộ đệm hết hạn mà camera nhận %d lần, muốn 3", hits)
+	}
+	if get(mux, "/api/cam/"+ids[0]+"/snapshot", nil).Code != 401 {
+		t.Fatal("chưa đăng nhập vẫn lấy được ảnh")
+	}
+}
+
+func TestDirectCamSnapshotRTSPViaGo2rtc(t *testing.T) {
+	var seen []string
+	var srcs []string
+	g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		switch r.Method + " " + r.URL.Path {
+		case "PUT /api/streams":
+			srcs = append(srcs, r.URL.Query().Get("name"), r.URL.Query().Get("src"))
+		case "GET /api/frame.jpeg":
+			if r.URL.Query().Get("src") != srcs[0] {
+				t.Errorf("frame.jpeg src=%q", r.URL.Query().Get("src"))
+			}
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Write(jpeg)
+		}
+	}))
+	defer g2.Close()
+	t.Setenv("GO2RTC_URL", g2.URL)
+	rec := camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", User: "u", Pass: "p@ss/1", MainPath: "/main", SubPath: "/sub?x=1"}
+	_, mux, ck, ids := directEnv(t, rec)
+	w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
+	rec.ID = ids[0]
+	rec.RTSPPort = 554
+	if w.Code != 200 || w.Body.String() != string(jpeg) || !reflect.DeepEqual(seen, []string{"PUT /api/streams", "GET /api/frame.jpeg"}) ||
+		srcs[0] != ids[0] || srcs[1] != rec.rtsp(true) || !strings.HasSuffix(srcs[1], "/sub?x=1") {
+		t.Fatalf("code=%d seen=%v srcs=%v", w.Code, seen, srcs)
+	}
+	if strings.Contains(w.Body.String(), "p@ss") {
+		t.Fatal("lộ mật khẩu")
+	}
+}
+
+// Camera từ chối mật khẩu thì hub không gửi lại cùng tài khoản (camera khoá IP của hub) và không mở luồng.
+func TestDirectCamLockoutStopsRetries(t *testing.T) {
+	var badHits, goodHits, g2Hits int
+	bad, good := fakeHikCam(t, &badHits, false), fakeHikCam(t, &goodHits, true)
+	g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { g2Hits++ }))
+	defer g2.Close()
+	t.Setenv("GO2RTC_URL", g2.URL)
+	_, mux, ck, ids := directEnv(t, hikRec(t, "Sai", bad), hikRec(t, "Đúng", good))
+	// ids sắp theo thứ tự lưu: Sai, Đúng
+	w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
+	if w.Code != 502 || strings.Contains(w.Body.String(), camPass) || strings.Contains(w.Body.String(), "127.0.0.1") {
+		t.Fatalf("ảnh với mật khẩu sai: code=%d body=%q", w.Code, w.Body)
+	}
+	n := badHits
+	if w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck); w.Code != 503 || badHits != n {
+		t.Fatalf("lần hai: code=%d, camera nhận thêm %d yêu cầu", w.Code, badHits-n)
+	}
+	if w := get(mux, "/api/cam/"+ids[0]+"/ws", ck); w.Code != 503 || g2Hits != 0 {
+		t.Fatalf("ws khi đang bị khoá: code=%d go2rtc=%d, muốn 503 và 0", w.Code, g2Hits)
+	}
+	if w := get(mux, "/api/cam/"+ids[1]+"/snapshot", ck); w.Code != 200 {
+		t.Fatalf("camera khác bị ảnh hưởng: code=%d", w.Code)
+	}
+}
+
+func TestDirectCamUnknownID(t *testing.T) {
+	_, mux, ck, _ := directEnv(t, camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", MainPath: "/m"})
+	for _, id := range []string{"cam_da_xoa", "khong_co", "cam3"} {
+		for _, p := range []string{"snapshot", "ws"} {
+			if w := get(mux, "/api/cam/"+id+"/"+p, ck); w.Code != 404 || !strings.Contains(w.Body.String(), "không có camera") {
+				t.Errorf("%s %s: code=%d body=%q", id, p, w.Code, w.Body)
+			}
+		}
+	}
+}
+
+func TestDirectCamLiveSrc(t *testing.T) {
+	var q url.Values
+	var n int
+	g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		q = r.URL.Query()
+		io.WriteString(w, "ok")
+	}))
+	defer g2.Close()
+	t.Setenv("GO2RTC_URL", g2.URL)
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	var hits int
+	cam := fakeHikCam(t, &hits, true)
+	_, mux, ck, ids := directEnv(t, hikRec(t, "Cổng", cam),
+		camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", User: "u", Pass: camPass, MainPath: "/m", SubPath: "/s"})
+	r := httptest.NewRequest("GET", "/api/cam/"+ids[0]+"/ws?src=exec:rm", nil)
+	r.AddCookie(ck)
+	r.Header.Set("Origin", "http://example.com")
+	r.Host = "example.com"
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	host, port, _ := net.SplitHostPort(strings.TrimPrefix(cam.URL, "http://"))
+	_ = port
+	if w.Code != 200 || n != 1 || len(q) != 2 || q.Get("name") != ids[0] || q.Get("src") != "rtsp://admin:"+camPass+"@"+host+":554/Streaming/Channels/102" {
+		t.Fatalf("code=%d n=%d query=%v", w.Code, n, q)
+	}
+	r = httptest.NewRequest("GET", "/api/cam/"+ids[1]+"/ws", nil)
+	r.AddCookie(ck)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if q.Get("name") != ids[1] || q.Get("src") != "rtsp://u:"+camPass+"@192.168.1.51:554/s" {
+		t.Fatalf("rtsp: query=%v", q)
+	}
+	r = httptest.NewRequest("GET", "/api/cam/"+ids[1]+"/ws", nil)
+	r.AddCookie(ck)
+	r.Header.Set("Origin", "http://evil.example")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 403 || n != 2 {
+		t.Fatalf("Origin lạ: code=%d n=%d", w.Code, n)
+	}
+	if strings.Contains(logs.String(), camPass) || strings.Contains(w.Body.String(), camPass) {
+		t.Fatalf("lộ mật khẩu: log=%q", logs.String())
+	}
+}
+
+// Camera hỏng không để lộ mật khẩu hay lỗi go2rtc ra log (URL go2rtc mang nguồn RTSP có mật khẩu).
+func TestDirectCamRTSPErrorsDoNotLeakPassword(t *testing.T) {
+	t.Setenv("GO2RTC_URL", "http://127.0.0.1:1")
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	_, mux, ck, ids := directEnv(t, camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", User: "u", Pass: camPass, MainPath: "/m"})
+	w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
+	if w.Code != 502 || strings.Contains(logs.String()+w.Body.String(), camPass) {
+		t.Fatalf("code=%d body=%q log=%q", w.Code, w.Body, logs.String())
 	}
 }

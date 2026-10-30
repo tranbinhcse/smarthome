@@ -36,10 +36,12 @@ type cams struct {
 	db     *DB
 	go2rtc *url.URL
 	byID   map[string]Device
-	token  string // HUBD_CAMERA_TOKEN: hikbridge đọc cấu hình đầu ghi qua /api/service/nvr; rỗng = tắt
+	direct map[string]bool // id thiết bị camera nối thẳng (không có channel); bản ghi đọc từ camstore mỗi lần dùng
+	token  string          // HUBD_CAMERA_TOKEN: hikbridge đọc cấu hình đầu ghi qua /api/service/nvr; rỗng = tắt
 
 	mu      sync.Mutex
 	clients map[string]*http.Client // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
+	snaps   map[string]snapEntry    // ảnh mới nhất của camera nối thẳng, giữ snapTTL
 	snapAt  atomic.Int32            // chỉ số trong snapPaths mà đầu ghi trả ảnh lần gần nhất
 }
 
@@ -49,7 +51,8 @@ var snapPaths = []string{"/ISAPI/Streaming/channels/%d01/picture", "/ISAPI/Conte
 	"/ISAPI/Streaming/channels/%d02/picture"}
 
 func newCams(devs []Device, db *DB) *cams {
-	c := &cams{db: db, byID: map[string]Device{}, token: os.Getenv("HUBD_CAMERA_TOKEN"), clients: map[string]*http.Client{}}
+	c := &cams{db: db, byID: map[string]Device{}, token: os.Getenv("HUBD_CAMERA_TOKEN"), clients: map[string]*http.Client{},
+		direct: map[string]bool{}, snaps: map[string]snapEntry{}}
 	g := os.Getenv("GO2RTC_URL")
 	if g == "" {
 		g = "http://go2rtc:1984" // chỉ trong mạng Docker, không mở ra LAN
@@ -58,6 +61,8 @@ func newCams(devs []Device, db *DB) *cams {
 	for _, d := range devs {
 		if d.Channel > 0 {
 			c.byID[d.ID] = d
+		} else if d.Kind == "camera" {
+			c.direct[d.ID] = true
 		}
 	}
 	return c
@@ -86,12 +91,16 @@ func (c *cams) conf() nvrConf {
 	return n
 }
 
-func (c *cams) client(n nvrConf) *http.Client {
+func (c *cams) client(n nvrConf) *http.Client { return c.clientFor(n.Host, n.User, n.Pass) }
+
+// clientFor: một client digest cho mỗi (địa chỉ, tài khoản, mật khẩu), đầu ghi hay camera nối thẳng. Bị từ chối mật
+// khẩu thì chỉ client đó tạm ngừng; đầu ghi và camera khác không bị ảnh hưởng.
+func (c *cams) clientFor(host, user, pass string) *http.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	k := n.Host + "\n" + n.User + "\n" + n.Pass
+	k := host + "\n" + user + "\n" + pass
 	if c.clients[k] == nil { // ponytail: mỗi tài khoản đã thử một mục, mất khi hubd khởi động lại; đủ cho nhập tay
-		c.clients[k] = &http.Client{Timeout: 10 * time.Second, Transport: &isapi.Transport{User: n.User, Pass: n.Pass}}
+		c.clients[k] = &http.Client{Timeout: 10 * time.Second, Transport: &isapi.Transport{User: user, Pass: pass}}
 	}
 	return c.clients[k]
 }
@@ -107,7 +116,7 @@ func (c *cams) register(mux *http.ServeMux, auth *Auth) {
 func (c *cams) snapshot(w http.ResponseWriter, r *http.Request) {
 	d, ok := c.byID[r.PathValue("id")]
 	if !ok {
-		http.Error(w, "không có camera này", 404)
+		c.directSnapshot(w, r)
 		return
 	}
 	n := c.conf()
@@ -168,7 +177,7 @@ func isapiReason(b []byte) string {
 func (c *cams) live(w http.ResponseWriter, r *http.Request) {
 	d, ok := c.byID[r.PathValue("id")]
 	if !ok {
-		http.Error(w, "không có camera này", 404)
+		c.directLive(w, r)
 		return
 	}
 	n := c.conf()
@@ -182,13 +191,8 @@ func (c *cams) live(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "đầu ghi vừa từ chối tài khoản, kiểm tra mật khẩu trong Cài đặt → Camera", 503)
 		return
 	}
-	// WebSocket không chịu CORS, và với địa chỉ IP mọi cổng cùng máy là cùng "site" nên cookie PIN vẫn được gửi:
-	// chỉ nhận trang của chính hubd.
-	if o := r.Header.Get("Origin"); o != "" {
-		if u, err := url.Parse(o); err != nil || !strings.EqualFold(u.Host, r.Host) {
-			http.Error(w, "nguồn không hợp lệ", 403)
-			return
-		}
+	if !originOK(w, r) {
+		return
 	}
 	h := n.Host
 	if hh, _, err := net.SplitHostPort(h); err == nil {
@@ -197,6 +201,18 @@ func (c *cams) live(w http.ResponseWriter, r *http.Request) {
 	src := url.URL{Scheme: "rtsp", User: url.UserPassword(n.User, n.Pass), Host: net.JoinHostPort(h, "554"),
 		Path: fmt.Sprintf("/Streaming/Channels/%d02", d.Channel)} // luồng phụ H.264
 	c.proxy(w, r, "/api/ws", url.Values{"name": {"ch" + strconv.Itoa(d.Channel)}, "src": {src.String()}}.Encode())
+}
+
+// WebSocket không chịu CORS, và với địa chỉ IP mọi cổng cùng máy là cùng "site" nên cookie PIN vẫn được gửi:
+// chỉ nhận trang của chính hubd.
+func originOK(w http.ResponseWriter, r *http.Request) bool {
+	if o := r.Header.Get("Origin"); o != "" {
+		if u, err := url.Parse(o); err != nil || !strings.EqualFold(u.Host, r.Host) {
+			http.Error(w, "nguồn không hợp lệ", 403)
+			return false
+		}
+	}
+	return true
 }
 
 // js: trình phát video-rtc.js của go2rtc, lấy từ chính máy chủ go2rtc để luôn cùng phiên bản giao thức.
@@ -378,4 +394,160 @@ func syncCamGen(db *DB) bool {
 		return false
 	}
 	return true
+}
+
+// ---- Camera nối thẳng (camstore.go): bản ghi đọc từ kho mỗi lần dùng nên mật khẩu mới có hiệu lực ngay ----
+
+const snapTTL = 10 * time.Second
+
+type snapEntry struct {
+	b  []byte
+	ct string
+	at time.Time
+}
+
+// snapErr: lỗi kèm mã HTTP và câu tiếng Việt cho trình duyệt (không chứa địa chỉ, tài khoản, mật khẩu, lỗi DB).
+type snapErr struct {
+	code int
+	msg  string
+}
+
+func (e *snapErr) Error() string { return e.msg }
+
+// directRec: bản ghi của camera nối thẳng; id không là thiết bị hay đã bị xoá khỏi kho thì 404.
+func (c *cams) directRec(id string) (camRec, *snapErr) {
+	if !c.direct[id] {
+		return camRec{}, &snapErr{404, "không có camera này"}
+	}
+	rec, ok, err := camGet(c.db, id)
+	if err != nil {
+		log.Printf("camera %s: không đọc được dữ liệu: %v", id, err)
+		return camRec{}, &snapErr{500, "không đọc được dữ liệu camera"}
+	}
+	if !ok {
+		return camRec{}, &snapErr{404, "không có camera này"}
+	}
+	return rec, nil
+}
+
+// freshSnapshot: ảnh mới của camera nối thẳng, bỏ qua bộ đệm (ảnh báo động); cập nhật bộ đệm.
+func (c *cams) freshSnapshot(ctx context.Context, id string) ([]byte, string, error) {
+	return c.directSnap(ctx, id, true)
+}
+
+func (c *cams) directSnap(ctx context.Context, id string, fresh bool) ([]byte, string, error) {
+	rec, se := c.directRec(id)
+	if se != nil {
+		return nil, "", se
+	}
+	if !fresh {
+		c.mu.Lock()
+		e, ok := c.snaps[id]
+		c.mu.Unlock()
+		if ok && time.Since(e.at) < snapTTL {
+			return e.b, e.ct, nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var b []byte
+	var ct string
+	if rec.Kind == "rtsp" {
+		b, ct, se = c.snapRTSP(ctx, rec)
+	} else {
+		b, ct, se = c.snapHik(ctx, rec)
+	}
+	if se != nil {
+		return nil, "", se
+	}
+	c.mu.Lock()
+	c.snaps[id] = snapEntry{b, ct, time.Now()} // ponytail: không dọn mục camera đã xoá, vài trăm KB mỗi camera đến khi khởi động lại
+	c.mu.Unlock()
+	return b, ct, nil
+}
+
+func (c *cams) snapHik(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rec.snapURL(), nil)
+	res, err := c.clientFor(net.JoinHostPort(rec.Host, strconv.Itoa(rec.HTTPPort)), rec.User, rec.Pass).Do(req)
+	if errors.Is(err, isapi.ErrLocked) {
+		return nil, "", &snapErr{503, "camera vừa từ chối tài khoản, hub tạm ngừng thử 15 phút để camera không khoá IP. Kiểm tra lại mật khẩu"}
+	}
+	if err != nil {
+		log.Printf("ảnh camera %s: không nối được", rec.ID)
+		return nil, "", &snapErr{502, "không kết nối được camera"}
+	}
+	defer res.Body.Close()
+	ct := res.Header.Get("Content-Type")
+	if res.StatusCode != 200 || !strings.HasPrefix(ct, "image/") {
+		log.Printf("ảnh camera %s: HTTP %d", rec.ID, res.StatusCode)
+		if res.StatusCode == 401 {
+			return nil, "", &snapErr{502, "camera từ chối tài khoản hoặc mật khẩu (hub tạm ngừng thử 15 phút)"}
+		}
+		return nil, "", &snapErr{502, "camera không trả ảnh"}
+	}
+	b, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	return b, ct, nil
+}
+
+// snapRTSP: nhờ go2rtc nhận luồng phụ rồi chụp một khung. Lỗi mạng của http.Client chứa URL (có mật khẩu) nên không ghi log.
+func (c *cams) snapRTSP(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
+	do := func(method, path string, q url.Values) (*http.Response, *snapErr) {
+		u := *c.go2rtc
+		u.Path, u.RawQuery = path, q.Encode()
+		req, _ := http.NewRequestWithContext(ctx, method, u.String(), nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("ảnh camera %s: go2rtc không trả lời", rec.ID)
+			return nil, &snapErr{502, "go2rtc chưa chạy"}
+		}
+		if res.StatusCode != 200 {
+			res.Body.Close()
+			log.Printf("ảnh camera %s: go2rtc HTTP %d", rec.ID, res.StatusCode)
+			return nil, &snapErr{502, "không lấy được ảnh từ camera"}
+		}
+		return res, nil
+	}
+	put, se := do(http.MethodPut, "/api/streams", url.Values{"name": {rec.ID}, "src": {rec.rtsp(true)}})
+	if se != nil {
+		return nil, "", se
+	}
+	put.Body.Close()
+	res, se := do(http.MethodGet, "/api/frame.jpeg", url.Values{"src": {rec.ID}})
+	if se != nil {
+		return nil, "", se
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	return b, "image/jpeg", nil
+}
+
+func (c *cams) directSnapshot(w http.ResponseWriter, r *http.Request) {
+	b, ct, err := c.directSnap(r.Context(), r.PathValue("id"), false)
+	if err != nil {
+		var se *snapErr
+		errors.As(err, &se)
+		http.Error(w, se.msg, se.code)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "private, max-age=10")
+	w.Write(b)
+}
+
+// directLive: như live của đầu ghi nhưng nguồn là luồng phụ của chính camera; go2rtc giữ luồng tên <id>.
+func (c *cams) directLive(w http.ResponseWriter, r *http.Request) {
+	rec, se := c.directRec(r.PathValue("id"))
+	if se != nil {
+		http.Error(w, se.msg, se.code)
+		return
+	}
+	// camera vừa từ chối tài khoản thì không mở luồng: go2rtc sẽ gửi lại mật khẩu sai mỗi lần trình phát nối lại
+	if rec.Kind == "hik_cam" && c.clientFor(net.JoinHostPort(rec.Host, strconv.Itoa(rec.HTTPPort)), rec.User, rec.Pass).Transport.(*isapi.Transport).Locked() {
+		http.Error(w, "camera vừa từ chối tài khoản, kiểm tra mật khẩu trong Cài đặt → Camera", 503)
+		return
+	}
+	if !originOK(w, r) {
+		return
+	}
+	c.proxy(w, r, "/api/ws", url.Values{"name": {rec.ID}, "src": {rec.rtsp(true)}}.Encode())
 }
