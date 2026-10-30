@@ -94,6 +94,8 @@ func main() {
 		}
 	}()
 
+	go runOffline(context.Background(), hub)
+
 	auth := NewAuth(pin, db)
 	auth.assistant = os.Getenv("HUBD_ASSISTANT_TOKEN")
 	mux := newMux(hub, auth)

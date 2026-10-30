@@ -70,7 +70,7 @@ func TestNotifyKindsAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
-	want := fmt.Sprint([]any{"co2", []string{"CO2 khu cafe cao", "CO2 phòng làm việc cao"}, "mua", []string{"Trời bắt đầu mưa", "Trời tạnh"}})
+	want := fmt.Sprint([]any{"thiet_bi", []string{"Thiết bị mất kết nối quá 10 phút"}, "co2", []string{"CO2 khu cafe cao", "CO2 phòng làm việc cao"}, "mua", []string{"Trời bắt đầu mưa", "Trời tạnh"}})
 	var flat []any
 	for _, k := range got {
 		flat = append(flat, k.Kind, k.Texts)
@@ -78,8 +78,8 @@ func TestNotifyKindsAPI(t *testing.T) {
 	if fmt.Sprint(flat) != want {
 		t.Fatalf("được %v, muốn %v", flat, want)
 	}
-	if b := call(newMux(NewHub(Config{}, newDB(t), func(string, string) {}), NewAuth("", nil)), "GET", "/api/notify", "", "").Body.String(); strings.TrimSpace(b) != "[]" {
-		t.Fatalf("không có luật notify phải trả [], được %s", b)
+	if b := call(newMux(NewHub(Config{}, newDB(t), func(string, string) {}), NewAuth("", nil)), "GET", "/api/notify", "", "").Body.String(); strings.Count(b, `"kind"`) != 1 || !strings.Contains(b, `"thiet_bi"`) {
+		t.Fatalf("không có luật notify chỉ còn loại có sẵn thiet_bi, được %s", b)
 	}
 }
 
