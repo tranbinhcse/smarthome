@@ -71,69 +71,96 @@ func TestRecPlanRules(t *testing.T) {
 	if got = recPlan(f, pa, recDisk{OK: false, Total: 1000}, 80); len(got.Delete) != 0 || got.Stop {
 		t.Errorf("ổ lỗi: %+v", got)
 	}
+	if got = recPlan(f, pa, recDisk{OK: true, Total: 0}, 80); len(got.Delete) != 0 || got.Stop {
+		t.Errorf("Total 0: %+v", got)
+	}
 }
 
 func TestRecPlanSweepNeverDeletesHeld(t *testing.T) {
-	heldSet := []bool{false, true}
-	limits := []int64{0, 30}
-	disks := map[string]recDisk{
-		"du":    {OK: true, Total: 1000, Free: 900},
-		"vuot":  {OK: true, Total: 100, Free: 50},
-		"duoi2": {OK: true, Total: 1000, Free: 10},
+	type disk struct {
+		name string
+		d    recDisk
 	}
-	diskNames := []string{"du", "vuot", "duoi2"}
-	positions := []string{"sole", "oldest", "middle", "newest"}
-	n := 0
+	type limit struct {
+		name string
+		v    int64
+	}
+	// position: file mục tiêu của camera a nằm ở đâu (to hơn 20 byte, các file khác 10 byte); sole = các file còn lại đều held.
+	type position struct {
+		name string
+		idx  int
+		sole bool
+	}
+	heldSet := []bool{false, true}
+	limits := []limit{{"khong", 0}, {"3file", 30}}
+	disks := []disk{
+		{"du", recDisk{OK: true, Total: 1000, Free: 900}},
+		{"vuot", recDisk{OK: true, Total: 100, Free: 50}},
+		{"duoi2", recDisk{OK: true, Total: 1000, Free: 10}},
+		{"het", recDisk{OK: true, Total: 100000, Free: 0}}, // xoá hết file thường vẫn dưới 2%
+	}
+	positions := []position{{"sole", 1, true}, {"oldest", 0, false}, {"middle", 2, false}, {"newest", 3, false}}
+	n, stops := 0, 0
 	for _, mode := range recModes {
 		for _, held := range heldSet {
 			for _, lim := range limits {
-				for _, dn := range diskNames {
+				for _, dk := range disks {
 					for _, pos := range positions {
 						n++
-						name := fmt.Sprintf("%s/held=%v/lim=%d/%s/%s", mode, held, lim, dn, pos)
-						idx := map[string]int{"sole": 1, "oldest": 0, "middle": 1, "newest": 3}[pos]
+						name := fmt.Sprintf("%s/held=%v/lim=%s/%s/%s", mode, held, lim.name, dk.name, pos.name)
 						var files []recFile
 						id := int64(0)
+						newest := map[string]int64{}
 						for _, cam := range []string{"a", "b"} {
 							for i := 0; i < 4; i++ {
 								id++
-								h := false
+								f := recMk(id, cam, i, false)
 								if cam == "a" {
-									// sole: file mục tiêu là file thường duy nhất của a
-									h = i == idx && held || pos == "sole" && i != idx
+									f.Held = i == pos.idx && held || pos.sole && i != pos.idx
+									if i == pos.idx {
+										f.Bytes = 20
+									}
 								}
-								files = append(files, recMk(id, cam, i, h))
+								files = append(files, f)
+								newest[cam] = id
 							}
 						}
+						w := []recWindow{{From: "22:00", To: "23:00"}}
 						pol := map[string]recPolicy{
-							"a": {Mode: mode, Windows: []recWindow{{From: "22:00", To: "23:00"}}, LimitBytes: lim},
-							"b": {Mode: mode, Windows: []recWindow{{From: "22:00", To: "23:00"}}, LimitBytes: lim},
+							"a": {Mode: mode, Windows: w, LimitBytes: lim.v},
+							"b": {Mode: mode, Windows: w, LimitBytes: lim.v},
 						}
-						d := disks[dn]
+						d := dk.d
 						got := recPlan(files, pol, d, 50)
 						in := map[int64]bool{}
-						var freed int64
+						var freed, freedNoNewest int64
 						byID := map[int64]recFile{}
 						for _, f := range files {
 							byID[f.ID] = f
 						}
+						isNewest := func(x int64) bool { return x == newest["a"] || x == newest["b"] }
+						newestGone := false
 						for _, x := range got.Delete {
 							if in[x] {
 								t.Errorf("%s: id %d trùng", name, x)
 							}
 							in[x] = true
 							freed += byID[x].Bytes
+							if isNewest(x) {
+								newestGone = true
+							} else {
+								freedNoNewest += byID[x].Bytes
+							}
 							if byID[x].Held { // (a)
 								t.Errorf("%s: xoá file held %d", name, x)
 							}
 						}
-						for _, cam := range []string{"a", "b"} { // (b)
-							nw := byID[map[string]int64{"a": 4, "b": 8}[cam]]
-							if in[nw.ID] && dn != "duoi2" {
-								t.Errorf("%s: xoá file mới nhất %d khi ổ chưa dưới 2%%", name, nw.ID)
-							}
+						// (b) file mới nhất chỉ bị xoá khi ổ vẫn dưới 2% sau khi xoá các file khác
+						if newestGone && (d.Free+freedNoNewest)*100 >= 2*d.Total {
+							t.Errorf("%s: xoá file mới nhất khi ổ không dưới 2%%", name)
 						}
 						if got.Stop { // (c)
+							stops++
 							for _, f := range files {
 								if !f.Held && !in[f.ID] {
 									t.Errorf("%s: Stop nhưng file thường %d chưa xoá", name, f.ID)
@@ -148,10 +175,52 @@ func TestRecPlanSweepNeverDeletesHeld(t *testing.T) {
 			}
 		}
 	}
-	if want := len(recModes) * len(heldSet) * len(limits) * len(diskNames) * len(positions); n != want {
+	if want := len(recModes) * len(heldSet) * len(limits) * len(disks) * len(positions); n != want {
 		t.Fatalf("chạy %d ca, cần %d", n, want)
 	}
-	t.Logf("đã chạy %d ca", n)
+	// ổ "het" trong mọi ca phải dừng ghi: không để (c) rỗng
+	if want := len(recModes) * len(heldSet) * len(limits) * len(positions); stops != want {
+		t.Fatalf("Stop ở %d ca, cần %d", stops, want)
+	}
+	t.Logf("đã chạy %d ca, Stop ở %d ca", n, stops)
+}
+
+func TestRecWantedMoreShapes(t *testing.T) {
+	day := func(d, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, tgICT) }
+	night := recPolicy{Mode: "schedule", Windows: []recWindow{{From: "22:00", To: "23:00"}}}
+	if !recWanted(night, recFile{Start: day(1, 10, 0), End: day(3, 10, 0)}) {
+		t.Error("file nhiều ngày phải trùng khung")
+	}
+	noon := recPolicy{Mode: "schedule", Windows: []recWindow{{From: "12:00", To: "13:30"}}}
+	for _, c := range []struct {
+		s, e time.Time
+		want bool
+	}{
+		{day(1, 13, 29), day(1, 13, 40), true},
+		{day(1, 13, 31), day(1, 13, 40), false},
+		{day(1, 11, 0), day(1, 11, 59), false},
+		{day(1, 11, 59), day(1, 12, 0), true},
+	} {
+		if got := recWanted(noon, recFile{Start: c.s, End: c.e}); got != c.want {
+			t.Errorf("%v-%v: %v, cần %v", c.s, c.e, got, c.want)
+		}
+	}
+	// khung hỏng toàn bộ: không khung nào khớp nên false (Task 5 sẽ từ chối chính sách như vậy)
+	bad := recPolicy{Mode: "schedule", Windows: []recWindow{{From: "abc", To: "24:99"}, {From: "", To: ""}}}
+	if recWanted(bad, recFile{Start: day(1, 12, 0), End: day(1, 12, 1)}) {
+		t.Error("khung hỏng phải không khớp")
+	}
+}
+
+func TestRecAddHeldRoundTrip(t *testing.T) {
+	db := newDB(t)
+	b := time.Unix(9000, 0)
+	recAdd(db, recFile{Cam: "x", Path: "h", Start: b, End: b.Add(time.Second), Bytes: 1, Held: true})
+	recAdd(db, recFile{Cam: "x", Path: "n", Start: b.Add(time.Minute), End: b.Add(2 * time.Minute), Bytes: 1})
+	all, err := recAll(db)
+	if err != nil || len(all) != 2 || !all[0].Held || all[1].Held {
+		t.Fatalf("held: %+v %v", all, err)
+	}
 }
 
 func TestRecHoldRange(t *testing.T) {

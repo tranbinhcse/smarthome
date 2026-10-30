@@ -148,7 +148,7 @@ func recWanted(p recPolicy, f recFile) bool {
 // recPlan: quyết định xoá theo thứ tự 4 quy tắc; file held không bao giờ bị xoá.
 func recPlan(files []recFile, pol map[string]recPolicy, d recDisk, normalPct int) recDecision {
 	var dec recDecision
-	if !d.OK {
+	if !d.OK || d.Total <= 0 {
 		return dec
 	}
 	sorted := append([]recFile(nil), files...)
