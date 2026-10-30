@@ -238,11 +238,14 @@ func TestCameraSetupWired(t *testing.T) {
 	if strings.Contains(js, "camera', 'pass") || strings.Contains(js, "camera.pass") {
 		t.Error("setup-camera.js để mật khẩu camera vào bản nháp chung")
 	}
-	if !strings.Contains(js, "CAMS = DEMO_CAMS") {
+	if !strings.Contains(js, "{ CAMS = DEMO_CAMS; TPL = TPL0; } else") {
 		t.Error("chế độ dữ liệu mẫu phải gán DEMO_CAMS")
 	}
 	if strings.Count(js, "if (F.busy) return;") < 2 {
 		t.Error("Thử kết nối và Lưu phải có chốt chống bấm đúp (F.busy)")
+	}
+	if strings.Count(js, "finally { F.busy = false; U.soon(); }") < 2 {
+		t.Error("Thử kết nối và Lưu phải mở lại nút trong finally khi gọi hub lỗi")
 	}
 	if strings.Contains(js, "http_port: 0,") {
 		t.Error("camera sửa phải giữ http_port đã lưu")

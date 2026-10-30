@@ -130,7 +130,10 @@
       if (F.busy) return;
       const o = payload(takePass());
       F.busy = true; F.result = null; U.soon();
-      F.result = await runTest(o); F.busy = false; return U.soon();
+      try { F.result = await runTest(o); }
+      catch { F.result = {ok: false, text: 'Không gọi được hub, thử lại'}; }   // mạng đứt hoặc hub đang khởi động lại
+      finally { F.busy = false; U.soon(); }
+      return;
     }
     if (verb === 'csave') {
       if (F.busy) return;
@@ -139,12 +142,15 @@
       const o = payload(takePass());
       o.name = F.name.trim(); o.zone = F.zone || '';
       const before = camKey(CAMS);
-      const r = await U.api('/api/cameras', json('PUT', o));
-      if (!r.ok) { F.busy = false; U.soon(); return U.toast(`Chưa lưu được: ${(await r.text()).trim()}`); }
-      form = null; F = {};
-      await loadCams();
-      if (camKey(CAMS) !== before) { camRestart = cfg; }
-      U.toast('Đã lưu camera'); return U.soon();
+      try {
+        const r = await U.api('/api/cameras', json('PUT', o));
+        if (!r.ok) return U.toast(`Chưa lưu được: ${(await r.text()).trim()}`);
+        form = null; F = {};
+        await loadCams();
+        if (camKey(CAMS) !== before) { camRestart = cfg; }
+        return U.toast('Đã lưu camera');
+      } catch { return U.toast('Không gọi được hub, thử lại'); }
+      finally { F.busy = false; U.soon(); }   // F mới (sau khi lưu) hoặc F cũ (lỗi): luôn mở lại nút
     }
     if (verb === 'del') {
       const c = CAMS.find(c => c.id === arg);
