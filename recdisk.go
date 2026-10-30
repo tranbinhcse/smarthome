@@ -23,7 +23,9 @@ func recDiskCheck(dir, sysRef string) recDisk {
 	if dir == "" || syscall.Stat(dir, &d) != nil {
 		return recDisk{Reason: recNoDir}
 	}
-	if syscall.Stat(sysRef, &s) == nil && d.Dev == s.Dev {
+	// Giới hạn st_dev: subvolume btrfs có st_dev riêng; sysRef là symlink thì so theo thiết bị đích.
+	// Không kiểm được ổ hệ thống thì từ chối (fail closed).
+	if sysRef == "" || syscall.Stat(sysRef, &s) != nil || d.Dev == s.Dev {
 		return recDisk{Reason: recOnSys}
 	}
 	var fs syscall.Statfs_t
@@ -68,13 +70,16 @@ func mountRecStorage(mux *http.ServeMux, db *DB, a *Auth, disk func() recDisk) {
 				normal += f.Bytes
 			}
 			bytes[f.Cam] += f.Bytes
+			// rate = tốc độ ghi thật của camera nên tính cả file giữ lại (held)
 			if f.End.After(cut) {
 				rate[f.Cam] += f.Bytes
 			}
 		}
 		pol := camPolicies(db)
 		for id := range pol {
-			bytes[id] += 0 // camera nối thẳng chưa có file vẫn được liệt kê
+			if _, ok := bytes[id]; !ok {
+				bytes[id] = 0 // camera nối thẳng chưa có file vẫn được liệt kê
+			}
 		}
 		var sum int64
 		for _, v := range rate {
@@ -83,7 +88,7 @@ func mountRecStorage(mux *http.ServeMux, db *DB, a *Auth, disk func() recDisk) {
 		cams := []recCamUse{}
 		for id, b := range bytes {
 			u := recCamUse{ID: id, Bytes: b}
-			if rt := rate[id]; rt > 0 {
+			if rt := rate[id]; rt > 0 && d.OK {
 				budget := float64(pol[id].LimitBytes)
 				if budget <= 0 {
 					budget = float64(d.Total) * float64(pct) / 100 * float64(rt) / float64(sum)

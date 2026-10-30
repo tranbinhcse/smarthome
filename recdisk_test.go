@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -122,5 +123,31 @@ func TestRecStorageAPI(t *testing.T) {
 		if c.Bytes == 0 && c.Days != nil {
 			t.Error("rate 0 phải là null")
 		}
+	}
+}
+
+// Không kiểm được ổ hệ thống thì từ chối, không mặc định cho ghi.
+func TestRecDiskFailsClosed(t *testing.T) {
+	dir, err := os.MkdirTemp("/dev/shm", "rec")
+	if err != nil {
+		t.Skip("không ghi được /dev/shm")
+	}
+	defer os.RemoveAll(dir)
+	for _, sys := range []string{"", "/nonexistent/config.yaml"} {
+		if r := recDiskCheck(dir, sys); r.OK || r.Reason != recOnSys {
+			t.Errorf("sysRef %q: %+v", sys, r)
+		}
+	}
+}
+
+func TestRecStorageDaysNullWhenDiskNotOK(t *testing.T) {
+	h := NewHub(Config{}, newDB(t), func(string, string) {})
+	a := NewAuth("1234", h.db)
+	ck := call(newMux(h, a), "POST", "/api/login", `{"pin":"1234"}`, "").Result().Cookies()
+	mux := http.NewServeMux()
+	mountRecStorage(mux, h.db, a, func() recDisk { return recDisk{Reason: recNoDir} })
+	recAdd(h.db, recFile{Cam: "cam_ch1", Path: "p", Start: time.Now().Add(-time.Minute), End: time.Now(), Bytes: 100})
+	if b := call(mux, "GET", "/api/rec/storage", "", "", ck...).Body.String(); !strings.Contains(b, `"days":null`) {
+		t.Fatal(b)
 	}
 }

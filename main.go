@@ -19,11 +19,15 @@ import (
 //go:embed web
 var webEmbed embed.FS
 
-func main() {
-	path := os.Getenv("HUBD_CONFIG")
-	if path == "" {
-		path = "/data/config.yaml"
+func configPath() string {
+	if p := os.Getenv("HUBD_CONFIG"); p != "" {
+		return p
 	}
+	return "/data/config.yaml"
+}
+
+func main() {
+	path := configPath()
 	cfg, pin, err := LoadConfig(path)
 	if err != nil {
 		log.Fatalf("config %s: %v", path, err)
@@ -183,8 +187,7 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 	hub.music = mountMusic(mux, hub, auth)
 	mountNodes(mux, hub, auth)
 	mountNotify(mux, hub, auth)
-	cfgPath := os.Getenv("HUBD_CONFIG")
-	mountRecStorage(mux, hub.db, auth, func() recDisk { return recDiskCheck(os.Getenv("HUBD_REC_DIR"), cfgPath) })
+	mountRecStorage(mux, hub.db, auth, func() recDisk { return recDiskCheck(os.Getenv("HUBD_REC_DIR"), configPath()) })
 	if hub.tg != nil {
 		mountTelegram(mux, hub.tg, auth)
 	}
