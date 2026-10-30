@@ -11,7 +11,7 @@
   // ----- camera nối thẳng -----
   const DEMO_CAMS = [{id: 'cam_san', name: 'Camera sân', zone: '', kind: 'rtsp', host: '192.168.1.60', rtsp_port: 554, user: 'xem', pass_set: true}];
   const TPL0 = [{brand: 'Dahua / KBVision / Imou', main_path: '/cam/realmonitor?channel=1&subtype=0', sub_path: '/cam/realmonitor?channel=1&subtype=1', rtsp_port: 554}];
-  let CAMS = null, TPL = [], SCAN = null, scanTimer = 0, form = null, F = {}, res = {}, tested = {}, camRestart = null;
+  let PW = '', CAMS = null, TPL = [], SCAN = null, scanTimer = 0, form = null, F = {}, res = {}, tested = {}, camRestart = null;
   const camKey = l => JSON.stringify((l || []).map(c => [c.id, c.name, c.zone]).sort());
   const kindName = k => k === 'hik_cam' ? 'Hikvision' : 'RTSP';
   const json = (m, b) => ({method: m, headers: {'Content-Type': 'application/json'}, body: b === undefined ? undefined : JSON.stringify(b)});
@@ -49,17 +49,17 @@
       ${rtsp ? `<label class="sf"><span>Hãng</span>${sel('brand', brands)}</label>` : ''}
       ${fin('host', 'IP camera', '192.168.1.60')}
       ${fin('user', 'Tài khoản')}
-      <label class="sf"><span>Mật khẩu</span><input id="cam-pass" type="password" autocomplete="off" placeholder="${pw ? 'Đã lưu, để trống nếu giữ nguyên' : ''}"></label>
+      <label class="sf"><span>Mật khẩu</span><input id="cam-pass" type="password" autocomplete="off" placeholder="${pw ? 'Đã lưu, để trống nếu giữ nguyên' : ''}" value="${e(PW)}"></label>
       ${rtsp && other ? fin('rtsp_port', 'Cổng RTSP', '554') + fin('main_path', 'Đường dẫn luồng chính', '/stream1') + fin('sub_path', 'Đường dẫn luồng phụ', '/stream2') : ''}
       ${fin('name', 'Tên camera', 'Camera sân')}
       <label class="sf"><span>Khu</span>${sel('zone', zones)}</label>
-      <div class="kv"><button class="pill" data-sact="camera:ctest"${F.busy ? ' disabled' : ''}>${F.busy ? 'Đang thử...' : 'Thử kết nối'}</button><button class="pill amber" data-sact="camera:csave">Lưu</button><button class="pill" data-sact="camera:cclose">Đóng</button></div>
+      <div class="kv"><button class="pill" data-sact="camera:ctest"${F.busy ? ' disabled' : ''}>${F.busy ? 'Đang thử...' : 'Thử kết nối'}</button><button class="pill amber" data-sact="camera:csave"${F.busy ? ' disabled' : ''}>Lưu</button><button class="pill" data-sact="camera:cclose">Đóng</button></div>
       ${F.result ? `<p class="note${F.result.ok ? '' : ' bad'}">${e(F.result.text)}</p>` : ''}
       <p class="note">Mật khẩu chỉ gửi một lần cho hub, ô sẽ tự xoá sau mỗi lần bấm. ${form === 'edit' ? 'Để trống mật khẩu là giữ mật khẩu đã lưu.' : 'Bấm Lưu thì nhập lại mật khẩu.'}</p></div>`;
   }
 
   function direct() {
-    if (CAMS === null && !U.DEMO) { CAMS = []; loadCams(); U.loadSetting('camera'); }   // dải mạng nằm ở nhóm camera
+    if (CAMS === null) { if (U.DEMO) { CAMS = DEMO_CAMS; TPL = TPL0; } else { CAMS = []; loadCams(); U.loadSetting('camera'); } }   // dải mạng nằm ở nhóm camera
     const found = (SCAN?.found || []).filter(h => !(CAMS || []).some(c => c.host === h.host));
     const list = (CAMS || []).map(c => `<div class="setrow"><span>${U.icon('camera')}${e(c.name)} <small>${e(zoneName(c.zone))} · ${kindName(c.kind)}</small>
         <small class="${res[c.id]?.ok === false ? 'bad' : ''}">${e(res[c.id]?.text || 'Chưa thử kết nối')}</small></span>
@@ -78,16 +78,16 @@
   }
 
   // gói ô nhập thành body gửi hub; mật khẩu đọc lúc bấm rồi xoá khỏi ô
-  function payload(withId) {
-    const box = document.getElementById('cam-pass'), pass = box?.value || '';
-    if (box) box.value = '';
+  function payload(pass) {
     const tp = F.kind === 'rtsp' && F.brand !== 'other' ? tplOf(F.brand) : null;
     const o = {kind: F.kind, host: String(F.host || '').trim(), user: String(F.user || '').trim(), pass,
-      http_port: 0, rtsp_port: tp ? tp.rtsp_port : Number(F.rtsp_port) || 0};
-    if (withId && F.id) o.id = F.id;
+      http_port: Number(F.http_port) || 0, rtsp_port: Number(F.rtsp_port) || 0};
+    if (F.id) o.id = F.id;
     if (F.kind === 'rtsp') { o.main_path = tp ? tp.main_path : String(F.main_path || '').trim(); o.sub_path = tp ? tp.sub_path : String(F.sub_path || '').trim(); }
     return o;
   }
+  // mật khẩu chỉ rời module khi gửi: lấy ra rồi xoá ở biến và ô nhập
+  const takePass = () => { const p = PW; PW = ''; const b = document.getElementById('cam-pass'); if (b) b.value = ''; return p; };
   const testText = j => j.ok ? `Kết nối được${j.model ? ': ' + j.model : ''}${j.firmware ? ' (' + j.firmware + ')' : ''}` : (j.message || 'Không kết nối được');
   async function runTest(o, into) {
     const r = await U.api('/api/cameras/test', json('POST', o));
@@ -97,21 +97,21 @@
     return {ok: !!j.ok, text: testText(j)};
   }
   async function camAct(verb, arg) {
-    if (verb === 'add') { form = 'new'; F = {kind: 'hik_cam', brand: '0'}; U.soon(); return; }
+    if (verb === 'add') { form = 'new'; PW = ''; F = {kind: 'hik_cam', brand: '0', rtsp_port: TPL[0]?.rtsp_port || ''}; U.soon(); return; }
     if (verb === 'pick') {
       const h = (SCAN?.found || []).filter(h => !(CAMS || []).some(c => c.host === h.host))[Number(arg)];
       if (!h) return;
-      form = 'new'; F = {kind: h.kind === 'hik_cam' ? 'hik_cam' : 'rtsp', brand: '0', host: h.host, name: h.model || ''}; return U.soon();
+      form = 'new'; PW = ''; F = {kind: h.kind === 'hik_cam' ? 'hik_cam' : 'rtsp', brand: '0', rtsp_port: TPL[0]?.rtsp_port || '', host: h.host, name: h.model || ''}; return U.soon();
     }
     if (verb === 'edit') {
       const c = CAMS.find(c => c.id === arg);
       if (!c) return;
       const i = TPL.findIndex(t => t.main_path === c.main_path && t.sub_path === c.sub_path);
-      form = 'edit'; F = {id: c.id, kind: c.kind, brand: c.kind === 'rtsp' && i < 0 ? 'other' : String(Math.max(i, 0)), host: c.host, user: c.user, name: c.name, zone: c.zone,
+      form = 'edit'; PW = ''; F = {id: c.id, http_port: c.http_port || '', kind: c.kind, brand: c.kind === 'rtsp' && i < 0 ? 'other' : String(Math.max(i, 0)), host: c.host, user: c.user, name: c.name, zone: c.zone,
         rtsp_port: c.rtsp_port || '', main_path: c.main_path || '', sub_path: c.sub_path || ''};
       return U.soon();
     }
-    if (verb === 'cclose') { form = null; F = {}; return U.soon(); }
+    if (verb === 'cclose') { form = null; F = {}; PW = ''; return U.soon(); }
     if (U.DEMO) return U.toast('Chế độ dữ liệu mẫu không kết nối camera thật');
     if (verb === 'scan') {
       const r = await U.api('/api/cameras/scan', {method: 'POST'});
@@ -127,17 +127,20 @@
       return U.soon();
     }
     if (verb === 'ctest') {
-      const o = payload(true);
+      if (F.busy) return;
+      const o = payload(takePass());
       F.busy = true; F.result = null; U.soon();
       F.result = await runTest(o); F.busy = false; return U.soon();
     }
     if (verb === 'csave') {
-      const o = payload(true);
-      if (!F.name?.trim()) return U.toast('Nhập tên camera');
+      if (F.busy) return;
+      if (!F.name?.trim()) return U.toast('Nhập tên camera');   // kiểm tra trước: thiếu tên thì không xoá mật khẩu đang gõ
+      F.busy = true; U.soon();
+      const o = payload(takePass());
       o.name = F.name.trim(); o.zone = F.zone || '';
       const before = camKey(CAMS);
       const r = await U.api('/api/cameras', json('PUT', o));
-      if (!r.ok) return U.toast(`Chưa lưu được: ${(await r.text()).trim()}`);
+      if (!r.ok) { F.busy = false; U.soon(); return U.toast(`Chưa lưu được: ${(await r.text()).trim()}`); }
       form = null; F = {};
       await loadCams();
       if (camKey(CAMS) !== before) { camRestart = cfg; }
@@ -156,11 +159,13 @@
   document.addEventListener('input', ev => {
     const f = ev.target.closest?.('[data-cf]');
     if (f) F[f.dataset.cf] = f.value;
+    else if (ev.target.id === 'cam-pass') PW = ev.target.value;   // vẽ lại (SSE) thì ô được điền lại từ đây; không vào bản nháp chung
   });
   document.addEventListener('change', ev => {
     const f = ev.target.closest?.('[data-cf]');
     if (!f) return;
     F[f.dataset.cf] = f.value;
+    if (f.dataset.cf === 'brand' && tplOf(f.value)) F.rtsp_port = tplOf(f.value).rtsp_port;   // chọn mẫu mới thì lấy cổng RTSP của mẫu
     if (f.dataset.cf === 'kind' || f.dataset.cf === 'brand') { F.result = null; U.soon(); }
   });
 

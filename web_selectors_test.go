@@ -238,6 +238,15 @@ func TestCameraSetupWired(t *testing.T) {
 	if strings.Contains(js, "camera', 'pass") || strings.Contains(js, "camera.pass") {
 		t.Error("setup-camera.js để mật khẩu camera vào bản nháp chung")
 	}
+	if !strings.Contains(js, "CAMS = DEMO_CAMS") {
+		t.Error("chế độ dữ liệu mẫu phải gán DEMO_CAMS")
+	}
+	if strings.Count(js, "if (F.busy) return;") < 2 {
+		t.Error("Thử kết nối và Lưu phải có chốt chống bấm đúp (F.busy)")
+	}
+	if strings.Contains(js, "http_port: 0,") {
+		t.Error("camera sửa phải giữ http_port đã lưu")
+	}
 	vs := map[string]bool{}
 	for _, m := range regexp.MustCompile(`\?v=(\d+)`).FindAllStringSubmatch(read("index.html"), -1) {
 		vs[m[1]] = true
