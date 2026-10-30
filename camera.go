@@ -40,10 +40,11 @@ type cams struct {
 	token  string          // HUBD_CAMERA_TOKEN: hikbridge đọc cấu hình đầu ghi qua /api/service/nvr; rỗng = tắt
 
 	mu      sync.Mutex
-	clients map[string]*http.Client // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
-	flights map[string]*snapFlight  // yêu cầu ảnh đang bay theo id
-	snaps   map[string]snapEntry    // ảnh mới nhất của camera nối thẳng, giữ snapTTL
-	snapAt  atomic.Int32            // chỉ số trong snapPaths mà đầu ghi trả ảnh lần gần nhất
+	clients map[string]*http.Client                                  // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
+	fetch   func(context.Context, camRec) ([]byte, string, *snapErr) // nil = theo loại camera; test thay để mô phỏng lỗi
+	flights map[string]*snapFlight                                   // yêu cầu ảnh đang bay theo id
+	snaps   map[string]snapEntry                                     // ảnh mới nhất của camera nối thẳng, giữ snapTTL
+	snapAt  atomic.Int32                                             // chỉ số trong snapPaths mà đầu ghi trả ảnh lần gần nhất
 }
 
 // Đường lấy ảnh chụp, thử lần lượt (đầu ghi trả 403/404 notSupport thì thử đường kế): camera đứng riêng và đầu ghi
@@ -471,22 +472,30 @@ func (c *cams) directSnap(ctx context.Context, id string, fresh bool) ([]byte, s
 	// không gắn vào ctx của người gọi: họ ngắt thì những người đang đợi vẫn nhận kết quả
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	var se2 *snapErr
-	if rec.Kind == "rtsp" {
-		f.b, f.ct, se2 = c.snapRTSP(fctx, rec)
-	} else {
-		f.b, f.ct, se2 = c.snapHik(fctx, rec)
+	f.err = &snapErr{502, "không lấy được ảnh từ camera"} // kết quả mặc định nếu việc lấy ảnh panic
+	defer func() {                                        // chạy cả khi panic: không để id kẹt vĩnh viễn với flight không bao giờ đóng
+		c.mu.Lock()
+		delete(c.flights, id)
+		c.mu.Unlock()
+		close(f.done)
+	}()
+	fetch := c.fetch
+	if fetch == nil {
+		fetch = c.snapHik
+		if rec.Kind == "rtsp" {
+			fetch = c.snapRTSP
+		}
 	}
-	c.mu.Lock()
+	b, ct, se2 := fetch(fctx, rec)
 	if se2 != nil {
 		f.err = se2
-	} else {
-		c.snaps[id] = snapEntry{f.b, f.ct, time.Now()} // ponytail: không dọn mục camera đã xoá, vài trăm KB mỗi camera đến khi khởi động lại
+		return nil, "", se2
 	}
-	delete(c.flights, id)
+	f.b, f.ct, f.err = b, ct, nil
+	c.mu.Lock()
+	c.snaps[id] = snapEntry{b, ct, time.Now()} // ponytail: không dọn mục camera đã xoá, vài trăm KB mỗi camera đến khi khởi động lại
 	c.mu.Unlock()
-	close(f.done)
-	return f.b, f.ct, f.err
+	return b, ct, nil
 }
 
 func (c *cams) snapHik(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
@@ -511,7 +520,6 @@ func (c *cams) snapHik(ctx context.Context, rec camRec) ([]byte, string, *snapEr
 	return readImage(rec.ID, res.Body, ct)
 }
 
-// snapRTSP: nhờ go2rtc nhận luồng phụ rồi chụp một khung. Lỗi mạng của http.Client chứa URL (có mật khẩu) nên không ghi log.
 // readImage: đọc trọn ảnh; đọc lỗi (cụt), rỗng hay không phải image/* thì không dùng và không đệm.
 func readImage(id string, body io.Reader, ct string) ([]byte, string, *snapErr) {
 	b, err := io.ReadAll(io.LimitReader(body, 8<<20))
@@ -522,6 +530,7 @@ func readImage(id string, body io.Reader, ct string) ([]byte, string, *snapErr) 
 	return b, ct, nil
 }
 
+// snapRTSP: nhờ go2rtc nhận luồng phụ rồi chụp một khung. Lỗi mạng của http.Client chứa URL (có mật khẩu) nên không ghi log.
 func (c *cams) snapRTSP(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
 	do := func(method, path string, q url.Values) (*http.Response, *snapErr) {
 		u := *c.go2rtc

@@ -907,3 +907,31 @@ func TestDirectCamSnapshotBadBodyNotCached(t *testing.T) {
 		})
 	}
 }
+
+// Lấy ảnh panic (net/http bắt lại ở tầng kết nối): id không được kẹt, yêu cầu sau vẫn phục vụ bình thường.
+func TestDirectCamSnapshotPanicDoesNotWedge(t *testing.T) {
+	c, _, _, ids := directEnv(t, camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", MainPath: "/m"})
+	calls := 0
+	c.fetch = func(context.Context, camRec) ([]byte, string, *snapErr) {
+		calls++
+		if calls == 1 {
+			panic("hỏng")
+		}
+		return jpeg, "image/jpeg", nil
+	}
+	func() {
+		defer func() { recover() }()
+		c.freshSnapshot(context.Background(), ids[0])
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	b, _, err := c.freshSnapshot(ctx, ids[0])
+	if err != nil || string(b) != string(jpeg) {
+		t.Fatalf("sau panic: %q %v, muốn ảnh bình thường", b, err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.flights) != 0 {
+		t.Fatalf("còn %d flight sau khi xong", len(c.flights))
+	}
+}
