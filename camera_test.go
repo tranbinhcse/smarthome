@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const nvrPass = "bimat-nvr-123"
@@ -500,5 +502,89 @@ func TestNVRHostChangeDropsSavedPassword(t *testing.T) {
 	}
 	if p, _ := pass(`{"nvr_host":"10.6.6.8","nvr_pass":"moi"}`); p != "moi" {
 		t.Fatalf("đổi IP kèm mật khẩu mới: %v", p)
+	}
+}
+
+func genIDs(t *testing.T, dir string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "camera.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var y struct {
+		Devices []camDev `yaml:"devices"`
+	}
+	if err := yaml.Unmarshal(b, &y); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, d := range y.Devices {
+		ids = append(ids, d.ID)
+	}
+	return ids
+}
+
+// Camera nối thẳng thành thiết bị sau các kênh đầu ghi; tắt đầu ghi chỉ bỏ kênh, không bỏ camera nối thẳng.
+func TestCamGenIncludesDirectCameras(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HUBD_GEN_DIR", dir)
+	db := camTestDB(t)
+	db.PutSetting("nvr", map[string]any{"nvr_host": "192.168.1.64", "ch3_zone": "cafe", "ch3_name": "Quầy"})
+	a, _ := camSave(db, camRec{Name: "Cổng", Zone: "kho", Kind: "hik_cam", Host: "192.168.1.50"}, nil)
+	b, _ := camSave(db, camRec{Name: "Sân", Zone: "cafe", Kind: "rtsp", Host: "192.168.1.51", MainPath: "/s1"}, nil)
+	syncCamGen(db)
+	if got, want := genIDs(t, dir), []string{"cam_ch3", a.ID, b.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("thiết bị = %v, muốn %v", got, want)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "camera.yaml"))
+	for _, s := range []string{"online_topic: cam/" + a.ID + "/online", "kind: camera", "zone: kho"} {
+		if !strings.Contains(string(raw), s) {
+			t.Errorf("camera.yaml thiếu %q:\n%s", s, raw)
+		}
+	}
+	db.PutSetting("nvr", map[string]any{"enabled": false})
+	if !syncCamGen(db) {
+		t.Fatal("tắt đầu ghi mà file không đổi")
+	}
+	if got, want := genIDs(t, dir), []string{a.ID, b.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tắt đầu ghi: %v, muốn %v", got, want)
+	}
+	// xoá một camera: file đổi (hubd sẽ khởi động lại) và thiết bị biến mất
+	camDelete(db, a.ID)
+	if !syncCamGen(db) {
+		t.Fatal("xoá camera mà file không đổi")
+	}
+	if got, want := genIDs(t, dir), []string{b.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sau xoá: %v, muốn %v", got, want)
+	}
+}
+
+// Chỉ có đầu ghi thì file sinh giống hệt trước khi có camera nối thẳng.
+func TestCamGenUnchangedForNVROnly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HUBD_GEN_DIR", dir)
+	db := camTestDB(t)
+	db.PutSetting("nvr", map[string]any{"nvr_host": "192.168.1.64", "ch3_zone": "cafe", "ch3_name": "Quầy"})
+	syncCamGen(db)
+	y, _ := yaml.Marshal(map[string]any{"devices": camDevices(db.Setting("nvr"))})
+	want := "# Sinh từ trang Cài đặt → Camera (hubd). Không sửa tay: lưu trên dashboard sẽ ghi đè.\n" + string(y)
+	if got, _ := os.ReadFile(filepath.Join(dir, "camera.yaml")); string(got) != want {
+		t.Fatalf("file đổi khi không có camera nối thẳng:\n%s\nmuốn\n%s", got, want)
+	}
+}
+
+// Lỗi đọc kho camera (tạm thời) không được xoá thiết bị khỏi file sinh.
+func TestCamGenKeepsFileOnStoreError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HUBD_GEN_DIR", dir)
+	db := camTestDB(t)
+	a, _ := camSave(db, camRec{Name: "Cổng", Zone: "kho", Kind: "hik_cam", Host: "192.168.1.50"}, nil)
+	syncCamGen(db)
+	db.sql.Exec(`DROP TABLE cameras`)
+	if syncCamGen(db) {
+		t.Fatal("lỗi DB mà vẫn ghi lại file")
+	}
+	if got := genIDs(t, dir); !reflect.DeepEqual(got, []string{a.ID}) {
+		t.Fatalf("file bị đổi khi lỗi DB: %v", got)
 	}
 }

@@ -358,7 +358,16 @@ func syncCamGen(db *DB) bool {
 	if dir == "" {
 		return false
 	}
-	y, _ := yaml.Marshal(map[string]any{"devices": camDevices(db.Setting("nvr"))})
+	direct, err := camList(db)
+	if err != nil { // lỗi DB tạm thời: giữ file cũ, không xoá thiết bị
+		log.Printf("không đọc được danh sách camera nối thẳng: %v", err)
+		return false
+	}
+	devs := camDevices(db.Setting("nvr"))
+	for _, r := range direct { // sau các kênh đầu ghi; tắt đầu ghi chỉ bỏ kênh
+		devs = append(devs, camDev{ID: r.ID, Name: r.Name, Zone: r.Zone, Kind: "camera", OnlineTopic: "cam/" + r.ID + "/online"})
+	}
+	y, _ := yaml.Marshal(map[string]any{"devices": devs})
 	b := append([]byte("# Sinh từ trang Cài đặt → Camera (hubd). Không sửa tay: lưu trên dashboard sẽ ghi đè.\n"), y...)
 	f := filepath.Join(dir, "camera.yaml")
 	if old, err := os.ReadFile(f); err == nil && string(old) == string(b) {
