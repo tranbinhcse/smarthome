@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/url"
 	"regexp"
@@ -103,33 +105,45 @@ func (c *camRec) validate(zoneOK func(string) bool) error {
 	return nil
 }
 
-func camList(db *DB) []camRec {
+func camList(db *DB) ([]camRec, error) {
 	out := []camRec{}
-	rows, err := db.sql.Query(`SELECT data FROM cameras`)
+	rows, err := db.sql.Query(`SELECT id, data FROM cameras`)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var raw string
+		var id, raw string
 		var c camRec
-		if rows.Scan(&raw) == nil && json.Unmarshal([]byte(raw), &c) == nil {
-			out = append(out, c)
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
 		}
+		if json.Unmarshal([]byte(raw), &c) != nil {
+			log.Printf("camera %s: dữ liệu hỏng, bỏ qua", id)
+			continue
+		}
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Name < out[j].Name || out[i].Name == out[j].Name && out[i].ID < out[j].ID
 	})
-	return out
+	return out, rows.Err()
 }
 
-func camGet(db *DB, id string) (camRec, bool) {
+// camGet: (_, false, nil) = không có; lỗi DB hoặc dòng hỏng trả err, không được coi là "chưa có".
+func camGet(db *DB, id string) (camRec, bool, error) {
 	var raw string
 	var c camRec
-	if db.sql.QueryRow(`SELECT data FROM cameras WHERE id = ?`, id).Scan(&raw) != nil {
-		return c, false
+	switch err := db.sql.QueryRow(`SELECT data FROM cameras WHERE id = ?`, id).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+		return c, false, nil
+	case err != nil:
+		return c, false, err
 	}
-	return c, json.Unmarshal([]byte(raw), &c) == nil
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return camRec{}, false, errors.New("dữ liệu camera " + id + " bị hỏng")
+	}
+	return c, true, nil
 }
 
 // camSave: id rỗng = thêm mới (id sinh từ tên), có id = sửa. zoneOK kiểm khu vực theo cấu hình đang chạy.
@@ -145,36 +159,48 @@ func camSave(db *DB, c camRec, zoneOK func(string) bool) (camRec, error) {
 		if base == "cam_" || nvrCamID.MatchString(base) {
 			base += "_cam"
 		}
-		c.ID = base
-		for n := 2; ; n++ {
-			if _, taken := camGet(db, c.ID); !taken {
-				break
+		// INSERT thường (không upsert): id đã có dòng, kể cả dòng hỏng, thì thử hậu tố kế tiếp, không bao giờ ghi đè.
+		raw := ""
+		for n := 1; ; n++ {
+			c.ID = base
+			if n > 1 {
+				c.ID = base + "_" + strconv.Itoa(n)
 			}
-			c.ID = base + "_" + strconv.Itoa(n)
-		}
-	} else {
-		old, ok := camGet(db, c.ID)
-		if !ok {
-			return c, errors.New("Không tìm thấy camera")
-		}
-		if c.Pass == "" && c.Host == old.Host {
-			c.Pass = old.Pass
+			b, _ := json.Marshal(c)
+			raw = string(b)
+			r, err := db.sql.Exec(`INSERT INTO cameras(id, data) VALUES(?, ?) ON CONFLICT(id) DO NOTHING`, c.ID, raw)
+			if err != nil {
+				return c, err
+			}
+			if k, _ := r.RowsAffected(); k > 0 {
+				return c, nil
+			}
 		}
 	}
+	old, ok, err := camGet(db, c.ID)
+	if err != nil {
+		return c, err
+	}
+	if !ok {
+		return c, errors.New("Không tìm thấy camera")
+	}
+	if c.Pass == "" && c.Host == old.Host {
+		c.Pass = old.Pass
+	}
 	raw, _ := json.Marshal(c)
-	_, err := db.sql.Exec(`INSERT INTO cameras(id, data) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`, c.ID, string(raw))
+	_, err = db.sql.Exec(`UPDATE cameras SET data = ? WHERE id = ?`, string(raw), c.ID)
 	return c, err
 }
 
-func camDelete(db *DB, id string) bool {
+func camDelete(db *DB, id string) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	r, err := db.sql.Exec(`DELETE FROM cameras WHERE id = ?`, id)
 	if err != nil {
-		return false
+		return false, err
 	}
 	n, _ := r.RowsAffected()
-	return n > 0
+	return n > 0, nil
 }
 
 // view: JSON cho trình duyệt. Không có "pass", chỉ "pass_set".

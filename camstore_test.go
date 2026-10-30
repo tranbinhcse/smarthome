@@ -37,7 +37,7 @@ func TestCamStoreCRUD(t *testing.T) {
 	if err != nil || c.ID != "cam_camera_cong" || c.HTTPPort != 80 || c.RTSPPort != 554 {
 		t.Fatalf("save: %+v %v", c, err)
 	}
-	if l := camList(d); len(l) != 1 || l[0].ID != c.ID {
+	if l, err := camList(d); err != nil || len(l) != 1 || l[0].ID != c.ID {
 		t.Fatalf("list: %+v", l)
 	}
 	// sửa không nhập mật khẩu: giữ mật khẩu cũ
@@ -51,10 +51,12 @@ func TestCamStoreCRUD(t *testing.T) {
 	if e, err = camSave(d, e, ok); err != nil || e.Pass != "" {
 		t.Fatalf("host change: %+v %v", e, err)
 	}
-	if g, found := camGet(d, c.ID); !found || g.Pass != "" || g.Host != "192.168.1.51" {
+	if g, found, err := camGet(d, c.ID); err != nil || !found || g.Pass != "" || g.Host != "192.168.1.51" {
 		t.Fatalf("get: %+v %v", g, found)
 	}
-	if !camDelete(d, c.ID) || camDelete(d, c.ID) || len(camList(d)) != 0 {
+	del1, e1 := camDelete(d, c.ID)
+	del2, e2 := camDelete(d, c.ID)
+	if l, _ := camList(d); !del1 || del2 || e1 != nil || e2 != nil || len(l) != 0 {
 		t.Fatal("delete")
 	}
 	if _, err := camSave(d, camRec{ID: "cam_nope", Name: "x", Zone: "z1", Kind: "rtsp", Host: "h", MainPath: "/a"}, ok); err == nil {
@@ -112,7 +114,7 @@ func TestCamStoreRejectsInvalid(t *testing.T) {
 			t.Errorf("%s: err=%v, cần chứa %q", tc.name, err, tc.want)
 		}
 	}
-	if len(camList(d)) != 0 {
+	if l, _ := camList(d); len(l) != 0 {
 		t.Fatal("bản ghi sai không được lưu")
 	}
 	// cổng 0 nghĩa là mặc định, không phải lỗi
@@ -178,5 +180,51 @@ func TestCamRTSPURLEscapesPassword(t *testing.T) {
 		if u.User.Username() != "ad min" || gp != pw || u.Hostname() != "10.0.0.5" || u.Port() != "554" {
 			t.Fatalf("lấy lại sai: %q %q %s", u.User.Username(), gp, s)
 		}
+	}
+}
+
+// Dòng hỏng (JSON không đọc được) không được bị camera mới ghi đè; camList bỏ qua dòng hỏng, camGet báo lỗi.
+func TestCamStoreCorruptRowNotOverwritten(t *testing.T) {
+	d, ok := camTestDB(t), zoneIs("z1")
+	const bad = "{not json"
+	if _, err := d.sql.Exec(`INSERT INTO cameras(id, data) VALUES('cam_camera_cong', ?)`, bad); err != nil {
+		t.Fatal(err)
+	}
+	c, err := camSave(d, goodCam(), ok)
+	if err != nil || c.ID != "cam_camera_cong_2" {
+		t.Fatalf("save: %+v %v", c, err)
+	}
+	var raw string
+	d.sql.QueryRow(`SELECT data FROM cameras WHERE id='cam_camera_cong'`).Scan(&raw)
+	if raw != bad {
+		t.Fatalf("dòng hỏng bị ghi đè: %q", raw)
+	}
+	if l, err := camList(d); err != nil || len(l) != 1 || l[0].ID != c.ID {
+		t.Fatalf("list: %+v %v", l, err)
+	}
+	if _, found, err := camGet(d, "cam_camera_cong"); found || err == nil {
+		t.Fatalf("camGet dòng hỏng phải lỗi: %v %v", found, err)
+	}
+	e := goodCam()
+	e.ID = "cam_camera_cong"
+	if _, err := camSave(d, e, ok); err == nil {
+		t.Fatal("sửa dòng hỏng phải lỗi")
+	}
+}
+
+func TestCamStoreDBErrorsSurface(t *testing.T) {
+	d := camTestDB(t)
+	d.sql.Close()
+	if _, err := camList(d); err == nil {
+		t.Error("camList")
+	}
+	if _, _, err := camGet(d, "x"); err == nil {
+		t.Error("camGet")
+	}
+	if _, err := camDelete(d, "x"); err == nil {
+		t.Error("camDelete")
+	}
+	if _, err := camSave(d, goodCam(), nil); err == nil {
+		t.Error("camSave")
 	}
 }
