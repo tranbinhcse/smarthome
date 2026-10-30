@@ -528,3 +528,44 @@ func TestRecSplitSpillIntoPartlyFullFileStaysUnderMax(t *testing.T) {
 		t.Fatalf("bộ đệm GOP lên tới %d byte", maxWrite)
 	}
 }
+
+func TestRecSplitGrowingGOPAfterSpillStaysUnderMax(t *testing.T) {
+	frames := func(n int) []int {
+		g := make([]int, n)
+		for i := range g {
+			g[i] = 1_000_000
+		}
+		return g
+	}
+	// file ~30 MB; GOP 25 MB vượt recGopCap lúc mới 17 MB (30+17 < 50) rồi lớn dần: vẫn phải sang file mới
+	in := fakeFMP4("hev1", [][]int{frames(10), frames(10), frames(10), frames(25), {1000}})
+	files, _, err := runSplit(bytes.NewReader(in), recMaxBytes)
+	if err != nil || len(files) < 2 {
+		t.Fatalf("files=%d err=%v", len(files), err)
+	}
+	for i, f := range files {
+		if len(f) > recMaxBytes {
+			t.Fatalf("file %d dài %d byte", i, len(f))
+		}
+	}
+}
+
+func TestRecSplitTrafWithoutSampleIsNotKeyframe(t *testing.T) {
+	sync := uint32(0x02000000)
+	head := fmp4HeadTrex("hev1", &sync)
+	mk := func(trun []byte) []byte {
+		traf := mkBox("traf", mkBox("tfhd", u32(0x020020, 1, sync)), mkBox("tfdt", u32(1<<24), make([]byte, 8)), mkBox("trun", trun))
+		return append(mkBox("moof", mkBox("mfhd", u32(0, 1)), traf), mkBox("mdat", make([]byte, 10))...)
+	}
+	// trun 0 mẫu rồi (không có trun nào): không phải keyframe dù tfhd/trex khai đồng bộ
+	in := append(append([]byte{}, head...), mk(u32(0, 0))...)
+	if _, _, err := runSplit(bytes.NewReader(in), recMaxBytes); err == nil {
+		t.Fatal("moof không mẫu bị coi là keyframe")
+	}
+	// trun 0 mẫu không chặn trun sau trong cùng traf
+	two := mkBox("traf", mkBox("tfhd", u32(0x020020, 1, sync)), mkBox("tfdt", u32(1<<24), make([]byte, 8)), mkBox("trun", u32(0, 0)), mkBox("trun", u32(0, 1)))
+	tr, err := parseMoof(mkBox("moof", mkBox("mfhd", u32(0, 1)), two), nil)
+	if err != nil || len(tr) != 1 || !tr[0].sync {
+		t.Fatalf("tr=%+v err=%v", tr, err)
+	}
+}

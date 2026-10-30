@@ -151,14 +151,11 @@ func parseMoof(b []byte, trex map[uint32]uint32) (out []traf, err error) {
 						err = errors.New("rec: tfdt hỏng")
 					}
 				case "trun":
-					if sawTrun || len(p) < 8 {
+					if sawTrun || len(p) < 8 || be.Uint32(p[4:]) == 0 {
 						return
 					}
 					sawTrun = true
 					fl, o := be.Uint32(p)&0xffffff, 8
-					if be.Uint32(p[4:]) == 0 {
-						return
-					}
 					if fl&1 != 0 {
 						o += 4
 					}
@@ -185,7 +182,7 @@ func parseMoof(b []byte, trex map[uint32]uint32) (out []traf, err error) {
 			if v, ok := trex[tr.track]; !have && ok {
 				flags, have = v, true
 			}
-			tr.sync = have && flags&0x00010000 == 0
+			tr.sync = sawTrun && have && flags&0x00010000 == 0
 			out = append(out, tr)
 		})
 	})
@@ -276,8 +273,8 @@ func (s *recWriter) pair(moof, mdat []byte) error {
 	}
 	s.buf = append(append(s.buf, moof...), mdat...)
 	if len(s.buf) > recGopCap {
-		// lần ghi bớt đầu tiên: file đã có dữ liệu mà không chứa nổi thì đóng file, GOP sang file mới
-		if !s.spill && s.w != nil && s.data && s.seg.Bytes+int64(len(s.buf)) > s.max {
+		// lần ghi bớt đầu tiên: chưa biết GOP sẽ dài tới đâu, nên file đã có dữ liệu thì đóng, GOP sang file mới
+		if !s.spill && s.w != nil && s.data {
 			if err := s.closeFile(s.now()); err != nil {
 				return err
 			}
@@ -371,7 +368,7 @@ func (s *recWriter) closeFile(end time.Time) error {
 // đường dẫn để báo trong recSeg). Luồng hết hay lỗi đọc thì ghi nốt phần GOP đầy đủ, đóng file, gọi done.
 // Trả nil khi hết sạch ở ranh giới box, io.ErrUnexpectedEOF khi cụt giữa box.
 // Lỗi ghi hay Close: file đó không gọi done (recorder dò lại file mồ côi lúc khởi động); luồng không có keyframe hình trả lỗi.
-// ponytail: file chỉ vượt maxBytes khi một GOP lớn hơn chỗ còn lại sau lần ghi bớt đầu tiên (mở file mới nếu file hiện tại không chứa nổi);
+// ponytail: file chỉ vượt maxBytes khi một mình một GOP đã lớn hơn maxBytes (GOP ghi bớt luôn mở file mới, kể cả khi file cũ còn chỗ, vì chưa biết GOP dài tới đâu);
 // muốn chặt hơn thì cắt GOP ở ranh giới khung (mất khả năng phát độc lập).
 func recSplit(r io.Reader, maxBytes int64, create func(start time.Time) (io.WriteCloser, string, error), now func() time.Time, done func(recSeg)) error {
 	s := &recWriter{max: maxBytes, create: create, now: now, done: done}
