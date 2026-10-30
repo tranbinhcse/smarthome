@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -115,7 +117,9 @@ func camList(db *DB) []camRec {
 			out = append(out, c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name || out[i].Name == out[j].Name && out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name || out[i].Name == out[j].Name && out[i].ID < out[j].ID
+	})
 	return out
 }
 
@@ -180,4 +184,44 @@ func (c camRec) view() map[string]any {
 		"http_port": c.HTTPPort, "rtsp_port": c.RTSPPort, "user": c.User,
 		"main_path": c.MainPath, "sub_path": c.SubPath, "pass_set": c.Pass != "",
 	}
+}
+
+// Mẫu đường dẫn RTSP theo hãng, để giao diện điền sẵn khi chọn kiểu "rtsp".
+type camTemplate struct {
+	Brand, MainPath, SubPath string
+	RTSPPort                 int
+}
+
+var camTemplates = []camTemplate{
+	{"Dahua / KBVision / Imou", "/cam/realmonitor?channel=1&subtype=0", "/cam/realmonitor?channel=1&subtype=1", 554},
+	{"TP-Link Tapo / VIGI", "/stream1", "/stream2", 554},
+	{"Yoosee", "/onvif1", "/onvif2", 554},
+}
+
+// rtsp: địa chỉ luồng (sub=true là luồng phụ). Tài khoản và mật khẩu đi qua url.UserPassword nên ký tự đặc biệt được mã hoá.
+func (c camRec) rtsp(sub bool) string {
+	path := c.MainPath
+	if sub && c.SubPath != "" {
+		path = c.SubPath
+	}
+	if c.Kind == "hik_cam" {
+		path = "/Streaming/Channels/101"
+		if sub {
+			path = "/Streaming/Channels/102"
+		}
+	}
+	u := url.URL{Scheme: "rtsp", Host: net.JoinHostPort(c.Host, strconv.Itoa(c.RTSPPort))}
+	if c.User != "" || c.Pass != "" {
+		u.User = url.UserPassword(c.User, c.Pass)
+	}
+	// path có thể mang query (Dahua): ghép chuỗi, không qua u.Path để dấu ? không bị mã hoá
+	return u.String() + path
+}
+
+// snapURL: ảnh tĩnh qua HTTP. Kiểu rtsp trả rỗng: ảnh lấy từ go2rtc.
+func (c camRec) snapURL() string {
+	if c.Kind != "hik_cam" {
+		return ""
+	}
+	return "http://" + net.JoinHostPort(c.Host, strconv.Itoa(c.HTTPPort)) + "/ISAPI/Streaming/channels/101/picture"
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -131,5 +132,51 @@ func TestCamViewHidesPassword(t *testing.T) {
 	}
 	if (camRec{}).view()["pass_set"] != false {
 		t.Fatal("pass_set phải false khi chưa có mật khẩu")
+	}
+}
+
+func TestCamRTSPURL(t *testing.T) {
+	h := camRec{Kind: "hik_cam", Host: "10.0.0.5", RTSPPort: 8554, HTTPPort: 8080, User: "admin", Pass: "pw"}
+	if g := h.rtsp(false); g != "rtsp://admin:pw@10.0.0.5:8554/Streaming/Channels/101" {
+		t.Fatal(g)
+	}
+	if g := h.rtsp(true); g != "rtsp://admin:pw@10.0.0.5:8554/Streaming/Channels/102" {
+		t.Fatal(g)
+	}
+	if g := h.snapURL(); g != "http://10.0.0.5:8080/ISAPI/Streaming/channels/101/picture" {
+		t.Fatal(g)
+	}
+	r := camRec{Kind: "rtsp", Host: "10.0.0.6", RTSPPort: 554, User: "u", Pass: "p", MainPath: "/stream1", SubPath: "/stream2"}
+	if r.rtsp(false) != "rtsp://u:p@10.0.0.6:554/stream1" || r.rtsp(true) != "rtsp://u:p@10.0.0.6:554/stream2" || r.snapURL() != "" {
+		t.Fatal(r.rtsp(false), r.rtsp(true))
+	}
+	r.SubPath = ""
+	if r.rtsp(true) != "rtsp://u:p@10.0.0.6:554/stream1" {
+		t.Fatal("thiếu SubPath phải dùng MainPath")
+	}
+	if len(camTemplates) < 3 || camTemplates[0].MainPath == "" {
+		t.Fatal("camTemplates")
+	}
+}
+
+// Review Focus 1: mật khẩu có ký tự đặc biệt phải được mã hoá trong URL và lấy lại đúng.
+func TestCamRTSPURLEscapesPassword(t *testing.T) {
+	const pw = "p@ss:w/rd#%"
+	for _, c := range []camRec{
+		{Kind: "hik_cam", Host: "10.0.0.5", RTSPPort: 554, User: "ad min", Pass: pw},
+		{Kind: "rtsp", Host: "10.0.0.5", RTSPPort: 554, User: "ad min", Pass: pw, MainPath: "/s"},
+	} {
+		s := c.rtsp(false)
+		if strings.Contains(s, pw) {
+			t.Fatalf("mật khẩu chưa mã hoá: %s", s)
+		}
+		u, err := url.Parse(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gp, _ := u.User.Password()
+		if u.User.Username() != "ad min" || gp != pw || u.Hostname() != "10.0.0.5" || u.Port() != "554" {
+			t.Fatalf("lấy lại sai: %q %q %s", u.User.Username(), gp, s)
+		}
 	}
 }
