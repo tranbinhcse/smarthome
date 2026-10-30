@@ -4,7 +4,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"syscall"
 	"time"
@@ -29,8 +28,14 @@ func recDiskCheck(dir, sysRef string) recDisk {
 		return recDisk{Reason: recOnSys}
 	}
 	var fs syscall.Statfs_t
-	test := filepath.Join(dir, ".hubd-write-test")
-	if err := os.WriteFile(test, []byte("x"), 0o600); err != nil || os.Remove(test) != nil || syscall.Statfs(dir, &fs) != nil {
+	// tên riêng mỗi lần: API dung lượng và bộ ghi kiểm cùng lúc thì không xoá nhầm file thử của nhau
+	f, err := os.CreateTemp(dir, ".hubd-write-test-*")
+	if err != nil {
+		return recDisk{Reason: recNoWrite}
+	}
+	_, werr := f.Write([]byte("x"))
+	cerr := f.Close()
+	if rerr := os.Remove(f.Name()); werr != nil || cerr != nil || rerr != nil || syscall.Statfs(dir, &fs) != nil {
 		return recDisk{Reason: recNoWrite}
 	}
 	return recDisk{OK: true, Total: int64(fs.Blocks) * int64(fs.Bsize), Free: int64(fs.Bavail) * int64(fs.Bsize)}

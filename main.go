@@ -100,22 +100,28 @@ func main() {
 
 	go runOffline(context.Background(), hub)
 
+	// Một cams cho cả giao diện lẫn bộ ghi: bộ ghi thấy khoá tài khoản do ảnh chụp, Thử kết nối đặt (và ngược lại).
+	cm := newCams(hub.cfg.Devices, db)
+	var rec *recorder // Phần 3: báo động gọi rec.KeepAround; nil khi chưa gắn ổ ghi hình
 	if dir := os.Getenv("HUBD_REC_DIR"); dir != "" { // ghi hình mọi camera qua go2rtc (recorder.go)
-		cm := newCams(nil, db) // chỉ dùng cấu hình đầu ghi và địa chỉ go2rtc
-		rec := newRecorder(db, cm.go2rtc, dir, func() recDisk { return recDiskCheck(dir, path) },
+		rec = newRecorder(db, cm.go2rtc, dir, func() recDisk { return recDiskCheck(dir, path) },
 			func() []recSource { return recSources(db, cm) }, func() map[string]recPolicy { return camPolicies(db) }, hub.notify)
 		go rec.run(context.Background())
 	}
 
 	auth := NewAuth(pin, db)
 	auth.assistant = os.Getenv("HUBD_ASSISTANT_TOKEN")
-	mux := newMux(hub, auth)
+	mux := newMuxCams(hub, auth, cm)
 	go serveTLS(mux, db) // HTTPS :8443 cho micro và OAuth (tls.go); chưa bật trong Cài đặt thì bắt tay TLS báo lỗi
 	log.Printf("hubd nghe tại %s", cfg.HTTP.Listen)
 	log.Fatal(http.ListenAndServe(cfg.HTTP.Listen, mux))
 }
 
 func newMux(hub *Hub, auth *Auth) *http.ServeMux {
+	return newMuxCams(hub, auth, newCams(hub.cfg.Devices, hub.db))
+}
+
+func newMuxCams(hub *Hub, auth *Auth, cm *cams) *http.ServeMux {
 	sub, _ := fs.Sub(webEmbed, "web")
 	mux := http.NewServeMux()
 	static := http.FileServer(http.FS(sub))
@@ -174,7 +180,6 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 			}
 		}
 	}))
-	cm := newCams(hub.cfg.Devices, hub.db)
 	cm.register(mux, auth)
 	mountCameras(mux, cm, hub, auth)
 	mux.HandleFunc("POST /api/cmd", auth.Require(func(w http.ResponseWriter, r *http.Request) {

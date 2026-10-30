@@ -7,20 +7,38 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"hubd/isapi"
 )
 
 // Bộ ghi: mỗi camera một luồng MP4 phân mảnh từ go2rtc (GET /api/stream.mp4), recSplit cắt file, ghi chỉ mục, xoá theo
 // recPlan. URL nguồn có mật khẩu: log chỉ có id camera và câu cố định hoặc mã HTTP, không in lỗi của http.Client (lỗi đó
 // chứa URL).
 
-type recSource struct{ ID, URL string } // URL có mật khẩu, không bao giờ log
+type recSource struct {
+	ID, URL string       // URL có mật khẩu, không bao giờ log
+	client  *http.Client // client ISAPI dùng chung với ảnh chụp, Thử kết nối (giữ khoá 15 phút); nil = camera RTSP thường
+	probe   string       // GET qua client sau lần nối không ra file: sai mật khẩu thì 401 bật khoá
+}
+
+// locked: tài khoản vừa bị từ chối; không mở luồng vì go2rtc gửi mật khẩu qua RTSP mỗi lần nối (đầu ghi khoá IP của hub).
+func (s recSource) locked() bool {
+	if s.client == nil {
+		return false
+	}
+	t, ok := s.client.Transport.(*isapi.Transport)
+	return ok && t.Locked()
+}
 
 type recHold struct {
 	cam          string
@@ -42,9 +60,9 @@ type recorder struct {
 	notify   func(level, kind, text string)
 
 	// test thay được
-	create               func(cam string, start time.Time) (io.WriteCloser, string, error)
-	tick                 <-chan time.Time // nil = mỗi 60 giây
-	backoff0, backoffMax time.Duration
+	create        func(cam string, start time.Time) (io.WriteCloser, string, error)
+	tick          <-chan time.Time // nil = mỗi 60 giây
+	backoff, idle time.Duration    // chờ nối lại sau luồng đã ra file; hạn không nhận byte nào thì coi luồng đứng
 
 	plan sync.Mutex // kiểm ổ, recPlan + xoá file, đánh dấu giữ: chạy lần lượt (file vừa held không bị xoá theo quyết định cũ)
 	wg   sync.WaitGroup
@@ -59,17 +77,19 @@ type recorder struct {
 func newRecorder(db *DB, go2rtc *url.URL, dir string, disk func() recDisk, sources func() []recSource,
 	policies func() map[string]recPolicy, notify func(level, kind, text string)) *recorder {
 	r := &recorder{db: db, go2rtc: go2rtc, dir: dir, disk: disk, sources: sources, policies: policies, notify: notify,
-		backoff0: 2 * time.Second, backoffMax: time.Minute, runs: map[string]*recRun{}}
+		backoff: 2 * time.Second, idle: 30 * time.Second, runs: map[string]*recRun{}}
 	r.create = r.createFile
 	return r
 }
 
-// recSources: luồng chính của mọi camera: kênh đầu ghi (chưa có IP đầu ghi thì bỏ qua) rồi camera nối thẳng.
+// recSources: luồng chính của mọi camera: kênh đầu ghi (chưa có IP đầu ghi thì bỏ qua) rồi camera nối thẳng. Đầu ghi và
+// camera Hikvision kèm client ISAPI của c (cùng client với ảnh chụp, Thử kết nối) để thấy khoá tài khoản.
 func recSources(db *DB, c *cams) []recSource {
 	out := []recSource{}
 	if n := c.conf(); n.On {
+		cl, probe := c.client(n), "http://"+n.Host+"/ISAPI/System/deviceInfo"
 		for _, d := range camDevices(db.Setting("nvr")) {
-			out = append(out, recSource{d.ID, nvrRTSP(n, d.Channel, false)})
+			out = append(out, recSource{d.ID, nvrRTSP(n, d.Channel, false), cl, probe})
 		}
 	}
 	direct, err := camList(db)
@@ -77,7 +97,12 @@ func recSources(db *DB, c *cams) []recSource {
 		log.Print("ghi hình: không đọc được danh sách camera")
 	}
 	for _, rec := range direct {
-		out = append(out, recSource{rec.ID, rec.rtsp(false)})
+		s := recSource{ID: rec.ID, URL: rec.rtsp(false)}
+		if rec.Kind == "hik_cam" {
+			hp := net.JoinHostPort(rec.Host, strconv.Itoa(rec.HTTPPort))
+			s.client, s.probe = c.clientFor(hp, rec.User, rec.Pass), "http://"+hp+"/ISAPI/System/deviceInfo"
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -210,33 +235,37 @@ func (r *recorder) stopLocked() {
 	}
 }
 
-// sync: mở luồng cho nguồn mới, đóng luồng của nguồn đã bỏ hoặc đổi URL (mật khẩu mới).
+// sync: mở luồng cho nguồn mới (trừ nguồn đang bị khoá tài khoản), đóng luồng của nguồn đã bỏ hoặc đổi URL (mật khẩu mới).
 func (r *recorder) sync(ctx context.Context) {
-	want := map[string]string{}
+	want := map[string]recSource{}
 	for _, s := range r.sources() {
-		want[s.ID] = s.URL
+		want[s.ID] = s
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.ok || r.stopped { // file vừa xong có thể đã dừng ghi sau lúc check xem ổ
+		return
+	}
 	for id, run := range r.runs {
-		if want[id] != run.url {
+		if want[id].URL != run.url {
 			run.cancel()
 			delete(r.runs, id)
 		}
 	}
-	for id, u := range want {
-		if r.runs[id] == nil {
+	for id, s := range want {
+		if r.runs[id] == nil && !s.locked() {
 			sctx, cancel := context.WithCancel(ctx)
-			run := &recRun{u, cancel}
+			run := &recRun{s.URL, cancel}
 			r.runs[id] = run
 			r.wg.Add(1)
-			go r.stream(sctx, recSource{id, u}, run)
+			go r.stream(sctx, s, run)
 		}
 	}
 }
 
-// stream: nối go2rtc, ghi tới khi luồng hết, chờ rồi nối lại (2 giây gấp đôi tới 60 giây; ghi xong một file thì về 2 giây).
-// Lỗi ghi file thì thôi hẳn tới lần kiểm ổ kế tiếp.
+// stream: nối go2rtc, ghi tới khi luồng hết. Lần nối đã ra file thì chờ 2 giây rồi nối lại. Lần nối không ra file (go2rtc lỗi,
+// sai mật khẩu, camera tắt) thì thử ISAPI một lần rồi chờ lần kiểm 60 giây: mỗi lần nối go2rtc gửi mật khẩu qua RTSP,
+// nối dồn dập với mật khẩu sai thì đầu ghi khoá IP của hub. Lỗi ghi file thì thôi hẳn tới lần kiểm ổ kế tiếp.
 func (r *recorder) stream(ctx context.Context, s recSource, me *recRun) {
 	defer r.wg.Done()
 	defer func() {
@@ -247,43 +276,72 @@ func (r *recorder) stream(ctx context.Context, s recSource, me *recRun) {
 		}
 		r.mu.Unlock()
 	}()
-	wait := r.backoff0
 	for {
 		files, bad := r.once(ctx, s)
 		if bad {
 			r.writeFailed()
 			return
 		}
-		if files > 0 {
-			wait = r.backoff0
+		if files == 0 {
+			if ctx.Err() == nil {
+				r.probe(ctx, s)
+			}
+			return
 		}
-		t := time.NewTimer(wait)
+		t := time.NewTimer(r.backoff)
 		select {
 		case <-ctx.Done():
 			t.Stop()
 			return
 		case <-t.C:
 		}
-		wait = min(2*wait, r.backoffMax)
 		r.mu.Lock()
 		on := r.ok && !r.stopped
 		r.mu.Unlock()
-		if !on {
+		if !on || s.locked() {
 			return
 		}
 	}
 }
 
-// once: một lần nối go2rtc. Trả số file đã xong và bad = lỗi tạo/ghi/đóng file (khác lỗi đọc luồng).
-// ponytail: không hẹn giờ đọc; go2rtc giữ kết nối mà không gửi gì thì camera đó ngừng ghi tới khi nguồn đổi hay hubd
-// khởi động lại. Gặp thật thì bọc res.Body bằng bộ đọc có hạn chờ.
+// probe: một yêu cầu ISAPI qua client dùng chung; sai mật khẩu thì Transport bật khoá 15 phút và sync bỏ qua nguồn này.
+// Không log lỗi của client (có địa chỉ).
+func (r *recorder) probe(ctx context.Context, s recSource) {
+	if s.client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.probe, nil)
+	res, err := s.client.Do(req)
+	if err != nil {
+		return
+	}
+	io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
+	res.Body.Close()
+	if res.StatusCode == http.StatusUnauthorized {
+		log.Printf("ghi hình %s: camera từ chối tài khoản, tạm ngừng ghi 15 phút", s.ID)
+	}
+}
+
+// once: một lần nối go2rtc. Trả số file đã xong và bad = lỗi tạo/ghi/đóng file (khác lỗi đọc luồng). Quá r.idle không
+// nhận byte nào (kể cả lúc chờ đầu trả lời) thì huỷ yêu cầu: luồng đứng.
+// Tên luồng go2rtc rec_<id>: id camera luôn bắt đầu bằng cam_, nên không trùng luồng xem trực tiếp (ch<kênh>, <id>).
 func (r *recorder) once(ctx context.Context, s recSource) (files int, bad bool) {
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var stalled atomic.Bool
+	idle := time.AfterFunc(r.idle, func() { stalled.Store(true); cancel() })
+	defer idle.Stop()
 	u := *r.go2rtc
-	u.Path, u.RawQuery = "/api/stream.mp4", url.Values{"name": {s.ID + "_rec"}, "src": {s.URL}}.Encode()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	u.Path, u.RawQuery = "/api/stream.mp4", url.Values{"name": {"rec_" + s.ID}, "src": {s.URL}}.Encode()
+	req, _ := http.NewRequestWithContext(rctx, http.MethodGet, u.String(), nil)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		if ctx.Err() == nil {
+		switch {
+		case stalled.Load():
+			log.Printf("ghi hình %s: luồng đứng", s.ID)
+		case ctx.Err() == nil:
 			log.Printf("ghi hình %s: go2rtc không trả lời", s.ID)
 		}
 		return 0, false
@@ -293,7 +351,7 @@ func (r *recorder) once(ctx context.Context, s recSource) (files int, bad bool) 
 		log.Printf("ghi hình %s: go2rtc HTTP %d", s.ID, res.StatusCode)
 		return 0, false
 	}
-	err = recSplit(res.Body, recMaxBytes, func(start time.Time) (io.WriteCloser, string, error) {
+	err = recSplit(recIdle{res.Body, idle, r.idle}, recMaxBytes, func(start time.Time) (io.WriteCloser, string, error) {
 		w, p, err := r.create(s.ID, start)
 		if err != nil {
 			bad = true
@@ -307,10 +365,27 @@ func (r *recorder) once(ctx context.Context, s recSource) (files int, bad bool) 
 	switch {
 	case bad:
 		log.Printf("ghi hình %s: không ghi được file", s.ID)
+	case stalled.Load():
+		log.Printf("ghi hình %s: luồng đứng", s.ID)
 	case err != nil && ctx.Err() == nil:
 		log.Printf("ghi hình %s: luồng ngắt hoặc hỏng", s.ID)
 	}
 	return files, bad
+}
+
+// recIdle: đọc được byte nào thì lùi hẹn giờ luồng đứng.
+type recIdle struct {
+	io.Reader
+	t *time.Timer
+	d time.Duration
+}
+
+func (b recIdle) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if n > 0 {
+		b.t.Reset(b.d)
+	}
+	return n, err
 }
 
 // recOut đánh dấu lỗi ghi (ổ bị rút, ổ đầy) để phân biệt với lỗi đọc luồng go2rtc.
@@ -363,9 +438,10 @@ func (r *recorder) writeFailed() {
 	}
 }
 
-// finished: file xong thì vào chỉ mục, áp lệnh giữ đang chờ phủ file này, rồi chạy quy tắc xoá. Lệnh giữ bỏ khi đã có file
-// của camera kết thúc sau khoảng giữ, hoặc sau 10 phút.
+// finished: file xong thì vào chỉ mục và áp lệnh giữ đang chờ phủ file này (cùng dưới r.plan: quy tắc xoá không chen vào
+// giữa), rồi chạy quy tắc xoá. Lệnh giữ bỏ khi đã có file của camera kết thúc sau khoảng giữ, hoặc sau 10 phút.
 func (r *recorder) finished(cam string, s recSeg) {
+	r.plan.Lock()
 	if _, err := recAdd(r.db, recFile{Cam: cam, Path: s.Path, Start: s.Start, End: s.End, Bytes: s.Bytes}); err != nil {
 		log.Printf("ghi hình %s: không ghi được chỉ mục", cam) // file mồ côi: lần khởi động sau sẽ thêm lại
 	}
@@ -387,21 +463,23 @@ func (r *recorder) finished(cam string, s recSeg) {
 	for _, h := range apply {
 		r.hold(h)
 	}
+	r.plan.Unlock()
 	r.retain()
 }
 
 // KeepAround giữ đoạn [t−30s, t+30s] của camera: file đã có trong chỉ mục giữ ngay, file đang ghi giữ khi ghi xong.
 func (r *recorder) KeepAround(cam string, t time.Time) {
 	h := recHold{cam, t.Add(-30 * time.Second), t.Add(30 * time.Second), time.Now()}
+	r.plan.Lock()
+	defer r.plan.Unlock()
 	r.mu.Lock()
-	r.holds = append(r.holds, h) // trước recHoldRange: file xong giữa hai bước vẫn thấy lệnh giữ
+	r.holds = append(r.holds, h)
 	r.mu.Unlock()
 	r.hold(h)
 }
 
+// hold: bên gọi giữ r.plan.
 func (r *recorder) hold(h recHold) {
-	r.plan.Lock()
-	defer r.plan.Unlock()
 	if _, err := recHoldRange(r.db, h.cam, h.from, h.to); err != nil {
 		log.Printf("ghi hình %s: không đánh dấu giữ được", h.cam)
 	}

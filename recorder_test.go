@@ -11,10 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"hubd/isapi"
 )
 
 // go2rtc giả: serve trả lời yêu cầu thứ n (từ 1) của /api/stream.mp4; query của từng yêu cầu đi vào kênh trả về.
@@ -52,12 +55,12 @@ type recEnv struct {
 
 func diskOK() recDisk { return recDisk{OK: true, Total: 1e12, Free: 5e11} }
 
-// startRec chạy recorder với chờ nối lại 1–4 ms; setup sửa recorder trước khi chạy. Dừng và chờ mọi goroutine khi test xong.
+// startRec chạy recorder với chờ nối lại 1 ms; setup sửa recorder trước khi chạy. Dừng và chờ mọi goroutine khi test xong.
 func startRec(t *testing.T, g2 *url.URL, srcs []recSource, disk func() recDisk, setup func(*recorder)) *recEnv {
 	e := &recEnv{db: newDB(t), dir: t.TempDir(), tick: make(chan time.Time), notes: make(chan string, 100)}
 	e.r = newRecorder(e.db, g2, e.dir, disk, func() []recSource { return srcs }, func() map[string]recPolicy { return nil },
 		func(level, kind, text string) { e.notes <- level + "|" + kind + "|" + text })
-	e.r.tick, e.r.backoff0, e.r.backoffMax = e.tick, time.Millisecond, 4*time.Millisecond
+	e.r.tick, e.r.backoff = e.tick, time.Millisecond
 	if setup != nil {
 		setup(e.r)
 	}
@@ -89,6 +92,12 @@ func noneIn[T any](t *testing.T, c <-chan T, what string) {
 	}
 }
 
+// idle: chờ mọi luồng thôi (lần kiểm chỉ mở lại nguồn không còn luồng).
+func (e *recEnv) idle(t *testing.T) {
+	t.Helper()
+	waitFor(t, "luồng thôi", func() bool { return e.runs() == 0 })
+}
+
 func (e *recEnv) runs() int {
 	e.r.mu.Lock()
 	defer e.r.mu.Unlock()
@@ -118,10 +127,10 @@ func TestRecorderWritesAndIndexes(t *testing.T) {
 		}
 		<-r.Context().Done()
 	})
-	src := recSource{"cam_a", "rtsp://u:p%40ss@10.0.0.9:554/Streaming/Channels/101"}
+	src := recSource{ID: "cam_a", URL: "rtsp://u:p%40ss@10.0.0.9:554/Streaming/Channels/101"}
 	e := startRec(t, g2, []recSource{src}, diskOK, nil)
 	q := recv(t, reqs, "yêu cầu đầu")
-	if q.Get("name") != "cam_a_rec" || q.Get("src") != src.URL {
+	if q.Get("name") != "rec_cam_a" || q.Get("src") != src.URL {
 		t.Fatalf("query %v", q)
 	}
 	recv(t, reqs, "nối lại sau khi luồng hết") // file của lần đầu đã vào chỉ mục
@@ -162,7 +171,7 @@ func TestRecorderReconnects(t *testing.T) {
 			<-r.Context().Done()
 		}
 	})
-	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://x/y"}}, diskOK, nil)
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, diskOK, nil)
 	for i := 1; i <= 4; i++ {
 		recv(t, reqs, "yêu cầu go2rtc")
 	}
@@ -183,7 +192,7 @@ func TestRecorderNeverLogsURL(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	src := recSource{"cam_a", "rtsp://u:p%40ss@10.0.0.9:554/x"}
+	src := recSource{ID: "cam_a", URL: "rtsp://u:p%40ss@10.0.0.9:554/x"}
 	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) {
 		switch n {
 		case 1:
@@ -198,6 +207,10 @@ func TestRecorderNeverLogsURL(t *testing.T) {
 	e := startRec(t, g2, []recSource{src}, diskOK, nil)
 	for i := 1; i <= 3; i++ {
 		recv(t, reqs, "yêu cầu go2rtc")
+		if i < 3 { // lần nối không ra file: nối lại ở lần kiểm kế, sau khi luồng cũ đã thôi
+			e.idle(t)
+			e.tick <- time.Now()
+		}
 	}
 	e.stop()
 	out := buf.String()
@@ -229,7 +242,7 @@ func TestRecorderKeepAroundPending(t *testing.T) {
 		<-r.Context().Done()
 	})
 	created := make(chan string, 10)
-	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://x/y"}}, diskOK, func(r *recorder) {
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, diskOK, func(r *recorder) {
 		orig := r.create
 		r.create = func(cam string, s time.Time) (io.WriteCloser, string, error) {
 			w, p, err := orig(cam, s)
@@ -277,7 +290,7 @@ func TestRecorderDiskWriteError(t *testing.T) {
 	stream := fakeFMP4("hev1", uniformGOPs(3, 3, 500))
 	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) { sendHold(w, r, stream) })
 	var calls atomic.Int32
-	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://x/y"}}, diskOK, func(r *recorder) {
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, diskOK, func(r *recorder) {
 		orig := r.create
 		r.create = func(cam string, s time.Time) (io.WriteCloser, string, error) {
 			if calls.Add(1) == 1 {
@@ -290,11 +303,12 @@ func TestRecorderDiskWriteError(t *testing.T) {
 	if n := recv(t, e.notes, "báo lỗi ghi"); n != "warn|luu_tru|Không ghi được vào ổ ghi hình, đã dừng ghi." {
 		t.Fatalf("báo %q", n)
 	}
-	select { // chờ nối lại 1–4 ms: 50 ms đủ để thấy nếu nó nối lại sai
+	select { // chờ nối lại 1 ms: 50 ms đủ để thấy nếu nó nối lại sai
 	case <-reqs:
 		t.Fatal("nối lại go2rtc trước lần kiểm ổ kế tiếp")
 	case <-time.After(50 * time.Millisecond):
 	}
+	e.idle(t)
 	e.tick <- time.Now()
 	recv(t, reqs, "ghi lại sau lần kiểm ổ")
 	e.stop()
@@ -311,7 +325,7 @@ func TestRecorderStopAndResume(t *testing.T) {
 		sendHold(w, r, stream)
 		ended <- n
 	})
-	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://x/y"}}, disk, nil)
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, disk, nil)
 	recv(t, reqs, "yêu cầu đầu")
 	free.Store(1e7) // 1%, không có file thường để xoá
 	e.tick <- time.Now()
@@ -325,6 +339,14 @@ func TestRecorderStopAndResume(t *testing.T) {
 		t.Fatal("mở luồng khi đang dừng")
 	}
 	noneIn(t, e.notes, "báo dừng lần hai")
+	free.Store(2.5e7) // trên 2% nhưng chưa tới 3%: vẫn dừng
+	e.tick <- time.Now()
+	e.tick <- time.Now()
+	if e.runs() != 0 {
+		t.Fatal("ghi lại khi mới 2,5%")
+	}
+	noneIn(t, e.notes, "báo ghi lại khi mới 2,5%")
+	noneIn(t, reqs, "yêu cầu go2rtc khi mới 2,5%")
 	free.Store(4e7)
 	e.tick <- time.Now()
 	if n := recv(t, e.notes, "báo ghi lại"); n != "info|luu_tru|Ổ ghi hình đã có chỗ, ghi hình lại." {
@@ -349,7 +371,7 @@ func TestRecorderDiskNotOKNoRequests(t *testing.T) {
 		sendHold(w, r, stream)
 		ended <- n
 	})
-	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://x/y"}}, disk, nil)
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, disk, nil)
 	e.tick <- time.Now()
 	e.tick <- time.Now() // lần kiểm lúc khởi động và lần kế đã chạy xong
 	if e.runs() != 0 {
@@ -397,9 +419,172 @@ func TestRecSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := recSources(db, c)
-	if len(s) != 2 || s[0] != (recSource{"cam_ch2", "rtsp://admin:pw@192.168.1.64:554/Streaming/Channels/201"}) ||
-		s[1] != (recSource{cam.ID, cam.rtsp(false)}) {
-		t.Fatalf("nguồn %v", s)
+	rtsp, err := camSave(db, camRec{Name: "Cổng sau", Zone: "z1", Kind: "rtsp", Host: "10.0.0.7", User: "u", Pass: "p", MainPath: "/stream1"}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	s := recSources(db, c)
+	hp := cam.Host + ":" + strconv.Itoa(cam.HTTPPort)
+	if len(s) != 3 || s[0].ID != "cam_ch2" || s[0].URL != "rtsp://admin:pw@192.168.1.64:554/Streaming/Channels/201" ||
+		s[0].client != c.client(c.conf()) || s[0].probe != "http://192.168.1.64/ISAPI/System/deviceInfo" {
+		t.Fatalf("kênh đầu ghi %+v", s)
+	}
+	// camList xếp theo tên: "Camera cổng" trước "Cổng sau"
+	if s[1].ID != cam.ID || s[1].URL != cam.rtsp(false) || s[1].client != c.clientFor(hp, cam.User, cam.Pass) ||
+		s[1].probe != "http://"+hp+"/ISAPI/System/deviceInfo" {
+		t.Fatalf("camera Hikvision %+v", s[1])
+	}
+	if s[2].ID != rtsp.ID || s[2].URL != rtsp.rtsp(false) || s[2].client != nil {
+		t.Fatalf("camera RTSP %+v", s[2])
+	}
+}
+
+// lockedClient: client ISAPI vừa bị camera giả từ chối mật khẩu (khoá 15 phút), như sau một lần Thử kết nối sai.
+func lockedClient(t *testing.T, cam *digestCam) *http.Client {
+	t.Helper()
+	cl := &http.Client{Transport: &isapi.Transport{User: "admin", Pass: "sai"}}
+	if res, err := cl.Get(cam.URL + "/ISAPI/System/deviceInfo"); err == nil {
+		res.Body.Close()
+	}
+	if !cl.Transport.(*isapi.Transport).Locked() {
+		t.Fatal("client chưa bị khoá")
+	}
+	return cl
+}
+
+func (d *digestCam) bads() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.bad
+}
+
+func TestRecorderSkipsLockedSource(t *testing.T) {
+	cam := newDigestCam(t, "dung")
+	cl := lockedClient(t, cam)
+	stream := fakeFMP4("hev1", uniformGOPs(1, 3, 500))
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) { sendHold(w, r, stream) })
+	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://admin:sai@x/y", cl, cam.URL + "/ISAPI/System/deviceInfo"}}, diskOK, nil)
+	e.tick <- time.Now()
+	e.tick <- time.Now()
+	if e.runs() != 0 {
+		t.Fatal("mở luồng khi tài khoản đang bị khoá")
+	}
+	e.stop()
+	noneIn(t, reqs, "yêu cầu go2rtc khi tài khoản đang bị khoá")
+	if n := cam.bads(); n != 1 {
+		t.Fatalf("camera nhận %d lần sai mật khẩu, muốn 1", n)
+	}
+}
+
+func TestRecorderFailedAttemptWaitsForCheck(t *testing.T) {
+	stream := fakeFMP4("hev1", uniformGOPs(1, 3, 500))
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			http.Error(w, "nguồn lỗi", 500)
+			return
+		}
+		sendHold(w, r, stream)
+	})
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, diskOK, nil)
+	recv(t, reqs, "yêu cầu đầu")
+	select { // chờ nối lại 1 ms: 50 ms đủ để thấy nếu nó nối lại sai
+	case <-reqs:
+		t.Fatal("lần nối không ra file mà vẫn nối lại trước lần kiểm kế")
+	case <-time.After(50 * time.Millisecond):
+	}
+	e.idle(t)
+	e.tick <- time.Now()
+	recv(t, reqs, "nối lại ở lần kiểm kế")
+}
+
+func TestRecorderProbeLocksAfter401(t *testing.T) {
+	cam := newDigestCam(t, "dung")
+	tr := &isapi.Transport{User: "admin", Pass: "sai"}
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) { http.Error(w, "RTSP 401", 500) })
+	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://admin:sai@x/y", &http.Client{Transport: tr}, cam.URL + "/ISAPI/System/deviceInfo"}},
+		diskOK, nil)
+	recv(t, reqs, "yêu cầu đầu")
+	waitFor(t, "thử ISAPI sau lần nối hỏng làm khoá tài khoản", tr.Locked)
+	e.idle(t)
+	e.tick <- time.Now()
+	e.tick <- time.Now()
+	select {
+	case <-reqs:
+		t.Fatal("nối go2rtc khi tài khoản đang bị khoá")
+	case <-time.After(50 * time.Millisecond):
+	}
+	e.stop()
+	if n := cam.bads(); n != 1 {
+		t.Fatalf("camera nhận %d lần sai mật khẩu, muốn 1", n)
+	}
+}
+
+func TestRecorderStalledStream(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	stream := fakeFMP4("hev1", uniformGOPs(2, 3, 500))
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			sendHold(w, r, stream) // gửi 2 GOP rồi đứng
+			return
+		}
+		<-r.Context().Done()
+	})
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, diskOK, func(r *recorder) { r.idle = 100 * time.Millisecond })
+	recv(t, reqs, "yêu cầu đầu")
+	recv(t, reqs, "nối lại sau khi luồng đứng") // không cần lần kiểm: lần nối đã ra file
+	e.stop()
+	files, _ := recAll(e.db)
+	if len(files) != 1 || len(readable(t, files[0].Path)) != 2*3*500 {
+		t.Fatalf("muốn 1 file đủ 2 GOP: %+v", files)
+	}
+	if !strings.Contains(buf.String(), "ghi hình cam_a: luồng đứng") {
+		t.Fatalf("thiếu log luồng đứng: %q", buf.String())
+	}
+}
+
+// failAfter: ghi được n byte rồi lỗi, như ổ bị rút giữa lúc ghi.
+type failAfter struct {
+	io.WriteCloser
+	n int
+}
+
+func (f *failAfter) Write(b []byte) (int, error) {
+	if len(b) > f.n {
+		return 0, errors.New("ổ bị rút")
+	}
+	f.n -= len(b)
+	return f.WriteCloser.Write(b)
+}
+
+func TestRecorderWriteFailsMidFile(t *testing.T) {
+	stream := fakeFMP4("hev1", uniformGOPs(3, 3, 500))
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) { sendHold(w, r, stream) })
+	var calls atomic.Int32
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, diskOK, func(r *recorder) {
+		orig := r.create
+		r.create = func(cam string, s time.Time) (io.WriteCloser, string, error) {
+			w, p, err := orig(cam, s)
+			if err == nil && calls.Add(1) == 1 {
+				return &failAfter{w, len(fmp4Head("hev1"))}, p, nil // đầu file ghi được, GOP đầu thì lỗi
+			}
+			return w, p, err
+		}
+	})
+	recv(t, reqs, "yêu cầu đầu")
+	if n := recv(t, e.notes, "báo lỗi ghi"); n != "warn|luu_tru|Không ghi được vào ổ ghi hình, đã dừng ghi." {
+		t.Fatalf("báo %q", n)
+	}
+	select {
+	case <-reqs:
+		t.Fatal("nối lại go2rtc trước lần kiểm ổ kế tiếp")
+	case <-time.After(50 * time.Millisecond):
+	}
+	noneIn(t, e.notes, "báo lần hai")
+	e.idle(t)
+	e.tick <- time.Now()
+	recv(t, reqs, "ghi lại sau lần kiểm ổ")
+	e.stop()
+	noneIn(t, e.notes, "báo thêm")
 }

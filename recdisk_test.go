@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -28,7 +30,8 @@ func TestRecDiskMissing(t *testing.T) {
 	}
 }
 
-func TestRecDiskOtherDevice(t *testing.T) {
+// shmDir: thư mục trên /dev/shm (thiết bị khác thư mục tạm của test), không có thì bỏ qua test.
+func shmDir(t *testing.T) string {
 	if st, err := os.Stat("/dev/shm"); err != nil || !st.IsDir() {
 		t.Skip("không có /dev/shm")
 	}
@@ -36,13 +39,43 @@ func TestRecDiskOtherDevice(t *testing.T) {
 	if err != nil {
 		t.Skip("không ghi được /dev/shm")
 	}
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+func TestRecDiskOtherDevice(t *testing.T) {
+	dir := shmDir(t)
 	r := recDiskCheck(dir, t.TempDir())
 	if !r.OK || r.Total <= 0 {
 		t.Fatalf("%+v", r)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".hubd-write-test")); err == nil {
-		t.Fatal("file thử chưa xoá")
+	if left, _ := filepath.Glob(filepath.Join(dir, ".hubd-write-test*")); len(left) != 0 {
+		t.Fatalf("file thử chưa xoá: %v", left)
+	}
+}
+
+// API dung lượng và bộ ghi kiểm ổ cùng lúc: không lần nào được báo nhầm là không ghi được.
+func TestRecDiskConcurrentChecks(t *testing.T) {
+	dir, sys := shmDir(t), t.TempDir()
+	var wg sync.WaitGroup
+	var bad atomic.Int32
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 50 {
+				if !recDiskCheck(dir, sys).OK {
+					bad.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := bad.Load(); n != 0 {
+		t.Fatalf("%d/400 lần kiểm báo nhầm ổ không đạt", n)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".hubd-write-test*")); len(left) != 0 {
+		t.Fatalf("file thử chưa xoá: %v", left)
 	}
 }
 
