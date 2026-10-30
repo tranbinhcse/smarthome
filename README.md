@@ -101,7 +101,7 @@ Tải đo được (đầu ghi giả, luồng H.264 704×576 ~510 kbit/s): 10 k�
 
 ### Camera nối thẳng (không qua đầu ghi)
 
-Hub nhận thẳng camera Hikvision hoặc camera RTSP hãng khác trong LAN. Cần `COMPOSE_PROFILES=camera` (go2rtc, bước 3 ở trên); Profile này cũng khởi động `hikbridge`; chưa cấu hình đầu ghi thì nó chỉ chờ cấu hình, không đọc gì. Tài khoản MQTT `hik` chỉ dành cho đầu ghi, camera nối thẳng không cần. Chạy song song với đầu ghi được: camera nối thẳng có id `cam_<tên>`, không đụng id `cam_ch<kênh>` của đầu ghi.
+Hub nhận thẳng camera Hikvision hoặc camera RTSP hãng khác trong LAN. Cần `COMPOSE_PROFILES=camera` (go2rtc, bước 3 ở trên). Profile này cũng khởi động `hikbridge`; chưa cấu hình đầu ghi thì nó chỉ chờ cấu hình, không đọc gì. Tài khoản MQTT `hik` chỉ dành cho đầu ghi, camera nối thẳng không cần. Chạy song song với đầu ghi được: camera nối thẳng có id `cam_<tên>`, không đụng id `cam_ch<kênh>` của đầu ghi.
 
 1. Dashboard → Cài đặt → Camera → **Camera nối thẳng**: ô **Dải mạng của nhà** nhập dải LAN, ví dụ `192.168.1.0/24` (cài đặt `camera.lan_cidr`), bấm lưu. Chỉ IPv4, tối đa /24 (256 địa chỉ).
 2. Bấm **Tìm camera**. Hub thử cổng 80, 8080, 2020 từng địa chỉ, nhận ra Hikvision (ISAPI) và ONVIF, không gửi tài khoản khi quét. Kết quả hiện ở **Tìm thấy camera mới** (camera đã thêm và IP đầu ghi thì không liệt kê lại). Camera không thấy trong LAN (ví dụ còn nằm sau cổng PoE của đầu thu) thì quét không ra; bấm **Thêm tay** rồi nhập IP.
@@ -110,7 +110,7 @@ Hub nhận thẳng camera Hikvision hoặc camera RTSP hãng khác trong LAN. C�
 5. **Thử kết nối** (Hikvision: hiện model và firmware; RTSP: chỉ thử mở cổng RTSP), rồi **Lưu**. Ô mật khẩu bị xoá sau mỗi lần bấm, nên nhập lại mật khẩu trước khi bấm **Lưu**. Mỗi camera cũng có nút **Thử**, **Sửa**, **Xoá** trong danh sách. Thêm, sửa hay xoá camera thì hubd tự khởi động lại để nạp thiết bị, tải lại trang để thấy.
 
 - Ảnh chụp và xem trực tiếp đi qua hubd sau PIN; trình duyệt không thấy IP hay tài khoản camera. Ảnh chụp camera Hikvision lấy bằng ISAPI từ chính camera; ảnh chụp camera RTSP và xem trực tiếp (cả hai kiểu) qua go2rtc, luồng phụ. Mật khẩu không bao giờ gửi về trình duyệt; form sửa chỉ hiện gợi ý "Đã lưu, để trống nếu giữ nguyên" trong ô mật khẩu. Sửa camera để trống mật khẩu là giữ mật khẩu cũ, trừ khi đổi IP camera (khi đó phải nhập lại, để không gửi mật khẩu cũ tới máy khác).
-- Mỗi phút hub thử mở cổng RTSP của từng camera. Mất kết nối liên tục hơn 10 phút thì báo một lần (loại `thiet_bi`; đọc to và Telegram mỗi đường có công tắc riêng `notify.thiet_bi` / `notify.tg:thiet_bi` ở Cài đặt → Trợ lý, mặc định bật; Telegram cần đã cấu hình bot), nối lại thì báo "đã kết nối lại"; mất ngắn hơn 10 phút không báo. Hubd khởi động lại thì tính lại từ đầu.
+- Mỗi phút hub thử mở cổng RTSP của từng camera. Mất kết nối liên tục hơn 10 phút thì báo một lần (loại `thiet_bi`; đọc to và Telegram mỗi đường có công tắc riêng `notify.thiet_bi` / `notify.tg:thiet_bi` ở Cài đặt → Đọc thông báo, mặc định bật; Telegram cần đã cấu hình bot), nối lại thì báo "đã kết nối lại"; mất ngắn hơn 10 phút không báo. Hubd khởi động lại thì tính lại từ đầu.
 - Camera từ chối mật khẩu thì hub tạm ngừng thử tài khoản đó 15 phút.
 - Chưa làm: ghi hình (2B), sự kiện từ camera (2C).
 
