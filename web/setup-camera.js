@@ -2,7 +2,7 @@
 // gán kênh vào khu. Lưu ở nhóm "nvr" của hubd; mật khẩu không bao giờ quay lại trình duyệt (chỉ nvr_pass_set).
 // Gán kênh đổi thì hubd sinh lại thiết bị camera (camera.yaml) và tự khởi động lại.
 // Phần "Camera nối thẳng" (camstore.go, camscan.go): tìm trong mạng, thêm / sửa / xoá camera Hikvision hoặc RTSP.
-// Mật khẩu camera KHÔNG đi qua data-sfield/DRAFT (nút "Lưu" của nhóm camera sẽ ghi nó xuống cấu hình): ô thường, đọc lúc bấm, gửi một lần rồi xoá.
+// Mật khẩu camera KHÔNG đi qua data-sfield/DRAFT (nút "Lưu" của nhóm camera sẽ ghi nó xuống cấu hình): ô thường, giữ trong biến PW cho Thử kết nối và Lưu, xoá sau khi Lưu thành công hoặc khi Đóng.
 (() => {
   const U = window.SETUP_UI, NS = 'nvr';
   let found = null, busy = false, restart = null;   // found: {channels} hoặc {error} của lần thử gần nhất; restart: cfg lúc lưu
@@ -55,7 +55,7 @@
       <label class="sf"><span>Khu</span>${sel('zone', zones)}</label>
       <div class="kv"><button class="pill" data-sact="camera:ctest"${F.busy ? ' disabled' : ''}>${F.busy ? 'Đang thử...' : 'Thử kết nối'}</button><button class="pill amber" data-sact="camera:csave"${F.busy ? ' disabled' : ''}>Lưu</button><button class="pill" data-sact="camera:cclose">Đóng</button></div>
       ${F.result ? `<p class="note${F.result.ok ? '' : ' bad'}">${e(F.result.text)}</p>` : ''}
-      <p class="note">Mật khẩu chỉ gửi một lần cho hub, ô sẽ tự xoá sau mỗi lần bấm. ${form === 'edit' ? 'Để trống mật khẩu là giữ mật khẩu đã lưu.' : 'Bấm Lưu thì nhập lại mật khẩu.'}</p></div>`;
+      <p class="note">Mật khẩu chỉ nằm trong ô này, gửi cho hub khi Thử kết nối hoặc Lưu, tự xoá sau khi Lưu thành công hoặc Đóng. ${form === 'edit' ? 'Để trống mật khẩu là giữ mật khẩu đã lưu.' : ''}</p></div>`;
   }
 
   function direct() {
@@ -77,7 +77,7 @@
       <h4 class="mh">Đầu ghi (cách cũ)</h4>`;
   }
 
-  // gói ô nhập thành body gửi hub; mật khẩu đọc lúc bấm rồi xoá khỏi ô
+  // gói ô nhập thành body gửi hub; mật khẩu lấy từ PW (Lưu hỏng thì vẫn còn để thử lại)
   function payload(pass) {
     const tp = F.kind === 'rtsp' && F.brand !== 'other' ? tplOf(F.brand) : null;
     const o = {kind: F.kind, host: String(F.host || '').trim(), user: String(F.user || '').trim(), pass,
@@ -86,8 +86,8 @@
     if (F.kind === 'rtsp') { o.main_path = tp ? tp.main_path : String(F.main_path || '').trim(); o.sub_path = tp ? tp.sub_path : String(F.sub_path || '').trim(); }
     return o;
   }
-  // mật khẩu chỉ rời module khi gửi: lấy ra rồi xoá ở biến và ô nhập
-  const takePass = () => { const p = PW; PW = ''; const b = document.getElementById('cam-pass'); if (b) b.value = ''; return p; };
+  const clearPass = () => { PW = ''; const b = document.getElementById('cam-pass'); if (b) b.value = ''; };
+  const tapoIdx = () => TPL.findIndex(t => /tapo|tp-?link/i.test(t.brand));
   const testText = j => j.ok ? `Kết nối được${j.model ? ': ' + j.model : ''}${j.firmware ? ' (' + j.firmware + ')' : ''}` : (j.message || 'Không kết nối được');
   async function runTest(o, into) {
     const r = await U.api('/api/cameras/test', json('POST', o));
@@ -101,7 +101,11 @@
     if (verb === 'pick') {
       const h = (SCAN?.found || []).filter(h => !(CAMS || []).some(c => c.host === h.host))[Number(arg)];
       if (!h) return;
-      form = 'new'; PW = ''; F = {kind: h.kind === 'hik_cam' ? 'hik_cam' : 'rtsp', brand: '0', rtsp_port: TPL[0]?.rtsp_port || '', host: h.host, name: h.model || ''}; return U.soon();
+      const tapo = h.kind !== 'hik_cam' && (h.port === 2020 || /tapo|tp-?link/i.test(h.model || '')) ? tapoIdx() : -1;   // cổng 2020 là ONVIF của Tapo
+      const tp = TPL[Math.max(tapo, 0)];
+      form = 'new'; PW = ''; F = {kind: h.kind === 'hik_cam' ? 'hik_cam' : 'rtsp', brand: String(Math.max(tapo, 0)), rtsp_port: tp?.rtsp_port || '', host: h.host, name: h.model || ''};
+      if (h.kind === 'hik_cam') F.http_port = h.port;   // form không có ô cổng HTTP: giữ cổng quét thấy (vd 8080) làm trạng thái ẩn
+      return U.soon();
     }
     if (verb === 'edit') {
       const c = CAMS.find(c => c.id === arg);
@@ -111,7 +115,7 @@
         rtsp_port: c.rtsp_port || '', main_path: c.main_path || '', sub_path: c.sub_path || ''};
       return U.soon();
     }
-    if (verb === 'cclose') { form = null; F = {}; PW = ''; return U.soon(); }
+    if (verb === 'cclose') { form = null; F = {}; clearPass(); return U.soon(); }
     if (U.DEMO) return U.toast('Chế độ dữ liệu mẫu không kết nối camera thật');
     if (verb === 'scan') {
       const r = await U.api('/api/cameras/scan', {method: 'POST'});
@@ -128,7 +132,7 @@
     }
     if (verb === 'ctest') {
       if (F.busy) return;
-      const o = payload(takePass());
+      const o = payload(PW);
       F.busy = true; F.result = null; U.soon();
       try { F.result = await runTest(o); }
       catch { F.result = {ok: false, text: 'Không gọi được hub, thử lại'}; }   // mạng đứt hoặc hub đang khởi động lại
@@ -139,13 +143,13 @@
       if (F.busy) return;
       if (!F.name?.trim()) return U.toast('Nhập tên camera');   // kiểm tra trước: thiếu tên thì không xoá mật khẩu đang gõ
       F.busy = true; U.soon();
-      const o = payload(takePass());
+      const o = payload(PW);
       o.name = F.name.trim(); o.zone = F.zone || '';
       const before = camKey(CAMS);
       try {
         const r = await U.api('/api/cameras', json('PUT', o));
         if (!r.ok) return U.toast(`Chưa lưu được: ${(await r.text()).trim()}`);
-        form = null; F = {};
+        form = null; F = {}; clearPass();   // chỉ xoá khi lưu xong; lưu hỏng thì giữ để thử lại
         await loadCams();
         if (camKey(CAMS) !== before) { camRestart = cfg; }
         return U.toast('Đã lưu camera');

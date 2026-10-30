@@ -247,6 +247,19 @@ func TestCameraSetupWired(t *testing.T) {
 	if strings.Count(js, "finally { F.busy = false; U.soon(); }") < 2 {
 		t.Error("Thử kết nối và Lưu phải mở lại nút trong finally khi gọi hub lỗi")
 	}
+	// mật khẩu: Thử kết nối không được xoá (Lưu ngay sau đó cần nó); chỉ Lưu thành công và Đóng xoá
+	if strings.Contains(js, "takePass") || strings.Count(js, "payload(PW)") != 2 {
+		t.Error("Thử kết nối và Lưu phải đọc mật khẩu từ PW mà không xoá nó")
+	}
+	if strings.Count(js, "clearPass()") != 2 || !strings.Contains(js, "form = null; F = {}; clearPass();   // chỉ xoá khi lưu xong") {
+		t.Error("PW chỉ được xoá sau Lưu thành công và khi Đóng")
+	}
+	if !strings.Contains(js, "F.http_port = h.port") {
+		t.Error("camera Hikvision tìm thấy ở cổng 8080 phải mang cổng đó vào form")
+	}
+	if !strings.Contains(js, "h.port === 2020") {
+		t.Error("camera tìm thấy ở cổng 2020 phải chọn sẵn mẫu Tapo")
+	}
 	if strings.Contains(js, "http_port: 0,") {
 		t.Error("camera sửa phải giữ http_port đã lưu")
 	}
