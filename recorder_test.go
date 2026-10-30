@@ -29,7 +29,10 @@ func fakeG2(t *testing.T, serve func(n int, w http.ResponseWriter, r *http.Reque
 			http.Error(w, "không có", 404)
 			return
 		}
-		reqs <- r.URL.Query()
+		select { // bộ ghi lỗi mà nối dồn dập: bỏ bớt thay vì treo handler (srv.Close sẽ chờ mãi)
+		case reqs <- r.URL.Query():
+		default:
+		}
 		serve(int(n.Add(1)), w, r)
 	}))
 	t.Cleanup(srv.Close)
