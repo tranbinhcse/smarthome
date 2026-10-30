@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -406,16 +407,12 @@ func TestCamerasTestKeepsSecretWithHost(t *testing.T) {
 	if json.Unmarshal(w.Body.Bytes(), &out) != nil || out["ok"] != true {
 		t.Fatalf("pass nhập: %s", w.Body)
 	}
-	// rtsp: chỉ nối TCP
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	defer l.Close()
-	w = call(mux, "POST", "/api/cameras/test", fmt.Sprintf(`{"kind":"rtsp","host":"127.0.0.1","rtsp_port":%d}`, l.Addr().(*net.TCPAddr).Port), "", ck)
-	if json.Unmarshal(w.Body.Bytes(), &out) != nil || out["ok"] != true {
-		t.Fatalf("rtsp: %s", w.Body)
-	}
 }
 
 func TestCamerasTestMessages(t *testing.T) {
+	g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})) // go2rtc thật trả 200 rỗng khi nguồn không tới được
+	defer g2.Close()
+	t.Setenv("GO2RTC_URL", g2.URL)
 	_, mux, ck := apiEnv(t)
 	cam := newDigestCam(t, "mat-khau-that")
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
@@ -595,5 +592,45 @@ func TestCamerasTestDoesNotFollowRedirect(t *testing.T) {
 	w := call(mux, "POST", "/api/cameras/test", testBody("127.0.0.1", p, `,"pass":"x"`), "", ck)
 	if hits != 0 || !strings.Contains(w.Body.String(), `"ok":false`) {
 		t.Fatalf("chuyển hướng: hits=%d %s", hits, w.Body)
+	}
+}
+
+// Thử RTSP chụp một khung thật qua go2rtc (luồng _camtest): sai đường dẫn/mật khẩu thì hỏng, đúng thì ok.
+func TestCamerasTestRTSPGrabsFrame(t *testing.T) {
+	var methods, names, srcs []string
+	empty := false
+	g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		names = append(names, r.URL.Query().Get("name"))
+		srcs = append(srcs, r.URL.Query().Get("src"))
+		if !empty {
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Write(jpeg)
+		}
+	}))
+	defer g2.Close()
+	t.Setenv("GO2RTC_URL", g2.URL)
+	_, mux, ck := apiEnv(t)
+	body := `{"kind":"rtsp","host":"192.168.1.51","rtsp_port":554,"user":"u","pass":"p@ss","main_path":"/main","sub_path":"/sub?x=1"}`
+	var out map[string]any
+	w := call(mux, "POST", "/api/cameras/test", body, "", ck)
+	if json.Unmarshal(w.Body.Bytes(), &out) != nil || out["ok"] != true ||
+		!reflect.DeepEqual(methods, []string{"GET /api/frame.jpeg"}) || names[0] != "_camtest" || srcs[0] != "rtsp://u:p%40ss@192.168.1.51:554/sub?x=1" {
+		t.Fatalf("%s methods=%v names=%v srcs=%v", w.Body, methods, names, srcs)
+	}
+	empty = true // go2rtc không tới được camera: 200 và thân rỗng
+	w = call(mux, "POST", "/api/cameras/test", body, "", ck)
+	if json.Unmarshal(w.Body.Bytes(), &out) != nil || out["ok"] != false || strings.Contains(w.Body.String(), "p@ss") || strings.Contains(w.Body.String(), "192.168.1.51") {
+		t.Fatalf("khung rỗng phải thành lỗi, không lộ gì: %s", w.Body)
+	}
+}
+
+func TestCamerasTestRTSPGo2rtcDown(t *testing.T) {
+	t.Setenv("GO2RTC_URL", "http://127.0.0.1:1")
+	_, mux, ck := apiEnv(t)
+	w := call(mux, "POST", "/api/cameras/test", `{"kind":"rtsp","host":"192.168.1.51","main_path":"/m"}`, "", ck)
+	var out map[string]any
+	if json.Unmarshal(w.Body.Bytes(), &out) != nil || out["ok"] != false || !strings.Contains(out["message"].(string), "go2rtc chưa chạy") {
+		t.Fatalf("%s", w.Body)
 	}
 }

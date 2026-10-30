@@ -684,33 +684,36 @@ func TestDirectCamSnapshotHikvision(t *testing.T) {
 
 func TestDirectCamSnapshotRTSPViaGo2rtc(t *testing.T) {
 	var seen []string
-	var srcs []string
+	var name, src string
+	body := jpeg
 	g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Method+" "+r.URL.Path)
-		switch r.Method + " " + r.URL.Path {
-		case "PUT /api/streams":
-			srcs = append(srcs, r.URL.Query().Get("name"), r.URL.Query().Get("src"))
-		case "GET /api/frame.jpeg":
-			if r.URL.Query().Get("src") != srcs[0] {
-				t.Errorf("frame.jpeg src=%q", r.URL.Query().Get("src"))
-			}
-			w.Header().Set("Content-Type", "image/jpeg")
-			w.Write(jpeg)
+		if r.Method != http.MethodGet { // go2rtc thật ghi /config/go2rtc.yaml (chỉ đọc) khi PUT /api/streams nên trả 400
+			http.Error(w, "read-only file system", 400)
+			return
 		}
+		name, src = r.URL.Query().Get("name"), r.URL.Query().Get("src")
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(body)
 	}))
 	defer g2.Close()
 	t.Setenv("GO2RTC_URL", g2.URL)
 	rec := camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", User: "u", Pass: "p@ss/1", MainPath: "/main", SubPath: "/sub?x=1"}
-	_, mux, ck, ids := directEnv(t, rec)
+	c, mux, ck, ids := directEnv(t, rec)
 	w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
 	rec.ID = ids[0]
 	rec.RTSPPort = 554
-	if w.Code != 200 || w.Body.String() != string(jpeg) || !reflect.DeepEqual(seen, []string{"PUT /api/streams", "GET /api/frame.jpeg"}) ||
-		srcs[0] != ids[0] || srcs[1] != rec.rtsp(true) || !strings.HasSuffix(srcs[1], "/sub?x=1") {
-		t.Fatalf("code=%d seen=%v srcs=%v", w.Code, seen, srcs)
+	if w.Code != 200 || w.Body.String() != string(jpeg) || !reflect.DeepEqual(seen, []string{"GET /api/frame.jpeg"}) ||
+		name != ids[0] || src != rec.rtsp(true) || !strings.HasSuffix(src, "/sub?x=1") {
+		t.Fatalf("code=%d seen=%v name=%q src=%q", w.Code, seen, name, src)
 	}
 	if strings.Contains(w.Body.String(), "p@ss") {
 		t.Fatal("lộ mật khẩu")
+	}
+	// nguồn không tới được: go2rtc thật trả 200 với thân rỗng, hub phải coi là lỗi
+	body = nil
+	if _, _, err := c.freshSnapshot(context.Background(), ids[0]); err == nil || strings.Contains(err.Error(), "p@ss") {
+		t.Fatalf("thân rỗng phải thành lỗi: %v", err)
 	}
 }
 

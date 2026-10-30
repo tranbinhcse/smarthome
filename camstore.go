@@ -392,14 +392,17 @@ func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	fail := func(msg string) { writeJSON(w, map[string]any{"ok": false, "message": msg}) }
-	if b.Kind == "rtsp" {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(b.Host, strconv.Itoa(b.RTSPPort)), 2*time.Second)
-		if err != nil {
-			log.Printf("thử camera RTSP: không nối được cổng")
-			fail("Không kết nối được cổng RTSP của camera: kiểm tra địa chỉ, cổng và camera đã bật nguồn chưa")
+	if b.Kind == "rtsp" { // chụp một khung thật qua go2rtc: sai đường dẫn, mật khẩu hay mẫu hãng đều hỏng ở đây
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		if _, _, se := c.grabFrame(ctx, "_camtest", b.rtsp(true)); se != nil {
+			if se.msg == "go2rtc chưa chạy" {
+				fail("go2rtc chưa chạy: hub chưa thử được camera RTSP, kiểm tra dịch vụ go2rtc")
+			} else {
+				fail("Không lấy được hình từ camera RTSP: kiểm tra địa chỉ, cổng, đường dẫn, tài khoản, mật khẩu và camera đã bật nguồn chưa")
+			}
 			return
 		}
-		conn.Close()
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	}

@@ -533,35 +533,29 @@ func readImage(id string, body io.Reader, ct string) ([]byte, string, *snapErr) 
 	return b, ct, nil
 }
 
-// snapRTSP: nhờ go2rtc nhận luồng phụ rồi chụp một khung. Lỗi mạng của http.Client chứa URL (có mật khẩu) nên không ghi log.
+// snapRTSP: nhờ go2rtc chụp một khung từ luồng phụ.
 func (c *cams) snapRTSP(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
-	do := func(method, path string, q url.Values) (*http.Response, *snapErr) {
-		u := *c.go2rtc
-		u.Path, u.RawQuery = path, q.Encode()
-		req, _ := http.NewRequestWithContext(ctx, method, u.String(), nil)
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Printf("ảnh camera %s: go2rtc không trả lời", rec.ID)
-			return nil, &snapErr{502, "go2rtc chưa chạy"}
-		}
-		if res.StatusCode != 200 {
-			res.Body.Close()
-			log.Printf("ảnh camera %s: go2rtc HTTP %d", rec.ID, res.StatusCode)
-			return nil, &snapErr{502, "không lấy được ảnh từ camera"}
-		}
-		return res, nil
-	}
-	put, se := do(http.MethodPut, "/api/streams", url.Values{"name": {rec.ID}, "src": {rec.rtsp(true)}})
-	if se != nil {
-		return nil, "", se
-	}
-	put.Body.Close()
-	res, se := do(http.MethodGet, "/api/frame.jpeg", url.Values{"src": {rec.ID}})
-	if se != nil {
-		return nil, "", se
+	return c.grabFrame(ctx, rec.ID, rec.rtsp(true))
+}
+
+// grabFrame: một GET /api/frame.jpeg?name&src. Không dùng PUT /api/streams: go2rtc ghi go2rtc.yaml (gắn :ro, và sẽ lưu mật khẩu
+// vào tệp trong git nếu bỏ :ro) rồi trả 400. GET chỉ giữ luồng trong RAM. Nguồn không tới được thì go2rtc trả 200 thân rỗng
+// (readImage coi là lỗi). Lỗi mạng của http.Client chứa URL (có mật khẩu) nên không ghi log.
+func (c *cams) grabFrame(ctx context.Context, name, src string) ([]byte, string, *snapErr) {
+	u := *c.go2rtc
+	u.Path, u.RawQuery = "/api/frame.jpeg", url.Values{"name": {name}, "src": {src}}.Encode()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("ảnh camera %s: go2rtc không trả lời", name)
+		return nil, "", &snapErr{502, "go2rtc chưa chạy"}
 	}
 	defer res.Body.Close()
-	return readImage(rec.ID, res.Body, res.Header.Get("Content-Type"))
+	if res.StatusCode != 200 {
+		log.Printf("ảnh camera %s: go2rtc HTTP %d", name, res.StatusCode)
+		return nil, "", &snapErr{502, "không lấy được ảnh từ camera"}
+	}
+	return readImage(name, res.Body, res.Header.Get("Content-Type"))
 }
 
 func (c *cams) directSnapshot(w http.ResponseWriter, r *http.Request) {
