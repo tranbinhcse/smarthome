@@ -30,7 +30,7 @@ func (w *offlineWatch) check(now time.Time) {
 	seen := map[string]bool{}
 	for _, d := range w.h.cfg.Devices {
 		st, ok := snap["online:"+d.ID]
-		if !ok {
+		if !ok || d.Kind == "light" { // bóng đèn hay bị cắt ở công tắc tường: báo mỗi đêm là ồn
 			continue
 		}
 		seen[d.ID] = true

@@ -161,3 +161,24 @@ func TestOfflineForgetsRemovedDevices(t *testing.T) {
 		t.Fatalf("10 phút mới phải báo lại: %v", *got)
 	}
 }
+
+func TestOfflineSkipsLights(t *testing.T) {
+	var got []string
+	h := NewHub(Config{Devices: []Device{
+		{ID: "den", Name: "Đèn bếp", Kind: "light", OnlineTopic: "den/online"},
+		{ID: "cb", Name: "Aptomat", Kind: "breaker", OnlineTopic: "cb/online"},
+	}}, newDB(t), func(tp, p string) {
+		if tp == "hubd/alert" {
+			got = append(got, p)
+		}
+	})
+	w := newOfflineWatch(h)
+	for _, id := range []string{"den", "cb"} {
+		h.Ingest("online:"+id, "offline", t0)
+	}
+	w.check(t0)
+	w.check(t0.Add(11 * time.Minute))
+	if len(got) != 1 || !strings.Contains(got[0], "Aptomat") {
+		t.Fatalf("đèn không được báo, aptomat phải báo: %v", got)
+	}
+}
