@@ -41,6 +41,7 @@ type cams struct {
 
 	mu      sync.Mutex
 	clients map[string]*http.Client // theo đầu ghi + tài khoản: giữ trạng thái tạm ngừng sau khi bị từ chối mật khẩu
+	flights map[string]*snapFlight  // yêu cầu ảnh đang bay theo id
 	snaps   map[string]snapEntry    // ảnh mới nhất của camera nối thẳng, giữ snapTTL
 	snapAt  atomic.Int32            // chỉ số trong snapPaths mà đầu ghi trả ảnh lần gần nhất
 }
@@ -52,7 +53,7 @@ var snapPaths = []string{"/ISAPI/Streaming/channels/%d01/picture", "/ISAPI/Conte
 
 func newCams(devs []Device, db *DB) *cams {
 	c := &cams{db: db, byID: map[string]Device{}, token: os.Getenv("HUBD_CAMERA_TOKEN"), clients: map[string]*http.Client{},
-		direct: map[string]bool{}, snaps: map[string]snapEntry{}}
+		direct: map[string]bool{}, snaps: map[string]snapEntry{}, flights: map[string]*snapFlight{}}
 	g := os.Getenv("GO2RTC_URL")
 	if g == "" {
 		g = "http://go2rtc:1984" // chỉ trong mạng Docker, không mở ra LAN
@@ -435,35 +436,57 @@ func (c *cams) freshSnapshot(ctx context.Context, id string) ([]byte, string, er
 	return c.directSnap(ctx, id, true)
 }
 
+type snapFlight struct {
+	done chan struct{}
+	b    []byte
+	ct   string
+	err  error
+}
+
+// directSnap: mỗi id chỉ một yêu cầu tới camera tại một thời điểm; các yêu cầu đến khi cache hết hạn đứng đợi và dùng
+// chung kết quả (mật khẩu sai mà gửi hàng loạt thì camera khoá IP trước khi khoá tạm của hub kịp có hiệu lực).
+// freshSnapshot cũng nhập vào yêu cầu đang bay (nó vừa bắt đầu hoặc còn tối đa 10 giây), không bắt đầu yêu cầu song song.
 func (c *cams) directSnap(ctx context.Context, id string, fresh bool) ([]byte, string, error) {
 	rec, se := c.directRec(id)
 	if se != nil {
 		return nil, "", se
 	}
-	if !fresh {
-		c.mu.Lock()
-		e, ok := c.snaps[id]
+	c.mu.Lock()
+	if e, ok := c.snaps[id]; ok && !fresh && time.Since(e.at) < snapTTL {
 		c.mu.Unlock()
-		if ok && time.Since(e.at) < snapTTL {
-			return e.b, e.ct, nil
+		return e.b, e.ct, nil
+	}
+	if f := c.flights[id]; f != nil {
+		c.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.b, f.ct, f.err
+		case <-ctx.Done():
+			return nil, "", &snapErr{504, "hết thời gian chờ camera"}
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	f := &snapFlight{done: make(chan struct{})}
+	c.flights[id] = f
+	c.mu.Unlock()
+	// không gắn vào ctx của người gọi: họ ngắt thì những người đang đợi vẫn nhận kết quả
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	var b []byte
-	var ct string
+	var se2 *snapErr
 	if rec.Kind == "rtsp" {
-		b, ct, se = c.snapRTSP(ctx, rec)
+		f.b, f.ct, se2 = c.snapRTSP(fctx, rec)
 	} else {
-		b, ct, se = c.snapHik(ctx, rec)
-	}
-	if se != nil {
-		return nil, "", se
+		f.b, f.ct, se2 = c.snapHik(fctx, rec)
 	}
 	c.mu.Lock()
-	c.snaps[id] = snapEntry{b, ct, time.Now()} // ponytail: không dọn mục camera đã xoá, vài trăm KB mỗi camera đến khi khởi động lại
+	if se2 != nil {
+		f.err = se2
+	} else {
+		c.snaps[id] = snapEntry{f.b, f.ct, time.Now()} // ponytail: không dọn mục camera đã xoá, vài trăm KB mỗi camera đến khi khởi động lại
+	}
+	delete(c.flights, id)
 	c.mu.Unlock()
-	return b, ct, nil
+	close(f.done)
+	return f.b, f.ct, f.err
 }
 
 func (c *cams) snapHik(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
@@ -485,11 +508,20 @@ func (c *cams) snapHik(ctx context.Context, rec camRec) ([]byte, string, *snapEr
 		}
 		return nil, "", &snapErr{502, "camera không trả ảnh"}
 	}
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
-	return b, ct, nil
+	return readImage(rec.ID, res.Body, ct)
 }
 
 // snapRTSP: nhờ go2rtc nhận luồng phụ rồi chụp một khung. Lỗi mạng của http.Client chứa URL (có mật khẩu) nên không ghi log.
+// readImage: đọc trọn ảnh; đọc lỗi (cụt), rỗng hay không phải image/* thì không dùng và không đệm.
+func readImage(id string, body io.Reader, ct string) ([]byte, string, *snapErr) {
+	b, err := io.ReadAll(io.LimitReader(body, 8<<20))
+	if err != nil || len(b) == 0 || !strings.HasPrefix(ct, "image/") {
+		log.Printf("ảnh camera %s: ảnh hỏng (%d byte, %q)", id, len(b), ct)
+		return nil, "", &snapErr{502, "camera trả ảnh hỏng"}
+	}
+	return b, ct, nil
+}
+
 func (c *cams) snapRTSP(ctx context.Context, rec camRec) ([]byte, string, *snapErr) {
 	do := func(method, path string, q url.Values) (*http.Response, *snapErr) {
 		u := *c.go2rtc
@@ -517,8 +549,7 @@ func (c *cams) snapRTSP(ctx context.Context, rec camRec) ([]byte, string, *snapE
 		return nil, "", se
 	}
 	defer res.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
-	return b, "image/jpeg", nil
+	return readImage(rec.ID, res.Body, res.Header.Get("Content-Type"))
 }
 
 func (c *cams) directSnapshot(w http.ResponseWriter, r *http.Request) {

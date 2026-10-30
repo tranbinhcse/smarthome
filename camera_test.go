@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -807,5 +808,102 @@ func TestDirectCamRTSPErrorsDoNotLeakPassword(t *testing.T) {
 	w := get(mux, "/api/cam/"+ids[0]+"/snapshot", ck)
 	if w.Code != 502 || strings.Contains(logs.String()+w.Body.String(), camPass) {
 		t.Fatalf("code=%d body=%q log=%q", w.Code, w.Body, logs.String())
+	}
+}
+
+// Cache hết hạn, nhiều người xem cùng lúc: chỉ một yêu cầu tới camera (mật khẩu sai mà gửi hàng loạt thì camera khoá IP).
+func TestDirectCamSnapshotSingleFlight(t *testing.T) {
+	const N = 10
+	var mu sync.Mutex
+	var reqs int
+	arrived := make(chan struct{}, N)
+	release := make(chan struct{})
+	cam := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reqs++
+		mu.Unlock()
+		<-release
+		w.Header().Set("WWW-Authenticate", `Digest realm="CAM", nonce="n1", qop="auth"`)
+		w.WriteHeader(401)
+	}))
+	defer cam.Close()
+	c, _, _, ids := directEnv(t, hikRec(t, "Sai", cam))
+	var wg sync.WaitGroup
+	codes := make([]error, N)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			arrived <- struct{}{}
+			_, _, codes[i] = c.freshSnapshot(context.Background(), ids[0])
+		}()
+	}
+	for i := 0; i < N; i++ {
+		<-arrived
+	}
+	time.Sleep(200 * time.Millisecond) // để mọi goroutine kịp vào hàng đợi
+	close(release)
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if reqs > 2 { // một lần gọi = yêu cầu không kèm Authorization + yêu cầu kèm Authorization
+		t.Fatalf("camera nhận %d yêu cầu, muốn tối đa 2 (một lần thử)", reqs)
+	}
+	for i, e := range codes {
+		if e == nil {
+			t.Errorf("goroutine %d không nhận lỗi", i)
+		}
+	}
+}
+
+// Ảnh hỏng (rỗng, cụt, không phải ảnh) không được đệm và trả 502; lần sau gọi lại nguồn.
+func TestDirectCamSnapshotBadBodyNotCached(t *testing.T) {
+	for _, mode := range []string{"empty", "truncated", "text"} {
+		t.Run(mode, func(t *testing.T) {
+			var n int
+			bad := func(w http.ResponseWriter) {
+				switch mode {
+				case "empty":
+					w.Header().Set("Content-Type", "image/jpeg")
+				case "truncated":
+					w.Header().Set("Content-Type", "image/jpeg")
+					w.Header().Set("Content-Length", "1000")
+					io.WriteString(w, "cut")
+				case "text":
+					w.Header().Set("Content-Type", "text/plain")
+					io.WriteString(w, "loi")
+				}
+			}
+			g2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/frame.jpeg" {
+					n++
+					bad(w)
+				}
+			}))
+			defer g2.Close()
+			t.Setenv("GO2RTC_URL", g2.URL)
+			var hits int
+			cam := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") == "" {
+					w.Header().Set("WWW-Authenticate", `Digest realm="CAM", nonce="n1", qop="auth"`)
+					w.WriteHeader(401)
+					return
+				}
+				hits++
+				bad(w)
+			}))
+			defer cam.Close()
+			_, mux, ck, ids := directEnv(t, camRec{Name: "Sân", Zone: "kho", Kind: "rtsp", Host: "192.168.1.51", MainPath: "/m"}, hikRec(t, "Cổng", cam))
+			for i := 1; i <= 2; i++ {
+				for k, id := range ids { // rtsp rồi hik
+					if w := get(mux, "/api/cam/"+id+"/snapshot", ck); w.Code != 502 {
+						t.Fatalf("%s lần %d: code=%d body=%q, muốn 502", id, i, w.Code, w.Body)
+					}
+					if got := map[int]int{0: n, 1: hits}[k]; got != i {
+						t.Fatalf("%s: nguồn nhận %d lần sau %d yêu cầu, muốn bằng nhau (không đệm)", id, got, i)
+					}
+				}
+			}
+		})
 	}
 }
