@@ -139,7 +139,7 @@
     }});
 
   // Đọc thông báo: mỗi loại (kind của notify trong config.yaml) một công tắc, lưu nhóm "notify" ({"<kind>": false} = tắt).
-  const LABEL = {co2: 'CO₂ cao', bui: 'Bụi mịn PM2.5', mua: 'Trời bắt đầu mưa', nong: 'Nóng bất thường'};
+  const LABEL = {co2: 'CO₂ cao', bui: 'Bụi mịn PM2.5', mua: 'Trời bắt đầu mưa', nong: 'Nóng bất thường', thiet_bi: 'Thiết bị mất kết nối'};
   async function loadKinds() {
     kinds = [];
     if (U.DEMO) return;

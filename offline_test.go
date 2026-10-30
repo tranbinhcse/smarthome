@@ -101,3 +101,63 @@ func TestDirectCamOnlineProbe(t *testing.T) {
 		t.Fatalf("cổng đóng phải offline: %v", h.Snapshot())
 	}
 }
+
+// Camera nối thẳng đi hết đường: syncCamGen ghi camera.yaml, mergeGenerated nạp vào cấu hình như main.go,
+// kiểm TCP thấy offline, theo dõi báo đúng một tin theo tên camera.
+func TestDirectCamOfflineReachesWatcher(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HUBD_GEN_DIR", dir)
+	db := newDB(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() // cổng đóng
+	c, err := camSave(db, camRec{Name: "Cổng trước", Zone: "kho", Kind: "hik_cam", Host: "127.0.0.1", RTSPPort: port}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncCamGen(db)
+	var cfg Config
+	mergeGenerated(&cfg, dir)
+	var got []string
+	h := NewHub(cfg, db, func(tp, p string) {
+		if tp == "hubd/alert" {
+			got = append(got, p)
+		}
+	})
+	cams, _ := camList(db)
+	w := newOfflineWatch(h)
+	probeCams(h, cams, t0)
+	w.check(t0)
+	probeCams(h, cams, t0.Add(10*time.Minute+time.Second))
+	w.check(t0.Add(10*time.Minute + time.Second))
+	if h.Snapshot()["online:"+c.ID] != "offline" || len(got) != 1 || !strings.Contains(got[0], "Cổng trước mất kết nối hơn 10 phút.") {
+		t.Fatalf("camera nối thẳng không tới được bộ theo dõi: %v %v", h.Snapshot(), got)
+	}
+}
+
+// Thiết bị biến khỏi cấu hình khi đang offline và đã báo, rồi quay lại: coi như mới (đồng hồ 10 phút tính lại).
+func TestOfflineForgetsRemovedDevices(t *testing.T) {
+	h, got := offHub(t)
+	devs := h.cfg.Devices
+	w := newOfflineWatch(h)
+	h.Ingest("online:den", "offline", t0)
+	w.check(t0)
+	w.check(t0.Add(11 * time.Minute))
+	if len(*got) != 1 {
+		t.Fatalf("cần 1 tin: %v", *got)
+	}
+	h.cfg.Devices = nil
+	w.check(t0.Add(12 * time.Minute))
+	h.cfg.Devices = devs
+	w.check(t0.Add(13 * time.Minute))
+	if len(*got) != 1 {
+		t.Fatalf("thiết bị quay lại phải như mới: %v", *got)
+	}
+	w.check(t0.Add(24 * time.Minute))
+	if len(*got) != 2 {
+		t.Fatalf("10 phút mới phải báo lại: %v", *got)
+	}
+}

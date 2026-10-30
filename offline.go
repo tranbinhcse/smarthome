@@ -27,16 +27,18 @@ func newOfflineWatch(h *Hub) *offlineWatch {
 
 func (w *offlineWatch) check(now time.Time) {
 	snap := w.h.Snapshot()
+	seen := map[string]bool{}
 	for _, d := range w.h.cfg.Devices {
 		st, ok := snap["online:"+d.ID]
 		if !ok {
 			continue
 		}
+		seen[d.ID] = true
 		name := d.Name
 		if name == "" {
 			name = d.ID
 		}
-		if st != "offline" {
+		if st != "offline" { // mọi giá trị khác "offline" coi là online
 			if w.told[d.ID] {
 				w.h.notify("info", "thiet_bi", name+" đã kết nối lại.")
 			}
@@ -50,6 +52,12 @@ func (w *offlineWatch) check(now time.Time) {
 		if !w.told[d.ID] && now.Sub(w.since[d.ID]) > offlineAfter {
 			w.told[d.ID] = true
 			w.h.notify("warn", "thiet_bi", name+" mất kết nối hơn 10 phút.")
+		}
+	}
+	for id := range w.since { // thiết bị đã bị xoá hay chưa có trạng thái: bỏ, khỏi rò và khỏi thừa kế cho id trùng sau này
+		if !seen[id] {
+			delete(w.since, id)
+			delete(w.told, id)
 		}
 	}
 }
