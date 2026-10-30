@@ -32,7 +32,10 @@ func u32(v ...uint32) []byte {
 }
 
 // fmp4Head dựng ftyp+moov: track hình ID 1, mục mẫu codec ("hev1" hoặc "avc1"), mdhd timescale 90000.
-func fmp4Head(codec string) []byte {
+func fmp4Head(codec string) []byte { return fmp4HeadTrex(codec, nil) }
+
+// fmp4HeadTrex như fmp4Head, thêm mvex/trex với default_sample_flags nếu trex != nil.
+func fmp4HeadTrex(codec string, trex *uint32) []byte {
 	tkhd := mkBox("tkhd", u32(0, 0, 0, 1, 0, 0))
 	mdhd := mkBox("mdhd", u32(0, 0, 0, 90000, 0, 0))
 	hdlr := mkBox("hdlr", u32(0, 0), []byte("vide"), u32(0, 0, 0), []byte{0})
@@ -40,7 +43,11 @@ func fmp4Head(codec string) []byte {
 	stbl := mkBox("stbl", stsd)
 	minf := mkBox("minf", stbl)
 	mdia := mkBox("mdia", mdhd, hdlr, minf)
-	moov := mkBox("moov", mkBox("mvhd", make([]byte, 100)), mkBox("trak", tkhd, mdia))
+	parts := [][]byte{mkBox("mvhd", make([]byte, 100)), mkBox("trak", tkhd, mdia)}
+	if trex != nil {
+		parts = append(parts, mkBox("mvex", mkBox("trex", u32(0, 1, 1, 0, 0, *trex))))
+	}
+	moov := mkBox("moov", parts...)
 	return append(mkBox("ftyp", []byte("isom"), u32(0), []byte("isomhvc1")), moov...)
 }
 
@@ -79,6 +86,33 @@ func fakeFMP4(codec string, gops [][]int) []byte {
 		}
 	}
 	return out
+}
+
+// fmp4FrameX dựng cặp moof+mdat với nguồn cờ tùy chọn: def là default_sample_flags của tfhd (nil: không khai),
+// trunFl là cờ trun (bit 1 data offset, 4 first_sample_flags, 0x400 cờ từng mẫu), val là giá trị cờ đi kèm.
+func fmp4FrameX(track uint32, dts uint64, size int, def *uint32, trunFl, val uint32) []byte {
+	tfhdFl, tfhdBody := uint32(0x020000), u32(track)
+	if def != nil {
+		tfhdFl |= 0x20
+		tfhdBody = append(tfhdBody, u32(*def)...)
+	}
+	trunBody := u32(trunFl, 1)
+	if trunFl&1 != 0 {
+		trunBody = append(trunBody, u32(0)...)
+	}
+	if trunFl&(4|0x400) != 0 {
+		trunBody = append(trunBody, u32(val)...)
+	}
+	tfdt := mkBox("tfdt", u32(1<<24), binary.BigEndian.AppendUint64(nil, dts))
+	moof := mkBox("moof", mkBox("mfhd", u32(0, 1)), mkBox("traf", mkBox("tfhd", append(u32(tfhdFl), tfhdBody...)), tfdt, mkBox("trun", trunBody)))
+	return append(moof, mkBox("mdat", make([]byte, size))...)
+}
+
+// bigBox đổi box thành dạng đầu 16 byte (size == 1 và độ dài 64 bit).
+func bigBox(b []byte) []byte {
+	h := append(u32(1), b[4:8]...)
+	h = binary.BigEndian.AppendUint64(h, uint64(len(b)+8))
+	return append(h, b[8:]...)
 }
 
 func uniformGOPs(n, frames, size int) [][]int {
@@ -158,7 +192,7 @@ func TestRecSplitCutsAtKeyframesUnderLimit(t *testing.T) {
 		if bs[0].typ != "ftyp" || bs[1].typ != "moov" || bs[2].typ != "moof" {
 			t.Fatalf("file %d mở đầu sai: %s %s %s", i, bs[0].typ, bs[1].typ, bs[2].typ)
 		}
-		if tr := parseMoof(bs[2].b); len(tr) != 1 || !tr[0].sync {
+		if tr := mustTrafs(t, bs[2].b); len(tr) != 1 || !tr[0].sync {
 			t.Fatalf("file %d không bắt đầu ở keyframe", i)
 		}
 		got = append(got, mdatBytes(t, f)...)
@@ -181,11 +215,19 @@ func TestRecSplitRenamesHev1(t *testing.T) {
 	}
 }
 
+func mustTrafs(t *testing.T, moof []byte) []traf {
+	t.Helper()
+	tr, err := parseMoof(moof, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tr
+}
+
 func fileTfdts(t *testing.T, f []byte) (out []uint64) {
 	for _, x := range topBoxes(t, f) {
 		if x.typ == "moof" {
-			tr := parseMoof(x.b)
-			out = append(out, readTfdt(x.b, tr[0]))
+			out = append(out, readTfdt(x.b, mustTrafs(t, x.b)[0]))
 		}
 	}
 	return
@@ -292,11 +334,18 @@ func (p *eofProbe) Read(b []byte) (int, error) {
 
 type countWC struct {
 	bytes.Buffer
-	n *int
+	n   *int
+	max *int // lần Write lớn nhất (bằng bộ đệm GOP lớn nhất), nil thì bỏ qua
 }
 
-func (c *countWC) Write(b []byte) (int, error) { *c.n += len(b); return c.Buffer.Write(b) }
-func (c *countWC) Close() error                { return nil }
+func (c *countWC) Write(b []byte) (int, error) {
+	*c.n += len(b)
+	if c.max != nil && len(b) > *c.max {
+		*c.max = len(b)
+	}
+	return c.Buffer.Write(b)
+}
+func (c *countWC) Close() error { return nil }
 
 func TestRecSplitHugeGOPBufferCapped(t *testing.T) {
 	huge := make([]int, 20)
@@ -311,10 +360,11 @@ func TestRecSplitHugeGOPBufferCapped(t *testing.T) {
 		files = append(files, &countWC{n: &out})
 		return files[len(files)-1], "f", nil
 	}, time.Now, func(recSeg) {})
-	if err != nil || len(files) != 1 {
+	// file đầu chỉ có 2 KB nên không chứa nổi GOP lớn: GOP sang file mới
+	if err != nil || len(files) != 2 {
 		t.Fatalf("files=%d err=%v", len(files), err)
 	}
-	if got := len(mdatBytes(t, files[0].Bytes())); got != 20_002_000 {
+	if got := len(mdatBytes(t, files[1].Bytes())); got != 20_000_000 {
 		t.Fatalf("ghi %d byte mdat", got)
 	}
 	// tới lúc luồng hết, phần vượt recGopCap đã phải ra file, không nằm cả trong bộ nhớ
@@ -339,8 +389,142 @@ func TestRecSplitAudioMoofNotCut(t *testing.T) {
 		t.Fatalf("files=%d err=%v", len(files), err)
 	}
 	for i, f := range files {
-		if tr := parseMoof(topBoxes(t, f)[2].b); tr[0].track != 1 || !tr[0].sync {
+		if tr := mustTrafs(t, topBoxes(t, f)[2].b); tr[0].track != 1 || !tr[0].sync {
 			t.Fatalf("file %d mở đầu bằng moof track %d", i, tr[0].track)
 		}
+	}
+}
+
+// Ba nguồn cờ mẫu (first_sample_flags, cờ từng mẫu, trex) và trường hợp không có cờ nào. Cờ ở nguồn kiểm tra
+// đối nghịch với tfhd default để thấy đúng thứ tự ưu tiên.
+func TestRecSplitSyncFlagSources(t *testing.T) {
+	sync, non := uint32(0x02000000), uint32(0x01010000)
+	type frame func(dts uint64, key bool) []byte
+	cases := []struct {
+		name  string
+		trex  *uint32
+		frame frame
+		cuts  bool
+	}{
+		{"first_sample_flags", nil, func(d uint64, k bool) []byte {
+			if k {
+				return fmp4FrameX(1, d, 400, &non, 5, sync)
+			}
+			return fmp4FrameX(1, d, 400, &sync, 5, non)
+		}, true},
+		{"cờ từng mẫu", nil, func(d uint64, k bool) []byte {
+			if k {
+				return fmp4FrameX(1, d, 400, &non, 0x401, sync)
+			}
+			return fmp4FrameX(1, d, 400, &sync, 0x401, non)
+		}, true},
+		{"trex", &sync, func(d uint64, k bool) []byte {
+			if k {
+				return fmp4FrameX(1, d, 400, nil, 1, 0) // không khai cờ: lấy trex
+			}
+			return fmp4FrameX(1, d, 400, &non, 1, 0)
+		}, true},
+		{"không có cờ nào", nil, func(d uint64, k bool) []byte { return fmp4FrameX(1, d, 400, nil, 1, 0) }, false},
+	}
+	for _, c := range cases {
+		head := fmp4HeadTrex("hev1", c.trex)
+		var in = head
+		gop := 0
+		for g := 0; g < 3; g++ {
+			for i := 0; i < 3; i++ {
+				f := c.frame(uint64(3000*(g*3+i)), i == 0)
+				if g == 0 {
+					gop += len(f)
+				}
+				in = append(in, f...)
+			}
+		}
+		files, _, err := runSplit(bytes.NewReader(in), int64(len(head)+gop+50))
+		if !c.cuts {
+			if err == nil || len(files) != 0 {
+				t.Fatalf("%s: files=%d err=%v", c.name, len(files), err)
+			}
+			continue
+		}
+		if err != nil || len(files) != 3 {
+			t.Fatalf("%s: files=%d err=%v", c.name, len(files), err)
+		}
+		for i, f := range files {
+			tx := map[uint32]uint32{}
+			if c.trex != nil {
+				tx[1] = *c.trex
+			}
+			if tr, err := parseMoof(topBoxes(t, f)[2].b, tx); err != nil || !tr[0].sync {
+				t.Fatalf("%s: file %d không bắt đầu ở keyframe", c.name, i)
+			}
+		}
+	}
+}
+
+func TestRecSplit64BitBoxes(t *testing.T) {
+	in := fmp4Head("hev1")
+	for i := 0; i < 6; i++ {
+		f := fmp4Frame(1, uint64(3000*i), i%3 == 0, 500, 1)
+		n := int(binary.BigEndian.Uint32(f))
+		in = append(in, bigBox(f[:n])...)
+		in = append(in, bigBox(f[n:])...)
+	}
+	files, _, err := runSplit(bytes.NewReader(in), int64(len(in)/2+len(fmp4Head("hev1"))))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("files=%d err=%v", len(files), err)
+	}
+	for _, f := range files {
+		if tr := mustTrafs(t, topBoxes(t, f)[2].b); !tr[0].sync {
+			t.Fatal("không bắt đầu ở keyframe")
+		}
+	}
+}
+
+func TestRecSplitTruncatedTfdtIsError(t *testing.T) {
+	in := fmp4Head("hev1")
+	in = append(in, fmp4Frame(1, 0, true, 100, 1)...)
+	// moof thứ hai có tfdt v1 chỉ còn 2 byte thân
+	tfdt := mkBox("tfdt", []byte{1, 0})
+	traf := mkBox("traf", mkBox("tfhd", u32(0x020038, 1, 3000, 100, 0x01010000)), tfdt, mkBox("trun", u32(1, 1, 0)))
+	moof := mkBox("moof", mkBox("mfhd", u32(0, 2)), traf)
+	in = append(in, moof...)
+	in = append(in, mkBox("mdat", make([]byte, 100))...)
+	files, _, err := runSplit(bytes.NewReader(in), recMaxBytes)
+	if err == nil || err == io.ErrUnexpectedEOF {
+		t.Fatalf("err = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files=%d: phần đã nhận phải được đóng lại", len(files))
+	}
+	topBoxes(t, files[0])
+}
+
+func TestRecSplitSpillIntoPartlyFullFileStaysUnderMax(t *testing.T) {
+	frames := func(n int) []int {
+		g := make([]int, n)
+		for i := range g {
+			g[i] = 1_000_000
+		}
+		return g
+	}
+	// ba GOP 13 MB (file ~39 MB), rồi GOP 17 MB vượt recGopCap: không được ghi chen vào file đang có 39 MB
+	in := fakeFMP4("hev1", [][]int{frames(13), frames(13), frames(13), frames(17), {1000}})
+	var maxWrite int
+	var files []*countWC
+	var n int
+	err := recSplit(bytes.NewReader(in), recMaxBytes, func(time.Time) (io.WriteCloser, string, error) {
+		files = append(files, &countWC{n: &n, max: &maxWrite})
+		return files[len(files)-1], "f", nil
+	}, time.Now, func(recSeg) {})
+	if err != nil || len(files) < 2 {
+		t.Fatalf("files=%d err=%v", len(files), err)
+	}
+	for i, f := range files {
+		if f.Len() > recMaxBytes {
+			t.Fatalf("file %d dài %d byte", i, f.Len())
+		}
+	}
+	if maxWrite > recGopCap+1_000_200 {
+		t.Fatalf("bộ đệm GOP lên tới %d byte", maxWrite)
 	}
 }

@@ -61,9 +61,18 @@ func descend(b []byte, p box, names ...string) (box, bool) {
 	return p, true
 }
 
-// rewriteMoov đổi hev1 thành hvc1 tại chỗ trong track hình, trả track_ID của track đó (0 nếu không có).
-func rewriteMoov(b []byte) (video uint32) {
+// rewriteMoov đổi hev1 thành hvc1 tại chỗ trong track hình, trả track_ID của track đó (0 nếu không có)
+// và default_sample_flags của mvex/trex theo từng track (cờ dự phòng cuối cùng cho khung không khai cờ).
+func rewriteMoov(b []byte) (video uint32, trex map[uint32]uint32) {
+	trex = map[uint32]uint32{}
 	eachBox(b, 0, len(b), func(moov box) {
+		if mvex, ok := descend(b, moov, "mvex"); ok {
+			eachBox(b, mvex.body, mvex.end, func(x box) {
+				if x.typ == "trex" && x.end-x.body >= 24 {
+					trex[binary.BigEndian.Uint32(b[x.body+4:])] = binary.BigEndian.Uint32(b[x.body+20:])
+				}
+			})
+		}
 		eachBox(b, moov.body, moov.end, func(trak box) {
 			if trak.typ != "trak" || video != 0 {
 				return
@@ -93,7 +102,7 @@ func rewriteMoov(b []byte) (video uint32) {
 			video = binary.BigEndian.Uint32(b[off:])
 		})
 	})
-	return video
+	return video, trex
 }
 
 type traf struct {
@@ -103,8 +112,9 @@ type traf struct {
 	v1    bool // tfdt 64 bit
 }
 
-// parseMoof đọc từng traf của một moof. Cờ mẫu đầu lấy theo thứ tự: first_sample_flags, cờ mẫu đầu, default_sample_flags.
-func parseMoof(b []byte) (out []traf) {
+// parseMoof đọc từng traf của một moof. Cờ mẫu đầu lấy theo thứ tự: first_sample_flags, cờ mẫu đầu,
+// default_sample_flags của tfhd, rồi trex; không có cờ nào thì coi là khung không đồng bộ. tfdt hỏng trả lỗi.
+func parseMoof(b []byte, trex map[uint32]uint32) (out []traf, err error) {
 	be := binary.BigEndian
 	eachBox(b, 0, len(b), func(moof box) {
 		eachBox(b, moof.body, moof.end, func(t box) {
@@ -113,6 +123,7 @@ func parseMoof(b []byte) (out []traf) {
 			}
 			tr := traf{tfdt: -1}
 			var def, flags uint32
+			var haveDef, have bool
 			sawTrun := false
 			eachBox(b, t.body, t.end, func(c box) {
 				p := b[c.body:c.end]
@@ -132,22 +143,29 @@ func parseMoof(b []byte) (out []traf) {
 						}
 					}
 					if fl&0x20 != 0 && len(p) >= o+4 {
-						def = be.Uint32(p[o:])
+						def, haveDef = be.Uint32(p[o:]), true
 					}
 				case "tfdt":
 					tr.tfdt, tr.v1 = c.body, len(p) > 0 && p[0] == 1
+					if len(p) < 8 || tr.v1 && len(p) < 12 {
+						err = errors.New("rec: tfdt hỏng")
+					}
 				case "trun":
 					if sawTrun || len(p) < 8 {
 						return
 					}
 					sawTrun = true
 					fl, o := be.Uint32(p)&0xffffff, 8
-					flags = def
+					if be.Uint32(p[4:]) == 0 {
+						return
+					}
 					if fl&1 != 0 {
 						o += 4
 					}
-					if fl&4 != 0 && len(p) >= o+4 {
-						flags = be.Uint32(p[o:])
+					if fl&4 != 0 {
+						if len(p) >= o+4 {
+							flags, have = be.Uint32(p[o:]), true
+						}
 					} else if fl&0x400 != 0 {
 						if fl&0x100 != 0 {
 							o += 4
@@ -156,16 +174,22 @@ func parseMoof(b []byte) (out []traf) {
 							o += 4
 						}
 						if len(p) >= o+4 {
-							flags = be.Uint32(p[o:])
+							flags, have = be.Uint32(p[o:]), true
 						}
 					}
 				}
 			})
-			tr.sync = flags&0x00010000 == 0
+			if !have && haveDef {
+				flags, have = def, true
+			}
+			if v, ok := trex[tr.track]; !have && ok {
+				flags, have = v, true
+			}
+			tr.sync = have && flags&0x00010000 == 0
 			out = append(out, tr)
 		})
 	})
-	return out
+	return out, err
 }
 
 func readTfdt(b []byte, t traf) uint64 {
@@ -203,12 +227,6 @@ func readBox(r io.Reader) (string, []byte, error) {
 	return string(h[4:8]), buf.Bytes(), nil
 }
 
-type tfdtRef struct {
-	track uint32
-	off   int // vị trí thân tfdt trong buf
-	v1    bool
-}
-
 type recWriter struct {
 	max    int64
 	create func(time.Time) (io.WriteCloser, string, error)
@@ -217,28 +235,33 @@ type recWriter struct {
 
 	head  []byte // ftyp+moov (đã sửa hvc1)
 	video uint32
+	trex  map[uint32]uint32
+	seen  bool // đã gặp keyframe hình
 
 	w     io.WriteCloser // file đang mở
 	seg   recSeg
 	data  bool              // file đã có GOP
 	base  map[uint32]uint64 // tfdt đầu tiên của từng track trong file
 	buf   []byte            // GOP đang đệm
-	refs  []tfdtRef
-	gop   time.Time // lúc nhận keyframe mở GOP
-	in    bool      // đang trong một GOP
-	spill bool      // GOP này đã ghi bớt vì vượt recGopCap
-	err   error     // lỗi ghi: dừng hẳn
+	refs  []traf            // traf có tfdt, vị trí tfdt tính trong buf
+	gop   time.Time         // lúc nhận keyframe mở GOP
+	in    bool              // đang trong một GOP
+	spill bool              // GOP này đã ghi bớt vì vượt recGopCap
+	err   error             // lỗi ghi: dừng hẳn
 }
 
 func (s *recWriter) pair(moof, mdat []byte) error {
-	ts := parseMoof(moof)
+	ts, err := parseMoof(moof, s.trex)
+	if err != nil {
+		return err
+	}
 	for _, t := range ts {
 		if s.video != 0 && t.track == s.video && t.sync {
 			t0 := s.now()
 			if err := s.endGOP(t0); err != nil {
 				return err
 			}
-			s.in, s.gop = true, t0
+			s.in, s.gop, s.seen = true, t0, true
 			break
 		}
 	}
@@ -247,11 +270,18 @@ func (s *recWriter) pair(moof, mdat []byte) error {
 	}
 	for _, t := range ts {
 		if t.tfdt >= 0 {
-			s.refs = append(s.refs, tfdtRef{t.track, len(s.buf) + t.tfdt, t.v1})
+			t.tfdt += len(s.buf)
+			s.refs = append(s.refs, t)
 		}
 	}
 	s.buf = append(append(s.buf, moof...), mdat...)
 	if len(s.buf) > recGopCap {
+		// lần ghi bớt đầu tiên: file đã có dữ liệu mà không chứa nổi thì đóng file, GOP sang file mới
+		if !s.spill && s.w != nil && s.data && s.seg.Bytes+int64(len(s.buf)) > s.max {
+			if err := s.closeFile(s.now()); err != nil {
+				return err
+			}
+		}
 		s.spill = true
 		return s.write()
 	}
@@ -302,13 +332,8 @@ func (s *recWriter) write() (err error) {
 		}
 	}
 	for _, r := range s.refs {
-		p := s.buf[r.off+4:]
-		var v uint64
-		if r.v1 {
-			v = binary.BigEndian.Uint64(p)
-		} else {
-			v = uint64(binary.BigEndian.Uint32(p))
-		}
+		p := s.buf[r.tfdt+4:]
+		v := readTfdt(s.buf, r)
 		b, ok := s.base[r.track]
 		if !ok {
 			b = v
@@ -345,12 +370,17 @@ func (s *recWriter) closeFile(end time.Time) error {
 // recSplit đọc luồng MP4 phân mảnh từ r, cắt ở keyframe thành các file dưới maxBytes (create mở file mới, trả
 // đường dẫn để báo trong recSeg). Luồng hết hay lỗi đọc thì ghi nốt phần GOP đầy đủ, đóng file, gọi done.
 // Trả nil khi hết sạch ở ranh giới box, io.ErrUnexpectedEOF khi cụt giữa box.
-// ponytail: file vượt maxBytes chỉ khi một GOP lớn hơn recGopCap; muốn chặt hơn thì cắt GOP ở ranh giới khung (mất khả năng phát độc lập).
+// Lỗi ghi hay Close: file đó không gọi done (recorder dò lại file mồ côi lúc khởi động); luồng không có keyframe hình trả lỗi.
+// ponytail: file chỉ vượt maxBytes khi một GOP lớn hơn chỗ còn lại sau lần ghi bớt đầu tiên (mở file mới nếu file hiện tại không chứa nổi);
+// muốn chặt hơn thì cắt GOP ở ranh giới khung (mất khả năng phát độc lập).
 func recSplit(r io.Reader, maxBytes int64, create func(start time.Time) (io.WriteCloser, string, error), now func() time.Time, done func(recSeg)) error {
 	s := &recWriter{max: maxBytes, create: create, now: now, done: done}
 	err := s.run(r)
 	if s.err != nil {
 		return s.err
+	}
+	if !s.seen && err == nil {
+		err = errors.New("rec: luồng không có keyframe hình")
 	}
 	t := now()
 	if e := s.endGOP(t); e != nil {
@@ -376,7 +406,7 @@ func (s *recWriter) run(r io.Reader) error {
 		case "ftyp":
 			s.head = append(s.head, b...)
 		case "moov":
-			s.video = rewriteMoov(b)
+			s.video, s.trex = rewriteMoov(b)
 			s.head = append(s.head, b...)
 		case "moof":
 			moof = b
