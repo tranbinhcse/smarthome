@@ -1,16 +1,23 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"hubd/isapi"
 )
 
 // Camera nối thẳng vào hub (không qua đầu ghi): mỗi camera một dòng JSON trong bảng cameras.
@@ -214,8 +221,10 @@ func (c camRec) view() map[string]any {
 
 // Mẫu đường dẫn RTSP theo hãng, để giao diện điền sẵn khi chọn kiểu "rtsp".
 type camTemplate struct {
-	Brand, MainPath, SubPath string
-	RTSPPort                 int
+	Brand    string `json:"brand"`
+	MainPath string `json:"main_path"`
+	SubPath  string `json:"sub_path"`
+	RTSPPort int    `json:"rtsp_port"`
 }
 
 var camTemplates = []camTemplate{
@@ -250,4 +259,169 @@ func (c camRec) snapURL() string {
 		return ""
 	}
 	return "http://" + net.JoinHostPort(c.Host, strconv.Itoa(c.HTTPPort)) + "/ISAPI/Streaming/channels/101/picture"
+}
+
+// mountCameras: API trang Cài đặt → Camera nối thẳng. Mọi route cần phiên đăng nhập (cookie); token trợ lý không dùng được.
+// Lời báo lỗi cho trình duyệt là tiếng Việt, không kèm lỗi DB thô, địa chỉ hay mật khẩu (chi tiết ghi log phía hub).
+func mountCameras(mux *http.ServeMux, c *cams, h *Hub, a *Auth) {
+	zoneOK := func(z string) bool { // theo cấu hình đang chạy; phòng mới thêm có hiệu lực sau khi hub khởi động lại
+		for _, x := range h.cfg.Zones {
+			if x.ID == z {
+				return true
+			}
+		}
+		return false
+	}
+	// camera đổi thì file camera.yaml sinh đổi: hub khởi động lại để nạp thiết bị (như lưu đầu ghi ở settings.go)
+	synced := func() {
+		if syncCamGen(h.db) {
+			go restartHub()
+		}
+	}
+	mux.HandleFunc("GET /api/cameras", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		l, err := camList(h.db)
+		if err != nil {
+			log.Printf("camera: không đọc được danh sách: %v", err)
+			http.Error(w, "không đọc được danh sách camera", 500)
+			return
+		}
+		views := make([]map[string]any, len(l))
+		for i, x := range l {
+			views[i] = x.view()
+		}
+		writeJSON(w, map[string]any{"cameras": views, "templates": camTemplates})
+	}))
+	mux.HandleFunc("PUT /api/cameras", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		var rec camRec
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&rec) != nil {
+			http.Error(w, "cần một object JSON mô tả camera", 400)
+			return
+		}
+		if err := rec.validate(zoneOK); err != nil { // lời báo kiểm tra là tiếng Việt cho người dùng
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if rec.ID != "" {
+			switch _, ok, err := camGet(h.db, rec.ID); {
+			case err != nil:
+				log.Printf("camera %s: %v", rec.ID, err)
+				http.Error(w, "không đọc được dữ liệu camera", 500)
+				return
+			case !ok:
+				http.Error(w, "Không tìm thấy camera", 404)
+				return
+			}
+		}
+		saved, err := camSave(h.db, rec, zoneOK)
+		if err != nil {
+			log.Printf("camera %s: không lưu được: %v", rec.ID, err)
+			http.Error(w, "không lưu được camera", 500)
+			return
+		}
+		synced()
+		writeJSON(w, saved.view())
+	}))
+	mux.HandleFunc("DELETE /api/cameras/{id}", a.Require(func(w http.ResponseWriter, r *http.Request) {
+		ok, err := camDelete(h.db, r.PathValue("id"))
+		switch {
+		case err != nil:
+			log.Printf("camera %s: không xoá được: %v", r.PathValue("id"), err)
+			http.Error(w, "không xoá được camera", 500)
+		case !ok:
+			http.Error(w, "Không tìm thấy camera", 404)
+		default:
+			synced()
+			w.WriteHeader(204)
+		}
+	}))
+	mux.HandleFunc("POST /api/cameras/test", a.Require(c.camTest))
+	sc := newCamScan(c)
+	mux.HandleFunc("POST /api/cameras/scan", a.Require(sc.post))
+	mux.HandleFunc("GET /api/cameras/scan", a.Require(sc.get))
+}
+
+// camTest: nút "Thử kết nối". Ô mật khẩu để trống mà có id thì dùng mật khẩu đã lưu, chỉ khi host không đổi
+// (không gửi mật khẩu cũ tới máy khác). Kết quả luôn là JSON; câu báo không chứa địa chỉ hay mật khẩu.
+func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
+	var b camRec
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&b) != nil {
+		http.Error(w, "cần JSON {host, http_port, rtsp_port, user, pass, kind, id?}", 400)
+		return
+	}
+	b.Host = strings.TrimSpace(b.Host)
+	if !nvrHost.MatchString(b.Host) || strings.Contains(b.Host, ":") {
+		http.Error(w, "Địa chỉ camera không hợp lệ (chỉ IP hoặc tên máy, không có http://, đường dẫn hay cổng)", 400)
+		return
+	}
+	if err := camPort(&b.HTTPPort, 80, "HTTP"); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := camPort(&b.RTSPPort, 554, "RTSP"); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if !camKinds[b.Kind] {
+		http.Error(w, "Loại camera không hợp lệ", 400)
+		return
+	}
+	if b.ID != "" && b.Pass == "" {
+		switch old, ok, err := camGet(c.db, b.ID); {
+		case err != nil:
+			log.Printf("camera %s: %v", b.ID, err)
+			http.Error(w, "không đọc được dữ liệu camera", 500)
+			return
+		case ok && old.Host == b.Host:
+			b.Pass = old.Pass
+		}
+	}
+	fail := func(msg string) { writeJSON(w, map[string]any{"ok": false, "message": msg}) }
+	if b.Kind == "rtsp" {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(b.Host, strconv.Itoa(b.RTSPPort)), 2*time.Second)
+		if err != nil {
+			log.Printf("thử camera RTSP: không nối được cổng")
+			fail("Không kết nối được cổng RTSP của camera: kiểm tra địa chỉ, cổng và camera đã bật nguồn chưa")
+			return
+		}
+		conn.Close()
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://"+net.JoinHostPort(b.Host, strconv.Itoa(b.HTTPPort))+"/ISAPI/System/deviceInfo", nil)
+	res, err := c.clientFor(net.JoinHostPort(b.Host, strconv.Itoa(b.HTTPPort)), b.User, b.Pass).Do(req)
+	if errors.Is(err, isapi.ErrLocked) {
+		fail("Camera vừa từ chối tài khoản này, hub đang tạm ngừng thử 15 phút để camera không khoá IP. Kiểm tra lại mật khẩu rồi thử sau")
+		return
+	}
+	if err != nil {
+		log.Printf("thử camera Hikvision: không nối được")
+		fail("Không kết nối được camera: kiểm tra địa chỉ, cổng HTTP và camera đã bật nguồn chưa")
+		return
+	}
+	defer res.Body.Close()
+	switch res.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized:
+		fail("Sai tài khoản hoặc mật khẩu camera. Hub tạm ngừng thử tài khoản này 15 phút để camera không khoá IP")
+		return
+	case http.StatusForbidden:
+		fail("Tài khoản không có quyền đọc thông tin camera")
+		return
+	default:
+		log.Printf("thử camera Hikvision: HTTP %d", res.StatusCode)
+		fail("Thiết bị trả lời lạ, có thể không phải camera Hikvision")
+		return
+	}
+	var di struct {
+		Model    string `xml:"model"`
+		Firmware string `xml:"firmwareVersion"`
+	}
+	if xml.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&di) != nil {
+		fail("Thiết bị trả lời lạ, có thể không phải camera Hikvision")
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "model": di.Model, "firmware": di.Firmware})
 }

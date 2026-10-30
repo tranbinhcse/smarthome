@@ -161,7 +161,9 @@ func newMux(hub *Hub, auth *Auth) *http.ServeMux {
 			}
 		}
 	}))
-	newCams(hub.cfg.Devices, hub.db).register(mux, auth)
+	cm := newCams(hub.cfg.Devices, hub.db)
+	cm.register(mux, auth)
+	mountCameras(mux, cm, hub, auth)
 	mux.HandleFunc("POST /api/cmd", auth.Require(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Device, To string }
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil ||
