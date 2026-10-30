@@ -394,6 +394,8 @@ Chủ nhà bổ sung ngày 2026-10-26. Cả hai phần **làm sau lõi** (Giai �
 
 > **Đã thay một phần (chủ nhà chốt 2026-10-29):** bỏ đầu thu. Hub nhận thẳng camera, tự ghi hình vào ổ cứng lắp thêm, báo động theo khu bằng còi trong cụm cảm biến, gửi tin Telegram. Thiết kế: [`docs/superpowers/specs/2026-10-29-camera-bao-dong-telegram-design.md`](superpowers/specs/2026-10-29-camera-bao-dong-telegram-design.md). Ý "ghi hình vẫn do NVR đảm nhận" dưới đây không còn hiệu lực; xem trực tiếp qua go2rtc và lấy sự kiện từ camera vẫn giữ nguyên.
 
+> **Đã làm (2A):** camera nối thẳng, không đầu ghi: quét LAN, thêm/sửa/xoá trên Cài đặt, ảnh chụp, xem trực tiếp, báo mất kết nối. Kế hoạch: [`docs/superpowers/plans/2026-10-30-camera-2a-noi-thang.md`](superpowers/plans/2026-10-30-camera-2a-noi-thang.md). Cách dùng: README, mục "Camera nối thẳng". Ghi hình (2B) và sự kiện camera (2C) chưa làm.
+
 **Nguyên tắc: không làm lại việc NVR và camera đã làm.**
 - Ghi hình vẫn do NVR đảm nhận, trung tâm không ghi.
 - Nhận diện người/xe dùng tính năng có sẵn trên camera (nếu model có). Không chạy Frigate hay AI nhận diện trên trung tâm.

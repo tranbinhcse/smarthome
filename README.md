@@ -2,7 +2,7 @@
 
 ![Dashboard trên iPad: tổng quan cả nhà với ngữ cảnh, điều hoà, chiếu sáng, không khí, camera, an ninh (dữ liệu mẫu)](docs/images/tong-quan.webp)
 
-Máy Ubuntu `192.168.1.254` chạy 3 container (Docker Compose): `hub-mosquitto` (MQTT), `hubd` (web + lịch sử + luật), `tuya-bridge` (Tuya ⇄ MQTT); thêm `hub-go2rtc` và `hikbridge` khi bật camera (mục Camera Hikvision), `voiced` khi bật trợ lý giọng nói (tuỳ chọn). Màn hình = iPad mở `http://192.168.1.254:8080`.
+Máy Ubuntu `192.168.1.254` chạy 3 container (Docker Compose): `hub-mosquitto` (MQTT), `hubd` (web + lịch sử + luật), `tuya-bridge` (Tuya ⇄ MQTT); thêm `hub-go2rtc` (xem camera) và `hikbridge` (chỉ khi dùng đầu ghi) khi bật camera (mục Camera Hikvision), `voiced` khi bật trợ lý giọng nói (tuỳ chọn). Màn hình = iPad mở `http://192.168.1.254:8080`.
 
 ## Chạy lần đầu
 
@@ -98,6 +98,22 @@ Theo mô tả của cộng đồng (chưa kiểm với đầu ghi của nhà), �
 Tải đo được (đầu ghi giả, luồng H.264 704×576 ~510 kbit/s): 10 kênh, mỗi kênh 1 người xem qua hubd tốn go2rtc 2,2% + hubd 1,4% của một luồng CPU; chi tiết ở mục 15.1 tài liệu thiết kế.
 
 Đầu ghi từ chối mật khẩu thì hubd và hikbridge tạm ngừng gửi tài khoản đó 15 phút để đầu ghi không khoá IP của trung tâm (nút Thử kết nối cũng vậy); nhập mật khẩu khác trên trang Cài đặt là thử lại được ngay. Không mở cổng đầu ghi ra internet; xem từ xa qua WireGuard (MSE đi qua hubd nên chạy được; WebRTC cần tới cổng 8555).
+
+### Camera nối thẳng (không qua đầu ghi)
+
+Hub nhận thẳng camera Hikvision hoặc camera RTSP hãng khác trong LAN. Cần `COMPOSE_PROFILES=camera` (go2rtc, bước 3 ở trên); `hikbridge` và tài khoản MQTT `hik` chỉ dành cho đầu ghi, không cần cho camera nối thẳng. Chạy song song với đầu ghi được: camera nối thẳng có id `cam_<tên>`, không đụng id `cam_ch<kênh>` của đầu ghi.
+
+1. Dashboard → Cài đặt → Camera → **Camera nối thẳng**: ô **Dải mạng của nhà** nhập dải LAN, ví dụ `192.168.1.0/24` (cài đặt `camera.lan_cidr`), bấm lưu. Chỉ IPv4, tối đa /24 (256 địa chỉ).
+2. Bấm **Tìm camera**. Hub thử cổng 80, 8080, 2020 từng địa chỉ, nhận ra Hikvision (ISAPI) và ONVIF, không gửi tài khoản khi quét. Kết quả hiện ở **Tìm thấy camera mới** (camera đã thêm thì không liệt kê lại). Camera không thấy trong LAN (ví dụ còn nằm sau cổng PoE của đầu thu) thì quét không ra; bấm **Thêm tay** rồi nhập IP.
+3. Bấm **Thêm** ở camera tìm thấy. Chọn **Kiểu** (**Hikvision** hoặc **RTSP (hãng khác)**); với RTSP chọn **Hãng** theo mẫu có sẵn (Dahua / KBVision / Imou, TP-Link Tapo / VIGI, Yoosee) hoặc **Khác** để tự nhập **Cổng RTSP**, **Đường dẫn luồng chính**, **Đường dẫn luồng phụ**.
+4. Nhập **IP camera**, **Tài khoản**, **Mật khẩu** (chủ nhà tự nhập; mật khẩu chỉ gửi một lần, ô tự xoá sau mỗi lần bấm), **Tên camera**, **Khu**.
+5. **Thử kết nối** (Hikvision: hiện model và firmware; RTSP: chỉ thử mở cổng RTSP), rồi **Lưu**. Mỗi camera cũng có nút **Thử**, **Sửa**, **Xoá** trong danh sách. Thêm, sửa hay xoá camera thì hubd tự khởi động lại để nạp thiết bị, tải lại trang để thấy.
+
+- Ảnh chụp và xem trực tiếp đi qua hubd sau PIN (luồng phụ của camera qua go2rtc); trình duyệt không thấy IP hay tài khoản camera. Mật khẩu không bao giờ gửi về trình duyệt, chỉ hiện "Đã lưu". Sửa camera để trống mật khẩu là giữ mật khẩu cũ, trừ khi đổi IP camera (khi đó phải nhập lại, để không gửi mật khẩu cũ tới máy khác).
+- Mỗi phút hub thử mở cổng RTSP của từng camera. Mất kết nối liên tục hơn 10 phút thì báo một lần (loại `thiet_bi`, đọc to và Telegram), nối lại thì báo "đã kết nối lại"; mất ngắn hơn 10 phút không báo. Hubd khởi động lại thì tính lại từ đầu.
+- Camera từ chối mật khẩu thì hub tạm ngừng thử tài khoản đó 15 phút.
+- Chưa làm: ghi hình (2B), sự kiện từ camera (2C).
+
 
 ## Luật tự động
 
@@ -272,4 +288,5 @@ Inverter (Deye, LuxPower, Lumentree) đọc qua RS485 bằng node ESPHome: xem [
 
 - Cảm biến Tuya Wi-Fi chạy pin thường ngủ, không nhận kết nối local: chỉ cảm biến cắm điện mới đọc được ổn định.
 - Kịch bản một chạm, báo cháy CBX: chưa làm. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận.
+- Camera nối thẳng: chưa ghi hình (2B), chưa nhận sự kiện từ camera (2C).
 - Cổng 1883 và 8080 mở trong LAN; không mở ra internet. PIN dùng chung, khoá 1 phút sau 5 lần sai.
