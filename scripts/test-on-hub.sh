@@ -13,12 +13,16 @@ name=${name//[^A-Za-z0-9._-]/-}
 dir=/root/hubd-ci/$name
 goimg=$(awk '/^FROM golang/ {print $2; exit}' Dockerfile)
 
+hub() { ssh -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$HUB" "$@"; }
+
 echo "== đẩy cây làm việc lên $HUB:$dir"
 git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --null -T - -czf - |
-  ssh -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$HUB" "rm -rf '$dir' && mkdir -p '$dir' && tar -xzf - -C '$dir'"
+  hub "rm -rf '$dir' && mkdir -p '$dir' && tar -xzf - -C '$dir'"
 
+# Test chạy nền ngay trên hub (nohup, ghi ra <dir>.log, mã thoát ra <dir>.rc), máy này chỉ hỏi kết quả bằng các
+# lệnh ssh ngắn: một phiên ssh giữ suốt lúc test chạy hay bị rớt giữa chừng (Connection reset) và treo cả lượt.
 # Test Python: mỗi thư mục tự khai báo thư viện cần cho test (requirements-test.txt, không có thì requirements.txt).
-ssh -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$HUB" bash -s -- "$dir" "$goimg" <<'REMOTE'
+hub "cat > '$dir/.ci.sh' && rm -f '$dir.rc' && { (nohup bash '$dir/.ci.sh' '$dir' '$goimg' > '$dir.log' 2>&1; echo \$? > '$dir.rc') > /dev/null 2>&1 < /dev/null & }" <<'REMOTE'
 set -uo pipefail
 dir=$1 goimg=$2 fail=0
 echo "== go test ($goimg)"
@@ -38,3 +42,8 @@ docker run --rm -v "$dir":/src -w /src -v hubd-ci-pip:/root/.cache/pip python:3.
 [ $fail = 0 ] && echo "== TẤT CẢ ĐẠT" || echo "== CÓ TEST HỎNG"
 exit $fail
 REMOTE
+for i in $(seq 180); do   # tối đa 15 phút; lỗi mạng giữa chừng thì hỏi lại lượt sau
+  hub "test -f '$dir.rc'" 2>/dev/null && break
+  sleep 5
+done
+hub "cat '$dir.log'; exit \$(cat '$dir.rc' 2>/dev/null || echo 124)"
