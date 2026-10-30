@@ -182,7 +182,8 @@ func (s *camScan) run(hosts []string) {
 					return
 				}
 				mu.Lock()
-				if old, had := best[h]; !had || old.Kind == "onvif" && hit.Kind == "hik_cam" {
+				if old, had := best[h]; !had || old.Kind == "onvif" && hit.Kind == "hik_cam" ||
+					old.Kind == hit.Kind && s.rank(hit.Port) < s.rank(old.Port) { // nhiều cổng cùng trả lời: cổng đứng trước trong s.ports (80, 8080, 2020)
 					best[h] = hit
 				}
 				mu.Unlock()
@@ -202,6 +203,15 @@ func (s *camScan) run(hosts []string) {
 		s.st.Error = "Dò camera gặp lỗi, thử lại"
 	}
 	s.mu.Unlock()
+}
+
+func (s *camScan) rank(port int) int {
+	for i, p := range s.ports {
+		if p == port {
+			return i
+		}
+	}
+	return len(s.ports)
 }
 
 func (s *camScan) dialTimeout(ctx context.Context, network, addr string) (net.Conn, error) {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -174,5 +175,31 @@ func TestCamScanConcurrencyAndTimeout(t *testing.T) {
 	}
 	if m := max.Load(); m > 32 || m < 2 {
 		t.Errorf("số kết nối đồng thời = %d, cần 2..32", m)
+	}
+}
+
+// Nhiều cổng cùng trả lời: kết quả không phụ thuộc goroutine nào xong trước; ưu tiên 80, rồi 8080, rồi 2020.
+func TestCamScanPrefersPort80Then8080Then2020(t *testing.T) {
+	for _, tc := range []struct {
+		refuse []int
+		want   int
+	}{{nil, 80}, {[]int{80}, 8080}, {[]int{80, 8080}, 2020}} {
+		f := newScanFakes(t)
+		for i := 0; i < 20; i++ {
+			s, _ := scanFor(t, f, nil)
+			s.dial = func(ctx context.Context, n, addr string) (net.Conn, error) {
+				_, p, _ := net.SplitHostPort(addr)
+				for _, r := range tc.refuse {
+					if p == strconv.Itoa(r) {
+						return nil, &net.OpError{Op: "dial", Err: context.DeadlineExceeded}
+					}
+				}
+				return f.dial(ctx, n, addr)
+			}
+			s.run([]string{"10.0.0.2"}) // Hikvision trả lời trên mọi cổng
+			if st := s.status(); len(st.Found) != 1 || st.Found[0].Port != tc.want || st.Found[0].Kind != "hik_cam" {
+				t.Fatalf("từ chối %v: %+v, muốn cổng %d", tc.refuse, st.Found, tc.want)
+			}
+		}
 	}
 }
