@@ -100,6 +100,13 @@ func main() {
 
 	go runOffline(context.Background(), hub)
 
+	if dir := os.Getenv("HUBD_REC_DIR"); dir != "" { // ghi hình mọi camera qua go2rtc (recorder.go)
+		cm := newCams(nil, db) // chỉ dùng cấu hình đầu ghi và địa chỉ go2rtc
+		rec := newRecorder(db, cm.go2rtc, dir, func() recDisk { return recDiskCheck(dir, path) },
+			func() []recSource { return recSources(db, cm) }, func() map[string]recPolicy { return camPolicies(db) }, hub.notify)
+		go rec.run(context.Background())
+	}
+
 	auth := NewAuth(pin, db)
 	auth.assistant = os.Getenv("HUBD_ASSISTANT_TOKEN")
 	mux := newMux(hub, auth)

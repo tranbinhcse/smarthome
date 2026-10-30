@@ -201,13 +201,22 @@ func (c *cams) live(w http.ResponseWriter, r *http.Request) {
 	if !originOK(w, r) {
 		return
 	}
+	c.proxy(w, r, "/api/ws", url.Values{"name": {"ch" + strconv.Itoa(d.Channel)}, "src": {nvrRTSP(n, d.Channel, true)}}.Encode())
+}
+
+// nvrRTSP: luồng RTSP kênh ch của đầu ghi, sub = luồng phụ <ch>02 (H.264), không thì luồng chính <ch>01. Có mật khẩu: không log.
+func nvrRTSP(n nvrConf, ch int, sub bool) string {
 	h := n.Host
 	if hh, _, err := net.SplitHostPort(h); err == nil {
 		h = hh // cổng trong cấu hình là cổng HTTP (ISAPI); RTSP của đầu ghi ở 554
 	}
-	src := url.URL{Scheme: "rtsp", User: url.UserPassword(n.User, n.Pass), Host: net.JoinHostPort(h, "554"),
-		Path: fmt.Sprintf("/Streaming/Channels/%d02", d.Channel)} // luồng phụ H.264
-	c.proxy(w, r, "/api/ws", url.Values{"name": {"ch" + strconv.Itoa(d.Channel)}, "src": {src.String()}}.Encode())
+	s := 1
+	if sub {
+		s = 2
+	}
+	u := url.URL{Scheme: "rtsp", User: url.UserPassword(n.User, n.Pass), Host: net.JoinHostPort(h, "554"),
+		Path: fmt.Sprintf("/Streaming/Channels/%d%02d", ch, s)}
+	return u.String()
 }
 
 // WebSocket không chịu CORS, và với địa chỉ IP mọi cổng cùng máy là cùng "site" nên cookie PIN vẫn được gửi:
