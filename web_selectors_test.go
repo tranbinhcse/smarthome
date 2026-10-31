@@ -295,6 +295,10 @@ func TestStorageSetupWired(t *testing.T) {
 	if !strings.Contains(read("settings.js"), "storage: 'hethong'") {
 		t.Error("settings.js chưa khai storage: 'hethong'")
 	}
+	// Hệ thống là mục tự dựng: phải đi qua sectionOfSetups('hethong', …) thì thẻ Lưu trữ mới hiện ra.
+	if !strings.Contains(read("settings.js"), "sectionOfSetups('hethong'") {
+		t.Error("settings.js: mục hethong không dùng sectionOfSetups('hethong', …), thẻ Lưu trữ không hiện")
+	}
 	if !strings.Contains(read("index.html"), `<script src="/setup-storage.js?v=`) {
 		t.Error("index.html không nạp setup-storage.js")
 	}

@@ -291,14 +291,15 @@ const PAGES = {
       : `<section class="setcard"><h3>${icon('download')}Tải bản sao lưu</h3>
       <p class="note">Gồm sắp xếp phòng và thiết bị, đầu ghi, Tuya, Spotify, AI, giọng đọc, thông báo. <b>Không</b> gồm khoá API, mật khẩu, token: khôi phục sang hub mới thì nhập lại các ô đó. Cấu hình gốc (config.yaml) và dữ liệu lịch sử nằm trên hub, không có trong tệp.</p>
       <div class="kv"><a class="pill acc" href="/api/backup" download>${icon('download')}Tải bản sao lưu</a></div></section>`}),
-  hethong: () => ({t: 'Hệ thống', meta: 'Giao diện và thông tin hub',
-    list: row('giaodien', icon('sun'), 'Giao diện', skyMode === 'auto' ? 'Ngày/đêm tự động' : 'Ngày/đêm chọn tay') + row('thongtin', icon('server'), 'Thông tin hub', `${cfg.devices.length} thiết bị, ${cfg.entities.length} số đo`),
-    first: 'giaodien', detail: id => id === 'thongtin' ? PAGES.mang().detail('hub') : `<section class="setcard"><h3>${icon('auto')}Ngày và đêm</h3>
+  hethong: () => ({...sectionOfSetups('hethong', 'Hệ thống', 'Giao diện và thông tin hub',
+    row('giaodien', icon('sun'), 'Giao diện', skyMode === 'auto' ? 'Ngày/đêm tự động' : 'Ngày/đêm chọn tay') + row('thongtin', icon('server'), 'Thông tin hub', `${cfg.devices.length} thiết bị, ${cfg.entities.length} số đo`),
+    id => id === 'thongtin' ? PAGES.mang().detail('hub') : id === 'giaodien' ? giaoDien() : ''), first: 'giaodien'}),
+};
+const giaoDien = () => `<section class="setcard"><h3>${icon('auto')}Ngày và đêm</h3>
       <p class="note">${skyMode === 'auto' ? `Tự động theo ${esc(sky().by)}` : 'Đang chọn tay'}</p><div class="seg">${[['auto', 'Tự động'], ['day', 'Ban ngày'], ['night', 'Ban đêm']]
         .map(([v, l]) => `<button class="rb${skyMode === v ? ' sel' : ''}" data-skyset="${v}">${l}</button>`).join('')}</div></section>
       <section class="setcard"><h3>${icon('grip')}Bố cục widget</h3><p class="note">Lưu trên thiết bị này.</p>
-      <div class="kv"><button class="pill" data-go="" data-editgo>Sắp xếp trang chủ</button><button class="pill" data-wreset>Về mặc định</button></div></section>`}),
-};
+      <div class="kv"><button class="pill" data-go="" data-editgo>Sắp xếp trang chủ</button><button class="pill" data-wreset>Về mặc định</button></div></section>`;
 function sectionOfSetups(sec, t, meta, extra = '', extraDetail = () => '') {
   const ms = setupsOf(sec);
   return {t, meta, list: extra + ms.map(m => row(m.id, icon(m.icon || 'gear', 'wi ' + (m.c || '')), m.title, m.meta ? m.meta() : '')).join(''),
