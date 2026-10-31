@@ -276,3 +276,29 @@ func TestCameraSetupWired(t *testing.T) {
 		t.Errorf("index.html phải dùng một ?v= duy nhất, đang có %d giá trị", len(vs))
 	}
 }
+
+// Thẻ Lưu trữ (ghi hình): gọi /api/rec/storage, có ô rec_max_pct, khai vào Hệ thống, index.html nạp script.
+func TestStorageSetupWired(t *testing.T) {
+	read := func(f string) string {
+		b, err := os.ReadFile(filepath.Join("web", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	js := read("setup-storage.js")
+	for _, s := range []string{"title: 'Lưu trữ'", "'/api/rec/storage'", "rec_max_pct", "chưa đủ dữ liệu", "Ghi hình thường dùng tối đa"} {
+		if !strings.Contains(js, s) {
+			t.Errorf("setup-storage.js thiếu %q", s)
+		}
+	}
+	if !strings.Contains(read("settings.js"), "storage: 'hethong'") {
+		t.Error("settings.js chưa khai storage: 'hethong'")
+	}
+	if !strings.Contains(read("index.html"), `<script src="/setup-storage.js?v=`) {
+		t.Error("index.html không nạp setup-storage.js")
+	}
+	if !strings.Contains(read("setup-ai.js"), "luu_tru: 'Lưu trữ'") {
+		t.Error("setup-ai.js thiếu nhãn loại tin luu_tru")
+	}
+}

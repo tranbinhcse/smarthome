@@ -39,6 +39,7 @@ type notifyKind struct {
 func mountNotify(mux *http.ServeMux, h *Hub, a *Auth) {
 	mux.HandleFunc("GET /api/notify", a.Require(func(w http.ResponseWriter, r *http.Request) {
 		out := []notifyKind{{Kind: "thiet_bi", Texts: []string{"Thiết bị mất kết nối quá 10 phút"}}} // có sẵn, không do luật (offline.go)
+		out = append(out, notifyKind{Kind: "luu_tru", Texts: []string{"Ổ ghi hình gần đầy, đã dừng ghi", "Không ghi được vào ổ ghi hình"}}) // có sẵn (recdisk.go / rec)
 		for _, ru := range h.cfg.Rules {
 			for _, act := range slices.Concat(ru.Then, ru.OnClear) {
 				if act.Notify == "" || act.Kind == "" {
