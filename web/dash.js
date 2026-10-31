@@ -310,7 +310,7 @@ function greetHtml() {
   } else if (t === 'camera') {
     const cs = cfg.devices.filter(d => kindOf(d) === 'camera');
     h = 'Camera';
-    p = cs.length ? `${cs.filter(d => !offline(d)).length}/${cs.length} camera đang ghi hình. Chạm một ô để phóng to.` : '';
+    p = cs.length ? `${cs.filter(d => !offline(d)).length}/${cs.length} camera trực tuyến. Chạm một ô để phóng to.` : '';
   } else {
     const [w] = totalPower(), pv = num('deye.pv'), soc = num('jk.soc');
     h = 'Điện năng';
@@ -666,7 +666,7 @@ const W = {
       : '<p class="empty">Không phòng nào đang bật đèn.</p>';
   }},
   climate: {t: 'Không khí', i: 'leaf', c: 'green', o: () => CLIM_OPTS, hx: airTabs, r: f => airWidget(f, 'climate')},
-  cameras: {t: 'Camera', i: 'camera', go: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} đang ghi hình` : ''; }, r: f => {
+  cameras: {t: 'Camera', i: 'camera', go: 'camera', o: f => devsOf(f, 'camera').map(d => [d.id, d.name]), m: f => { const c = devsOf(f, 'camera'); return c.length ? `${c.filter(d => !offline(d)).length}/${c.length} trực tuyến` : ''; }, r: f => {
     const cs = devsOf(f, 'camera').filter(d => !hid('cameras', d.id));
     return cs.length ? `<div class="cams" data-keep="cameras">${cs.map(d => `<button class="cam" data-sheet="cam:${esc(d.id)}" style="${camBg(d)}" title="${SNAP[d.id] ? 'Ảnh chụp từ đầu ghi, mỗi phút một ảnh' : 'Ảnh minh hoạ phòng, chưa có hình từ đầu ghi'}">
       ${icon('camera', 'camic')}<span><i class="dot ${offline(d) ? 'bad' : 'ok'}"></i>${esc(zone(d.zone)?.name || d.name)}</span></button>`).join('')}</div>` : '';
@@ -767,7 +767,7 @@ const camCard = d => `<button class="dv cam1${offline(d) ? ' lost' : ''}" data-s
 function camPanel(id) {
   const d = cfg.devices.find(x => x.id === id), z = zone(d.zone);
   return `<div class="m-box sheet camsheet"><header class="wh">${icon('camera', 'wi blue')}<h3>${esc(d.name)}<small>${esc(z?.name || '')}</small></h3>
-    <span class="tag ${offline(d) ? 'bad' : 'good'}">${offline(d) ? 'Mất kết nối' : 'Đang ghi hình'}</span></header>
+    <span class="tag ${offline(d) ? 'bad' : 'good'}">${offline(d) ? 'Mất kết nối' : 'Trực tuyến'}</span></header>
     <div class="camview" style="${camBg(d)}"${DEMO ? '' : ` data-live="/api/cam/${encodeURIComponent(d.id)}/ws"`}></div>
     <p class="note">${DEMO ? 'Dữ liệu mẫu: ảnh minh hoạ của phòng.' : 'Hình trực tiếp (luồng phụ) từ đầu ghi ở tum kỹ thuật, đi qua hub.'}</p>
     <div class="replay" data-replay="${esc(d.id)}" style="margin:14px 0"></div>

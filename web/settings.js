@@ -216,7 +216,7 @@ const PAGES = {
     first: kindUnits(['ac'])[0]?.[0], detail: devDetail}),
   camera: () => {
     const cs = kindUnits(['camera']);
-    return {t: 'Camera', meta: `${cs.filter(([, c]) => !offline(c[0])).length}/${cs.length} đang ghi hình`, search: 'Tìm camera...',
+    return {t: 'Camera', meta: `${cs.filter(([, c]) => !offline(c[0])).length}/${cs.length} trực tuyến`, search: 'Tìm camera...',
       btn: `<button class="pill" data-go="camera">${icon('camera')}Xem tất cả</button>`,
       list: row('nvr', icon('server'), 'Đầu ghi Hikvision', 'Địa chỉ, tài khoản, chọn kênh') + byRoom(cs), first: 'nvr',
       detail: id => id === 'nvr' ? setupCard('camera') : devDetail(id)};
