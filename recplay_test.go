@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -133,7 +134,7 @@ func TestRecPlaylist(t *testing.T) {
 		t.Errorf("cắt theo from/to: %d đoạn, muốn 1", c)
 	}
 	// khoảng sai
-	for _, bad := range []string{"from=5&to=5", "from=x&to=9", fmt.Sprintf("from=0&to=%d", 25*3600*1000), ""} {
+	for _, bad := range []string{"from=5&to=5", "from=x&to=9", fmt.Sprintf("from=0&to=%d", 25*3600*1000), "from=-1&to=5", "from=0&to=9223372036854775807", ""} {
 		if c := call(mux, "GET", "/api/cam/cam1/rec.m3u8?"+bad, "", "", ck...).Code; c != 400 {
 			t.Errorf("%q: %d, muốn 400", bad, c)
 		}
@@ -216,5 +217,76 @@ func TestDashReplayWired(t *testing.T) {
 	i := strings.Index(js, "function liveFill")
 	if i < 0 || !strings.Contains(js[i:i+900], "[data-replay]") {
 		t.Error("liveFill không giữ [data-replay]")
+	}
+}
+
+// trunFrame dựng cặp moof+mdat một mẫu, thời lượng khai theo từng nguồn: "tfhd" (default_sample_duration, như go2rtc),
+// "trun" (cờ 0x100 từng mẫu) hoặc "trex" (không khai trong moof).
+func trunFrame(src string, dts uint64, key bool, dur uint32) []byte {
+	flags := uint32(0x01010000)
+	if key {
+		flags = 0x02000000
+	}
+	tfhdFl, tfhd, trunFl, trun := uint32(0x020020), u32(1, flags), uint32(1), u32(0)
+	switch src {
+	case "tfhd":
+		tfhdFl, tfhd = 0x020028, u32(1, dur, flags)
+	case "trun":
+		trunFl, trun = 0x101, u32(0, dur)
+	}
+	moof := mkBox("moof", mkBox("mfhd", u32(0, 1)), mkBox("traf", mkBox("tfhd", append(u32(tfhdFl), tfhd...)),
+		mkBox("tfdt", u32(1<<24), binary.BigEndian.AppendUint64(nil, dts)), mkBox("trun", append(u32(trunFl, 1), trun...))))
+	return append(moof, mkBox("mdat", make([]byte, 50))...)
+}
+
+func TestRecScanDurationSources(t *testing.T) {
+	trexDur := uint32(4500)
+	for _, src := range []string{"tfhd", "trun", "trex"} {
+		head := fmp4Head("hev1")
+		if src == "trex" { // trex: track 1, desc 1, duration 4500, size 0, flags 0
+			head = fmp4HeadTrexDur("hev1", trexDur)
+		}
+		in := head
+		for i := 0; i < 6; i++ {
+			in = append(in, trunFrame(src, uint64(i)*4500, i%3 == 0, 4500)...)
+		}
+		p := filepath.Join(t.TempDir(), src+".mp4")
+		files, _, err := runSplit(bytes.NewReader(in), 1<<30)
+		if err != nil || len(files) != 1 {
+			t.Fatal(src, err)
+		}
+		os.WriteFile(p, files[0], 0o600)
+		_, gops, err := recScan(p)
+		var sum float64
+		for _, g := range gops {
+			sum += g.Dur
+		}
+		if err != nil || len(gops) != 2 || math.Abs(sum-6*4500.0/90000) > 1e-9 {
+			t.Errorf("%s: err=%v gops=%d tổng Dur %v, muốn 2 GOP và 0.3", src, err, len(gops), sum)
+		}
+	}
+}
+
+// fmp4HeadTrexDur như fmp4Head, thêm mvex/trex có default_sample_duration.
+func fmp4HeadTrexDur(codec string, dur uint32) []byte {
+	h := fmp4Head(codec)
+	bs := topBoxes(&testing.T{}, h)
+	moov := append([]byte(nil), bs[1].b...)
+	moov = append(moov, mkBox("mvex", mkBox("trex", u32(0, 1, 1, dur, 0, 0)))...)
+	binary.BigEndian.PutUint32(moov, uint32(len(moov)))
+	return append(append([]byte(nil), bs[0].b...), moov...)
+}
+
+func TestRecScanTruncatedMidGOP(t *testing.T) {
+	files, _, _ := runSplit(bytes.NewReader(fakeFMP4("hev1", [][]int{{100, 100, 100}, {100, 100, 100}})), 1<<30)
+	p := filepath.Join(t.TempDir(), "a.mp4")
+	os.WriteFile(p, files[0][:len(files[0])-10], 0o600) // cụt giữa mdat khung thứ 3 của GOP 2
+	_, gops, err := recScan(p)
+	last := int64(len(fmp4Frame(1, 0, false, 100, 1)))
+	if err != nil || len(gops) != 2 {
+		t.Fatalf("err=%v gops=%d", err, len(gops))
+	}
+	if end := gops[1].Off + gops[1].Len; end != int64(len(files[0]))-last || math.Abs(gops[1].Dur-2*3000.0/90000) > 1e-9 {
+		t.Errorf("GOP cuối kết thúc %d (muốn %d), Dur %v (muốn 2 khung)", end, int64(len(files[0]))-last, gops[1].Dur)
 	}
 }

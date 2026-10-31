@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"os"
@@ -75,7 +74,7 @@ func recScan(path string) (initLen int64, gops []recGOP, err error) {
 			}
 			ts, err := parseMoof(b, trex)
 			if err != nil {
-				return initLen, gops, err
+				return initLen, gops, nil // moof hỏng: giữ phần đã quét
 			}
 			for _, t := range ts {
 				if t.track != video || video == 0 {
@@ -114,7 +113,7 @@ func moovInfo(b []byte, video uint32) (scale float64, dur map[uint32]uint32) {
 				return
 			}
 			off := tkhd.body + 12
-			if b[tkhd.body] == 1 {
+			if tkhd.end > tkhd.body && b[tkhd.body] == 1 {
 				off += 8
 			}
 			if off+4 > tkhd.end || binary.BigEndian.Uint32(b[off:]) != video {
@@ -225,7 +224,7 @@ func mountRecPlay(mux *http.ServeMux, db *DB, a *Auth) {
 		q := r.URL.Query()
 		from, e1 := strconv.ParseInt(q.Get("from"), 10, 64)
 		to, e2 := strconv.ParseInt(q.Get("to"), 10, 64)
-		if e1 != nil || e2 != nil || to <= from || time.Duration(to-from)*time.Millisecond > recMaxSpan {
+		if e1 != nil || e2 != nil || from < 0 || to <= from || to-from > recMaxSpan.Milliseconds() {
 			http.Error(w, "khoảng thời gian không hợp lệ", 400)
 			return
 		}
@@ -288,6 +287,6 @@ func mountRecPlay(mux *http.ServeMux, db *DB, a *Auth) {
 		}
 		defer f.Close()
 		w.Header().Set("Content-Type", "video/mp4")
-		http.ServeContent(w, r, "", fs[0].End, struct{ io.ReadSeeker }{f})
+		http.ServeContent(w, r, "", fs[0].End, f)
 	}))
 }

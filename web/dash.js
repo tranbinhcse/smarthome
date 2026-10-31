@@ -263,7 +263,7 @@ function draw() {
   if (!(view.page === 'settings' && document.activeElement?.matches?.('#side input, #side select, #side textarea'))) $('#side').innerHTML = side;
   $('#bottom').innerHTML = bottom;
   $('#bottom').classList.toggle('scroll', !!scroll);
-  if (sheet && $('#modal').open) fillSheet($('#modal'));
+  if (sheet && $('#modal').open && !replayBusy($('#modal'))) fillSheet($('#modal'));   // đang chọn ngày hay xem toàn màn hình thì không vẽ đè bảng
   masonry();
   // đặt lại sau masonry(): trước đó cột phải tạm co lại (widget chưa có số hàng) nên vị trí bị cắt về 0
   if (keep.size) for (const e of $('.app').querySelectorAll('*')) { const k = keep.get(skey(e)); if (k) [e.scrollLeft, e.scrollTop] = k; }
@@ -510,7 +510,7 @@ function openSheet(key) {
   delete CHARTS.sheet;   // biểu đồ trong bảng mở lại từ tab được chạm
   fillSheet(m);
   m.onclick = e => { if (e.target === m || e.target.closest('.m-act button, [data-go]')) m.close(); };
-  m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); m.querySelector('[data-replay]')?.remove(); };   // đóng bảng thì ngắt luồng camera
+  m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); replayStop(m.querySelector('[data-replay] video')); m.querySelector('[data-replay]')?.remove(); };   // đóng bảng thì ngắt luồng camera
   m.showModal();
 }
 // bảng trình phát Spotify (music.js) tự vẽ phần của nó: vẽ lại cả bảng sẽ mất chữ đang gõ và chỗ cuộn danh sách
@@ -773,6 +773,12 @@ function camPanel(id) {
     <div class="replay" data-replay="${esc(d.id)}" style="margin:14px 0"></div>
     <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
 }
+// Ô chọn ngày đang giữ tiêu điểm hay video xem lại đang toàn màn hình: vẽ lại bảng sẽ đóng bộ chọn ngày / thoát toàn màn hình.
+function replayBusy(m) {
+  const r = m.querySelector('[data-replay]');
+  return !!r && (r.contains(document.activeElement) || !!document.fullscreenElement || !!r.querySelector('video')?.webkitDisplayingFullscreen);
+}
+function replayStop(v) { if (v) { v.pause(); v.removeAttribute('src'); v.load(); } }
 // Xem lại: chọn ngày, thanh 24 giờ tô các đoạn đã ghi, chạm vào đoạn thì phát HLS (Safari phát sẵn). Vẽ một lần, liveFill giữ nguyên.
 function replayInit(el) {
   const id = el.dataset.replay, H = 3600e3, DAY = 24 * H;
@@ -786,15 +792,17 @@ function replayInit(el) {
     <div data-rvid></div>`;
   if (!hls) return;
   const inp = el.querySelector('input'), bar = el.querySelector('[data-rbar]'), msg = el.querySelector('[data-rmsg]'), vid = el.querySelector('[data-rvid]');
-  let spans = [], t0 = 0;
+  let spans = [], t0 = 0, tok = 0;
   const load = async () => {
     t0 = Date.parse(inp.value + 'T00:00:00+07:00');
     if (isNaN(t0)) return;
-    msg.textContent = ''; vid.replaceChildren();
+    const my = ++tok;   // đổi ngày liên tiếp: bỏ phản hồi cũ
+    msg.textContent = ''; replayStop(vid.querySelector('video')); vid.replaceChildren();
     if (DEMO) spans = [[t0 + 7 * H, t0 + 9.5 * H], [t0 + 13 * H, t0 + 18 * H]];   // đoạn ghi giả, không gọi API
     else {
       try { const r = await api(`/api/cam/${encodeURIComponent(id)}/rec?day=${inp.value}`); spans = r.ok ? (await r.json()).spans || [] : []; }
       catch (_) { spans = []; }
+      if (my !== tok) return;
     }
     bar.innerHTML = spans.map(([a, b]) => `<i style="position:absolute;top:0;bottom:0;left:${(a - t0) / DAY * 100}%;width:${Math.max((b - a) / DAY * 100, .4)}%;background:var(--blue);opacity:.85"></i>`).join('');
     if (!spans.length) msg.textContent = 'Ngày này không có hình.';
@@ -806,8 +814,8 @@ function replayInit(el) {
     if (DEMO) { msg.textContent = 'Dữ liệu mẫu: chưa có hình ghi thật.'; return; }
     msg.textContent = '';
     let v = vid.querySelector('video');
-    if (!v) { v = document.createElement('video'); v.controls = true; v.playsInline = true; v.style.cssText = 'display:block;width:100%;aspect-ratio:16/9;margin-top:10px;border-radius:12px;background:#000'; vid.append(v); }
-    v.src = `/api/cam/${encodeURIComponent(id)}/rec.m3u8?from=${Math.floor(t)}&to=${sp[1]}`;
+    if (!v) { v = document.createElement('video'); v.controls = true; v.playsInline = true; v.style.cssText = 'display:block;width:100%;aspect-ratio:16/9;margin-top:10px;border-radius:12px;background:#000'; v.onerror = () => { msg.textContent = 'Không phát được đoạn này'; }; vid.append(v); }
+    v.src = `/api/cam/${encodeURIComponent(id)}/rec.m3u8?from=${Math.floor(t)}&to=${Math.min(sp[1], Math.floor(t) + H)}`;   // tối đa 1 giờ mỗi lần chạm: playlist cả ngày quá lớn
     v.play().catch(() => {});
   };
   load();
