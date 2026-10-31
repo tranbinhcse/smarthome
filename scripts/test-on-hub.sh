@@ -10,7 +10,8 @@ HUB=${HUB:-root@192.168.1.254}
 cd "$(git rev-parse --show-toplevel)"
 name=${1:-$(git branch --show-current)}
 name=${name//[^A-Za-z0-9._-]/-}
-[ -n "$name" ] || { echo "Không có tên nhánh (HEAD tách rời): gọi kèm tên thư mục thử" >&2; exit 2; } # tên rỗng = xoá cả /root/hubd-ci
+# tên rỗng, "." hay ".." thì rm -rf bên dưới xoá cả /root/hubd-ci hoặc /root: chỉ nhận tên mở đầu bằng chữ/số
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "Tên thư mục thử không hợp lệ (HEAD tách rời?): gọi kèm tên, ví dụ scripts/test-on-hub.sh thu-camera" >&2; exit 2; }
 dir=/root/hubd-ci/$name
 goimg=$(awk '/^FROM golang/ {print $2; exit}' Dockerfile)
 
