@@ -112,7 +112,48 @@ Hub nhận thẳng camera Hikvision hoặc camera RTSP hãng khác trong LAN. C�
 - Ảnh chụp và xem trực tiếp đi qua hubd sau PIN; trình duyệt không thấy IP hay tài khoản camera. Ảnh chụp camera Hikvision lấy bằng ISAPI từ chính camera; ảnh chụp camera RTSP và xem trực tiếp (cả hai kiểu) qua go2rtc, luồng phụ. Mật khẩu không bao giờ gửi về trình duyệt; form sửa chỉ hiện gợi ý "Đã lưu, để trống nếu giữ nguyên" trong ô mật khẩu. Sửa camera để trống mật khẩu là giữ mật khẩu cũ, trừ khi đổi IP camera (khi đó phải nhập lại, để không gửi mật khẩu cũ tới máy khác).
 - Mỗi phút hub thử mở cổng RTSP của từng camera. Mất kết nối liên tục hơn 10 phút thì báo một lần (loại `thiet_bi`; đọc to và Telegram mỗi đường có công tắc riêng `notify.thiet_bi` / `notify.tg:thiet_bi` ở Cài đặt → Đọc thông báo, mặc định bật; Telegram cần đã cấu hình bot), nối lại thì báo "đã kết nối lại"; mất ngắn hơn 10 phút không báo. Hubd khởi động lại thì tính lại từ đầu.
 - Camera Hikvision từ chối mật khẩu thì hub tạm ngừng thử tài khoản đó 15 phút (camera RTSP không có khoá này).
-- Chưa làm: ghi hình (2B), sự kiện từ camera (2C).
+- Chưa làm: sự kiện từ camera (2C). Ghi hình: xem mục Ghi hình bên dưới.
+
+
+### Ghi hình
+
+Hub ghi luồng chính của camera vào ổ cứng gắn thêm. Cần `COMPOSE_PROFILES=camera` (go2rtc).
+
+**Gắn ổ**
+
+1. Cắm ổ cứng vào máy chủ. Nên dùng HDD dòng camera giám sát (surveillance): ghi liên tục làm mòn SSD. Ví dụ: 10 camera 4 Mbit/s ghi liên tục ≈ 430 GB mỗi ngày.
+2. Hệ điều hành gắn ổ vào `/srv/hubd-video`, ví dụ theo UUID trong `/etc/fstab` (`UUID=<uuid> /srv/hubd-video ext4 defaults,nofail 0 2`), rồi `mount -a`. Đổi nơi gắn bằng biến `HUBD_REC_HOST` trong `.env`.
+3. `docker compose up -d hubd`. Dashboard → Cài đặt → Hệ thống → **Lưu trữ** báo dung lượng ổ là đạt.
+
+Hub từ chối ghi khi thư mục ghi hình nằm trên ổ hệ thống, và khi không kiểm tra được (chưa gắn ổ: thư mục tự tạo trên ổ hệ thống cũng bị từ chối). Lý do hiện ngay trong mục Lưu trữ.
+
+**Cách ghi**
+
+- Luồng chính của mọi camera (camera nối thẳng và kênh đầu ghi) qua go2rtc, tên luồng `rec_<id>`; không chuyển mã.
+- File MP4 tối đa 50 MB, cắt ở keyframe, lưu ở `/srv/hubd-video/<id>/<YYYYMMDD>/<HHMMSS>.mp4` (giờ Việt Nam). Chưa có âm thanh. Chỉ mục file nằm trong SQLite của hub.
+- Luồng đứt thì hub nối lại sau 2 giây; ổ không đạt thì dừng mọi camera và thử lại ở lần kiểm 60 giây kế tiếp. Lỗi ghi file (ổ rút, ổ đầy) cũng dừng, không thử lại liên tục.
+- Báo loại **Lưu trữ** (`luu_tru`): ổ không đạt, không ghi được vào ổ, ổ gần đầy đã dừng ghi, ổ có chỗ ghi lại. Cài đặt → Đọc thông báo có hai công tắc riêng cho loại này: đọc to và Telegram.
+
+**Chế độ ghi từng camera** (Cài đặt → Camera, form camera nối thẳng):
+
+- **Chế độ ghi**: **Toàn thời gian**, **Theo khung giờ**, **Không ghi (vẫn giữ đoạn báo động)**.
+- **Khung giờ ghi** (chỉ khi Theo khung giờ): 1 đến 6 khung `HH:MM-HH:MM`, ví dụ `22:00-06:00, 12:00-13:30`; khung qua đêm được.
+- **Giới hạn dung lượng (GB)**: tối đa cho một camera; 0 = theo giới hạn chung.
+
+**Giữ và xoá**
+
+- Hub ghi mọi camera; file ngoài chế độ ghi bị xoá khi file kế tiếp của camera đó ghi xong. File mới nhất của mỗi camera luôn được giữ, kể cả khi đặt **Không ghi**.
+- Vượt giới hạn GB của camera thì xoá file thường cũ nhất của camera đó.
+- Ghi thường dùng tối đa 80% ổ (Cài đặt → Hệ thống → Lưu trữ → **Ghi hình thường dùng tối đa (%)**, chỉnh 50–95); vượt thì xoá file thường cũ nhất của mọi camera.
+- Ổ còn dưới 2% trống mà không còn gì để xoá: dừng ghi thường và báo khẩn (loại Lưu trữ); còn trống từ 3% thì ghi lại.
+- File đoạn báo động (`held`) không bao giờ bị xoá tự động. Đoạn báo động (đánh dấu, danh sách, xem, tải, xoá) làm ở Phần 3.
+- Mục Lưu trữ hiện dung lượng và số ngày ước tính cho từng camera.
+
+**Chống khoá IP.** Trước mỗi lần nối ghi, hub thử tài khoản camera Hikvision (và đầu ghi) qua ISAPI. Sai mật khẩu thì tài khoản đó bị tạm ngừng 15 phút, không thử lại; sửa mật khẩu ở Cài đặt → Camera. Camera RTSP hãng khác không có lớp bảo vệ này: sai mật khẩu thì go2rtc vẫn thử nối mỗi lần kiểm.
+
+**Xem lại.** Bấm camera → bảng camera → **Xem lại**: chọn ngày, thanh 24 giờ tô các đoạn đã ghi; chạm vào đoạn tô thì phát từ giờ đó, tối đa 1 giờ mỗi lần chạm (chạm tiếp để xem tiếp). Chạm chỗ trống báo "Giờ này không có hình". Chạy trên Safari (iPad, iPhone, Mac: HLS có sẵn); trình duyệt không có HLS sẵn (Chrome máy tính) chỉ hiện lời nhắc dùng Safari.
+
+Tải đo được: (đo khi triển khai)
 
 
 ## Luật tự động
@@ -288,5 +329,6 @@ Inverter (Deye, LuxPower, Lumentree) đọc qua RS485 bằng node ESPHome: xem [
 
 - Cảm biến Tuya Wi-Fi chạy pin thường ngủ, không nhận kết nối local: chỉ cảm biến cắm điện mới đọc được ổn định.
 - Kịch bản một chạm, báo cháy CBX: chưa làm. Cảnh báo `urgent` chưa lặp lại tới khi xác nhận.
-- Camera nối thẳng: chưa ghi hình (2B), chưa nhận sự kiện từ camera (2C).
+- Camera nối thẳng: chưa nhận sự kiện từ camera (2C).
+- Ghi hình: chưa có âm thanh; chưa có danh sách đoạn báo động (xem, tải, xoá) và nhắc dọn hằng tuần (Phần 3); chưa tự nhận ổ khi cắm và chưa định dạng ổ trong Cài đặt (gắn ổ làm tay); danh sách camera chưa sao lưu/khôi phục; camera RTSP hãng khác không có lớp chống khoá IP.
 - Cổng 1883 và 8080 mở trong LAN; không mở ra internet. PIN dùng chung, khoá 1 phút sau 5 lần sai.
