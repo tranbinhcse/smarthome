@@ -9,10 +9,25 @@
   const saved = () => U.SAVED[NS] || {};
   const e = U.esc;
   // ----- camera nối thẳng -----
-  const DEMO_CAMS = [{id: 'cam_san', name: 'Camera sân', zone: '', kind: 'rtsp', host: '192.168.1.60', rtsp_port: 554, user: 'xem', pass_set: true}];
+  const DEMO_CAMS = [{id: 'cam_san', name: 'Camera sân', zone: '', kind: 'rtsp', host: '192.168.1.60', rtsp_port: 554, user: 'xem', pass_set: true, rec_mode: 'always', rec_limit_gb: 0},
+    {id: 'cam_cong', name: 'Camera cổng', zone: '', kind: 'hik_cam', host: '192.168.1.61', user: 'xem', pass_set: true, rec_mode: 'schedule', rec_windows: [{from: '22:00', to: '06:00'}, {from: '12:00', to: '13:30'}], rec_limit_gb: 50},
+    {id: 'cam_kho', name: 'Camera kho', zone: '', kind: 'rtsp', host: '192.168.1.62', user: 'xem', pass_set: true, rec_mode: 'off', rec_limit_gb: 0}];
   const TPL0 = [{brand: 'Dahua / KBVision / Imou', main_path: '/cam/realmonitor?channel=1&subtype=0', sub_path: '/cam/realmonitor?channel=1&subtype=1', rtsp_port: 554}];
   let PW = '', CAMS = null, TPL = [], SCAN = null, scanTimer = 0, form = null, F = {}, res = {}, tested = {}, camRestart = null;
   const camKey = l => JSON.stringify((l || []).map(c => [c.id, c.name, c.zone]).sort());
+  const RECS = [['always', 'Toàn thời gian'], ['schedule', 'Theo khung giờ'], ['off', 'Không ghi (vẫn giữ đoạn báo động)']];
+  const recName = m => (RECS.find(r => r[0] === m) || RECS[0])[1];
+  const winText = ws => (ws || []).map(w => `${w.from}-${w.to}`).join(', ');
+  // "22:00-06:00, 12:00-13:30" -> [{from, to}]; null nếu sai định dạng
+  function parseWins(t) {
+    const out = [];
+    for (const p of String(t || '').split(',')) {
+      const m = /^\s*([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)\s*$/.exec(p);
+      if (!m) return null;
+      out.push({from: `${m[1]}:${m[2]}`, to: `${m[3]}:${m[4]}`});
+    }
+    return out;
+  }
   const kindName = k => k === 'hik_cam' ? 'Hikvision' : 'RTSP';
   const json = (m, b) => ({method: m, headers: {'Content-Type': 'application/json'}, body: b === undefined ? undefined : JSON.stringify(b)});
   async function loadCams() {
@@ -53,6 +68,9 @@
       ${rtsp && other ? fin('rtsp_port', 'Cổng RTSP', '554') + fin('main_path', 'Đường dẫn luồng chính', '/stream1') + fin('sub_path', 'Đường dẫn luồng phụ', '/stream2') : ''}
       ${fin('name', 'Tên camera', 'Camera sân')}
       <label class="sf"><span>Khu</span>${sel('zone', zones)}</label>
+      <label class="sf"><span>Chế độ ghi</span>${sel('rec_mode', RECS)}</label>
+      ${F.rec_mode === 'schedule' ? fin('rec_windows', 'Khung giờ ghi', '22:00-06:00, 12:00-13:30') : ''}
+      <label class="sf"><span>Giới hạn dung lượng (GB)</span><input type="number" min="0" max="100000" step="any" data-cf="rec_limit_gb" value="${e(val('rec_limit_gb'))}" placeholder="0 = theo giới hạn chung"></label>
       <div class="kv"><button class="pill" data-sact="camera:ctest"${F.busy ? ' disabled' : ''}>${F.busy ? 'Đang thử...' : 'Thử kết nối'}</button><button class="pill amber" data-sact="camera:csave"${F.busy ? ' disabled' : ''}>Lưu</button><button class="pill" data-sact="camera:cclose">Đóng</button></div>
       ${F.result ? `<p class="note${F.result.ok ? '' : ' bad'}">${e(F.result.text)}</p>` : ''}
       <p class="note">Mật khẩu chỉ nằm trong ô này, gửi cho hub khi Thử kết nối hoặc Lưu, tự xoá sau khi Lưu thành công hoặc Đóng. ${form === 'edit' ? 'Để trống mật khẩu là giữ mật khẩu đã lưu.' : ''}</p></div>`;
@@ -61,7 +79,7 @@
   function direct() {
     if (CAMS === null) { if (U.DEMO) { CAMS = DEMO_CAMS; TPL = TPL0; } else { CAMS = []; loadCams(); U.loadSetting('camera'); } }   // dải mạng nằm ở nhóm camera
     const found = (SCAN?.found || []).filter(h => !(CAMS || []).some(c => c.host === h.host));
-    const list = (CAMS || []).map(c => `<div class="setrow"><span>${U.icon('camera')}${e(c.name)} <small>${e(zoneName(c.zone))} · ${kindName(c.kind)}</small>
+    const list = (CAMS || []).map(c => `<div class="setrow"><span>${U.icon('camera')}${e(c.name)} <small>${e(zoneName(c.zone))} · ${kindName(c.kind)} · ${e(recName(c.rec_mode))}</small>
         <small class="${res[c.id]?.ok === false ? 'bad' : ''}">${e(res[c.id]?.text || 'Chưa thử kết nối')}</small></span>
       <button class="pill" data-sact="camera:rtest:${e(c.id)}">Thử</button><button class="pill" data-sact="camera:edit:${e(c.id)}">Sửa</button><button class="pill" data-sact="camera:del:${e(c.id)}">Xoá</button></div>`).join('');
     return `<h4 class="mh">Camera nối thẳng</h4>
@@ -83,6 +101,8 @@
     const o = {kind: F.kind, host: String(F.host || '').trim(), user: String(F.user || '').trim(), pass,
       http_port: Number(F.http_port) || 0, rtsp_port: Number(F.rtsp_port) || 0};
     if (F.id) o.id = F.id;
+    o.rec_mode = F.rec_mode || 'always'; o.rec_limit_gb = Number(F.rec_limit_gb) || 0;
+    if (o.rec_mode === 'schedule') o.rec_windows = parseWins(F.rec_windows) || [];
     if (F.kind === 'rtsp') { o.main_path = tp ? tp.main_path : String(F.main_path || '').trim(); o.sub_path = tp ? tp.sub_path : String(F.sub_path || '').trim(); }
     return o;
   }
@@ -97,13 +117,13 @@
     return {ok: !!j.ok, text: testText(j)};
   }
   async function camAct(verb, arg) {
-    if (verb === 'add') { form = 'new'; PW = ''; F = {kind: 'hik_cam', brand: '0', rtsp_port: TPL[0]?.rtsp_port || ''}; U.soon(); return; }
+    if (verb === 'add') { form = 'new'; PW = ''; F = {kind: 'hik_cam', brand: '0', rec_mode: 'always', rec_limit_gb: '', rtsp_port: TPL[0]?.rtsp_port || ''}; U.soon(); return; }
     if (verb === 'pick') {
       const h = (SCAN?.found || []).filter(h => !(CAMS || []).some(c => c.host === h.host))[Number(arg)];
       if (!h) return;
       const tapo = h.kind !== 'hik_cam' && (h.port === 2020 || /tapo|tp-?link/i.test(h.model || '')) ? tapoIdx() : -1;   // cổng 2020 là ONVIF của Tapo
       const tp = TPL[Math.max(tapo, 0)];
-      form = 'new'; PW = ''; F = {kind: h.kind === 'hik_cam' ? 'hik_cam' : 'rtsp', brand: String(Math.max(tapo, 0)), rtsp_port: tp?.rtsp_port || '', host: h.host, name: h.model || ''};
+      form = 'new'; PW = ''; F = {kind: h.kind === 'hik_cam' ? 'hik_cam' : 'rtsp', brand: String(Math.max(tapo, 0)), rec_mode: 'always', rec_limit_gb: '', rtsp_port: tp?.rtsp_port || '', host: h.host, name: h.model || ''};
       if (h.kind === 'hik_cam') F.http_port = h.port;   // form không có ô cổng HTTP: giữ cổng quét thấy (vd 8080) làm trạng thái ẩn
       return U.soon();
     }
@@ -112,7 +132,7 @@
       if (!c) return;
       const i = TPL.findIndex(t => t.main_path === c.main_path && t.sub_path === c.sub_path);
       form = 'edit'; PW = ''; F = {id: c.id, http_port: c.http_port || '', kind: c.kind, brand: c.kind === 'rtsp' && i < 0 ? 'other' : String(Math.max(i, 0)), host: c.host, user: c.user, name: c.name, zone: c.zone,
-        rtsp_port: c.rtsp_port || '', main_path: c.main_path || '', sub_path: c.sub_path || ''};
+        rec_mode: c.rec_mode || 'always', rec_windows: winText(c.rec_windows), rec_limit_gb: c.rec_limit_gb || '', rtsp_port: c.rtsp_port || '', main_path: c.main_path || '', sub_path: c.sub_path || ''};
       return U.soon();
     }
     if (verb === 'cclose') { form = null; F = {}; clearPass(); return U.soon(); }
@@ -142,6 +162,7 @@
     if (verb === 'csave') {
       if (F.busy) return;
       if (!F.name?.trim()) return U.toast('Nhập tên camera');   // kiểm tra trước: thiếu tên thì không xoá mật khẩu đang gõ
+      if (F.rec_mode === 'schedule' && !parseWins(F.rec_windows)) return U.toast('Khung giờ ghi sai định dạng, ví dụ 22:00-06:00, 12:00-13:30');
       F.busy = true; U.soon();
       const o = payload(PW);
       o.name = F.name.trim(); o.zone = F.zone || '';
@@ -176,7 +197,7 @@
     if (!f) return;
     F[f.dataset.cf] = f.value;
     if (f.dataset.cf === 'brand' && tplOf(f.value)) F.rtsp_port = tplOf(f.value).rtsp_port;   // chọn mẫu mới thì lấy cổng RTSP của mẫu
-    if (f.dataset.cf === 'kind' || f.dataset.cf === 'brand') { F.result = null; U.soon(); }
+    if (f.dataset.cf === 'kind' || f.dataset.cf === 'brand' || f.dataset.cf === 'rec_mode') { F.result = null; U.soon(); }
   });
 
   const on = () => (U.DRAFT[NS]?.enabled ?? saved().enabled) !== false;

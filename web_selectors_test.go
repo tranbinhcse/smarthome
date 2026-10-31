@@ -254,6 +254,11 @@ func TestCameraSetupWired(t *testing.T) {
 	if strings.Count(js, "clearPass()") != 2 || !strings.Contains(js, "form = null; F = {}; clearPass();   // chỉ xoá khi lưu xong") {
 		t.Error("PW chỉ được xoá sau Lưu thành công và khi Đóng")
 	}
+	for _, s := range []string{"Toàn thời gian", "Theo khung giờ", "Không ghi (vẫn giữ đoạn báo động)", "Khung giờ ghi", "22:00-06:00, 12:00-13:30", "Giới hạn dung lượng (GB)", "rec_limit_gb", "rec_windows"} {
+		if !strings.Contains(js, s) {
+			t.Errorf("setup-camera.js thiếu %q", s)
+		}
+	}
 	if !strings.Contains(js, "F.http_port = h.port") {
 		t.Error("camera Hikvision tìm thấy ở cổng 8080 phải mang cổng đó vào form")
 	}

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +35,10 @@ type camRec struct {
 	Pass     string `json:"pass"`
 	MainPath string `json:"main_path"`
 	SubPath  string `json:"sub_path"`
+	// Chế độ ghi hình (recorder.go): trống = always; LimitGB 0 = theo giới hạn chung.
+	RecMode    string      `json:"rec_mode"`
+	RecWindows []recWindow `json:"rec_windows,omitempty"`
+	RecLimitGB float64     `json:"rec_limit_gb"`
 }
 
 var (
@@ -108,6 +113,37 @@ func (c *camRec) validate(zoneOK func(string) bool) error {
 		}
 	} else {
 		c.MainPath, c.SubPath = "", ""
+	}
+	return c.validateRec()
+}
+
+// validateRec: chế độ ghi hợp lệ; trống = always; chế độ khác schedule thì bỏ khung giờ.
+func (c *camRec) validateRec() error {
+	if c.RecMode == "" {
+		c.RecMode = "always"
+	}
+	if !slices.Contains(recModes, c.RecMode) {
+		return errors.New("Chế độ ghi không hợp lệ")
+	}
+	if c.RecMode != "schedule" {
+		c.RecWindows = nil
+	} else {
+		if len(c.RecWindows) < 1 || len(c.RecWindows) > 6 {
+			return errors.New("Theo khung giờ cần từ 1 đến 6 khung")
+		}
+		for _, w := range c.RecWindows {
+			a, ok1 := recMinutes(w.From)
+			b, ok2 := recMinutes(w.To)
+			if !ok1 || !ok2 || len(w.From) != 5 || len(w.To) != 5 {
+				return errors.New("Khung giờ phải đúng dạng HH:MM, từ 00:00 đến 23:59")
+			}
+			if a == b {
+				return errors.New("Khung giờ có giờ bắt đầu trùng giờ kết thúc")
+			}
+		}
+	}
+	if !(c.RecLimitGB >= 0 && c.RecLimitGB <= 100000) {
+		return errors.New("Giới hạn dung lượng phải từ 0 đến 100000 GB")
 	}
 	return nil
 }
@@ -216,6 +252,7 @@ func (c camRec) view() map[string]any {
 		"id": c.ID, "name": c.Name, "zone": c.Zone, "kind": c.Kind, "host": c.Host,
 		"http_port": c.HTTPPort, "rtsp_port": c.RTSPPort, "user": c.User,
 		"main_path": c.MainPath, "sub_path": c.SubPath, "pass_set": c.Pass != "",
+		"rec_mode": c.RecMode, "rec_windows": c.RecWindows, "rec_limit_gb": c.RecLimitGB,
 	}
 }
 
@@ -448,12 +485,16 @@ func (c *cams) camTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "model": di.Model, "firmware": di.Firmware})
 }
 
-// camPolicies: chính sách ghi hình theo id camera nối thẳng (Task 5 thêm chế độ riêng từng camera).
+// camPolicies: chính sách ghi hình theo id camera nối thẳng (chế độ, khung giờ, giới hạn GB riêng từng camera).
 func camPolicies(db *DB) map[string]recPolicy {
 	out := map[string]recPolicy{}
 	cams, _ := camList(db)
 	for _, c := range cams {
-		out[c.ID] = recPolicy{Mode: "always"}
+		p := recPolicy{Mode: c.RecMode, Windows: c.RecWindows, LimitBytes: int64(c.RecLimitGB * 1e9)}
+		if p.Mode == "" {
+			p.Mode = "always"
+		}
+		out[c.ID] = p
 	}
 	return out
 }

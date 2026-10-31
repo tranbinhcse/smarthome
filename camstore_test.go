@@ -634,3 +634,60 @@ func TestCamerasTestRTSPGo2rtcDown(t *testing.T) {
 		t.Fatalf("%s", w.Body)
 	}
 }
+
+func TestCamSaveRecMode(t *testing.T) {
+	d, ok := camTestDB(t), zoneIs("z1")
+	w2 := []recWindow{{"22:00", "06:00"}, {"12:00", "13:30"}}
+	for name, m := range map[string]func(*camRec){
+		"mode lạ":    func(c *camRec) { c.RecMode = "xyz" },
+		"schedule 0": func(c *camRec) { c.RecMode = "schedule" },
+		"schedule 7": func(c *camRec) {
+			c.RecMode = "schedule"
+			c.RecWindows = make([]recWindow, 7)
+			for i := range c.RecWindows {
+				c.RecWindows[i] = recWindow{"01:00", "02:00"}
+			}
+		},
+		"giờ 25":        func(c *camRec) { c.RecMode = "schedule"; c.RecWindows = []recWindow{{"25:00", "06:00"}} },
+		"from == to":    func(c *camRec) { c.RecMode = "schedule"; c.RecWindows = []recWindow{{"08:00", "08:00"}} },
+		"limit âm":      func(c *camRec) { c.RecLimitGB = -1 },
+		"limit quá lớn": func(c *camRec) { c.RecLimitGB = 100001 },
+	} {
+		c := goodCam()
+		m(&c)
+		if _, err := camSave(d, c, ok); err == nil {
+			t.Errorf("%s: phải lỗi", name)
+		}
+	}
+	c, err := camSave(d, goodCam(), ok)
+	if err != nil || c.RecMode != "always" {
+		t.Fatalf("trống phải lưu always: %v %+v", err, c)
+	}
+	c.RecMode, c.RecWindows = "schedule", w2
+	if c, err = camSave(d, c, ok); err != nil || !reflect.DeepEqual(c.RecWindows, w2) {
+		t.Fatalf("schedule: %v %+v", err, c)
+	}
+	c.RecMode = "always"
+	if c, err = camSave(d, c, ok); err != nil || c.RecWindows != nil {
+		t.Fatalf("đổi sang always phải bỏ khung: %v %+v", err, c)
+	}
+	if g, _, _ := camGet(d, c.ID); g.RecWindows != nil || c.view()["rec_mode"] != "always" {
+		t.Fatalf("%+v", g)
+	}
+}
+
+func TestCamPolicies(t *testing.T) {
+	d, ok := camTestDB(t), zoneIs("z1")
+	a := goodCam()
+	a.RecMode, a.RecWindows, a.RecLimitGB = "schedule", []recWindow{{"22:00", "06:00"}}, 1.5
+	a, _ = camSave(d, a, ok)
+	// camera cũ chưa có trường rec_*: ghi thẳng JSON
+	d.sql.Exec(`INSERT INTO cameras(id, data) VALUES('cam_cu', '{"id":"cam_cu","name":"Cũ","kind":"rtsp","host":"1.2.3.4"}')`)
+	p := camPolicies(d)
+	if p[a.ID].Mode != "schedule" || p[a.ID].LimitBytes != 1_500_000_000 || len(p[a.ID].Windows) != 1 {
+		t.Fatalf("%+v", p[a.ID])
+	}
+	if p["cam_cu"].Mode != "always" || p["cam_cu"].LimitBytes != 0 {
+		t.Fatalf("%+v", p["cam_cu"])
+	}
+}
