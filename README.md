@@ -122,8 +122,8 @@ Hub ghi luồng chính của camera vào ổ cứng gắn thêm. Cần `COMPOSE_
 **Gắn ổ**
 
 1. Cắm ổ cứng vào máy chủ. Nên dùng HDD dòng camera giám sát (surveillance): ghi liên tục làm mòn SSD. Ví dụ: 10 camera 4 Mbit/s ghi liên tục ≈ 430 GB mỗi ngày.
-2. Hệ điều hành gắn ổ vào `/srv/hubd-video`, ví dụ theo UUID trong `/etc/fstab` (`UUID=<uuid> /srv/hubd-video ext4 defaults,nofail 0 2`), rồi `mount -a`. Đổi nơi gắn bằng biến `HUBD_REC_HOST` trong `.env`.
-3. `docker compose up -d hubd`. Dashboard → Cài đặt → Hệ thống → **Lưu trữ** báo dung lượng ổ là đạt.
+2. Hệ điều hành gắn ổ vào `/srv/hubd-video`, ví dụ theo UUID trong `/etc/fstab` (`UUID=<uuid> /srv/hubd-video ext4 defaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=docker.service 0 2`), rồi `mount -a`. `nofail` để máy vẫn khởi động khi ổ hỏng hay chưa cắm; hai tuỳ chọn `x-systemd` bắt Docker chờ ổ gắn xong (tối đa 30 giây), nếu không hubd có thể chạy trước và không ghi cho tới lần khởi động lại sau. Đổi nơi gắn bằng biến `HUBD_REC_HOST` trong `.env`.
+3. `docker compose up -d hubd`. Dashboard → Cài đặt → Hệ thống → **Lưu trữ** báo dung lượng ổ là đạt. Gắn ổ khi hubd đã chạy (cắm ổ muộn, thay ổ) thì `docker compose restart hubd`: `up -d` không khởi động lại container đang chạy nên hubd không thấy ổ mới.
 
 Hub từ chối ghi khi thư mục ghi hình nằm trên ổ hệ thống, và khi không kiểm tra được (chưa gắn ổ: thư mục tự tạo trên ổ hệ thống cũng bị từ chối). Lý do hiện ngay trong mục Lưu trữ.
 
@@ -131,25 +131,27 @@ Hub từ chối ghi khi thư mục ghi hình nằm trên ổ hệ thống, và k
 
 - Luồng chính của mọi camera (camera nối thẳng và kênh đầu ghi) qua go2rtc, tên luồng `rec_<id>`; không chuyển mã.
 - File MP4 tối đa 50 MB, cắt ở keyframe, lưu ở `/srv/hubd-video/<id>/<YYYYMMDD>/<HHMMSS>.mp4` (giờ Việt Nam). Chưa có âm thanh. Chỉ mục file nằm trong SQLite của hub.
-- Luồng đứt thì hub nối lại sau 2 giây; ổ không đạt thì dừng mọi camera và thử lại ở lần kiểm 60 giây kế tiếp. Lỗi ghi file (ổ rút, ổ đầy) cũng dừng, không thử lại liên tục.
-- Báo loại **Lưu trữ** (`luu_tru`): ổ không đạt, không ghi được vào ổ, ổ gần đầy đã dừng ghi, ổ có chỗ ghi lại. Cài đặt → Đọc thông báo có hai công tắc riêng cho loại này: đọc to và Telegram.
+- Luồng đứt sau khi đã ghi được file thì hub nối lại sau 2 giây; lần nối không ra file (go2rtc lỗi, camera tắt) thì thử lại ở lần kiểm 60 giây kế tiếp. Ổ không đạt thì dừng mọi camera và thử lại ở lần kiểm 60 giây kế tiếp. Lỗi ghi file (ổ rút, ổ đầy) cũng dừng, không thử lại liên tục.
+- Báo loại **Lưu trữ** (`luu_tru`): ổ không đạt (cả lúc hub khởi động, nếu trước đó đã có hình ghi: ổ chưa gắn), không ghi được vào ổ, ổ gần đầy đã dừng ghi, ổ có chỗ ghi lại. Cài đặt → Đọc thông báo có hai công tắc riêng cho loại này: đọc to và Telegram.
 
 **Chế độ ghi từng camera** (Cài đặt → Camera, form camera nối thẳng):
 
 - **Chế độ ghi**: **Toàn thời gian**, **Theo khung giờ**, **Không ghi (vẫn giữ đoạn báo động)**.
 - **Khung giờ ghi** (chỉ khi Theo khung giờ): 1 đến 6 khung `HH:MM-HH:MM`, ví dụ `22:00-06:00, 12:00-13:30`; khung qua đêm được.
 - **Giới hạn dung lượng (GB)**: tối đa cho một camera; 0 = theo giới hạn chung.
+- Kênh đầu ghi không có chế độ hay giới hạn riêng: luôn ghi toàn thời gian, chỉ bị xoá theo phần trăm ổ.
 
 **Giữ và xoá**
 
-- Hub ghi mọi camera; file ngoài chế độ ghi bị xoá khi file kế tiếp của camera đó ghi xong. File mới nhất của mỗi camera luôn được giữ, kể cả khi đặt **Không ghi**.
+- Hub ghi mọi camera; file ngoài chế độ ghi bị xoá khi file kế tiếp của camera đó ghi xong. File mới nhất của mỗi camera luôn được giữ, kể cả khi đặt **Không ghi**, trừ khi ổ còn dưới 2% trống.
+- Đổi chế độ hay khung giờ chỉ áp cho hình ghi từ lúc đổi: hình đã ghi trước đó không bị xoá vì chế độ mới, chỉ bị xoá dần theo giới hạn GB và phần trăm ổ như file thường.
 - Vượt giới hạn GB của camera thì xoá file thường cũ nhất của camera đó.
 - Ghi thường dùng tối đa 80% ổ (Cài đặt → Hệ thống → Lưu trữ → **Ghi hình thường dùng tối đa (%)**, chỉnh 50–95); vượt thì xoá file thường cũ nhất của mọi camera.
 - Ổ còn dưới 2% trống mà không còn gì để xoá: dừng ghi thường và báo khẩn (loại Lưu trữ); còn trống từ 3% thì ghi lại.
 - File đoạn báo động (`held`) không bao giờ bị xoá tự động. Đoạn báo động (đánh dấu, danh sách, xem, tải, xoá) làm ở Phần 3.
 - Mục Lưu trữ hiện dung lượng và số ngày ước tính cho từng camera.
 
-**Chống khoá IP.** Trước mỗi lần nối ghi, hub thử tài khoản camera Hikvision (và đầu ghi) qua ISAPI. Sai mật khẩu thì tài khoản đó bị tạm ngừng 15 phút, không thử lại; sửa mật khẩu ở Cài đặt → Camera. Camera RTSP hãng khác không có lớp bảo vệ này: sai mật khẩu thì go2rtc vẫn thử nối mỗi lần kiểm.
+**Chống khoá IP.** Trước mỗi lần nối ghi, hub thử tài khoản camera Hikvision (và đầu ghi) qua ISAPI. Sai mật khẩu thì tài khoản đó bị tạm ngừng 15 phút, không thử lại; sửa mật khẩu ở Cài đặt → Camera. Lớp này chỉ có khi hub tới được ISAPI (cổng HTTP) của thiết bị; không tới được thì hub vẫn nối RTSP mỗi lần kiểm. Camera RTSP hãng khác không có lớp bảo vệ này: sai mật khẩu thì go2rtc vẫn thử nối mỗi lần kiểm.
 
 **Xem lại.** Bấm camera → bảng camera → **Xem lại**: chọn ngày, thanh 24 giờ tô các đoạn đã ghi; chạm vào đoạn tô thì phát từ giờ đó, tối đa 1 giờ mỗi lần chạm (chạm tiếp để xem tiếp). Chạm chỗ trống báo "Giờ này không có hình". Chạy trên Safari (iPad, iPhone, Mac: HLS có sẵn); trình duyệt không có HLS sẵn (Chrome máy tính) chỉ hiện lời nhắc dùng Safari.
 
