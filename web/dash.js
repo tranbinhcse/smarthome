@@ -510,7 +510,7 @@ function openSheet(key) {
   delete CHARTS.sheet;   // biểu đồ trong bảng mở lại từ tab được chạm
   fillSheet(m);
   m.onclick = e => { if (e.target === m || e.target.closest('.m-act button, [data-go]')) m.close(); };
-  m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); };   // đóng bảng thì ngắt luồng camera
+  m.onclose = () => { sheet = ''; m.querySelector('[data-live]')?.remove(); m.querySelector('[data-replay]')?.remove(); };   // đóng bảng thì ngắt luồng camera
   m.showModal();
 }
 // bảng trình phát Spotify (music.js) tự vẽ phần của nó: vẽ lại cả bảng sẽ mất chữ đang gõ và chỗ cuộn danh sách
@@ -520,8 +520,10 @@ function fillSheet(m) { if (sheet.startsWith('music:') && m.querySelector('[data
 // thì MSE; khung bị khuất (ô khác đang phóng to) thì tự ngắt sau 5 giây, hiện lại thì nối lại.
 function liveFill(box, html) {
   const live = new Map([...box.querySelectorAll('[data-live]')].map(e => [e.dataset.live, e]));
+  const rep = new Map([...box.querySelectorAll('[data-replay]')].map(e => [e.dataset.replay, e]));   // khối Xem lại (video đang phát) cũng giữ nguyên
   box.innerHTML = html;
   for (const slot of box.querySelectorAll('[data-live]')) { const old = live.get(slot.dataset.live); if (old) slot.replaceWith(old); }
+  for (const slot of box.querySelectorAll('[data-replay]')) { const old = rep.get(slot.dataset.replay); if (old) slot.replaceWith(old); else replayInit(slot); }
   for (const el of box.querySelectorAll('[data-live]:empty')) import('/api/cam-js/video-rtc.js').then(({VideoRTC}) => {
     if (!customElements.get('video-rtc')) customElements.define('video-rtc', VideoRTC);
     if (!el.isConnected || el.firstChild) return;
@@ -768,7 +770,47 @@ function camPanel(id) {
     <span class="tag ${offline(d) ? 'bad' : 'good'}">${offline(d) ? 'Mất kết nối' : 'Đang ghi hình'}</span></header>
     <div class="camview" style="${camBg(d)}"${DEMO ? '' : ` data-live="/api/cam/${encodeURIComponent(d.id)}/ws"`}></div>
     <p class="note">${DEMO ? 'Dữ liệu mẫu: ảnh minh hoạ của phòng.' : 'Hình trực tiếp (luồng phụ) từ đầu ghi ở tum kỹ thuật, đi qua hub.'}</p>
+    <div class="replay" data-replay="${esc(d.id)}" style="margin:14px 0"></div>
     <div class="m-act"><button value="1" class="m-btn ok">Xong</button></div></div>`;
+}
+// Xem lại: chọn ngày, thanh 24 giờ tô các đoạn đã ghi, chạm vào đoạn thì phát HLS (Safari phát sẵn). Vẽ một lần, liveFill giữ nguyên.
+function replayInit(el) {
+  const id = el.dataset.replay, H = 3600e3, DAY = 24 * H;
+  const today = new Date(Date.now() + 7 * H).toISOString().slice(0, 10);   // ngày theo giờ Việt Nam
+  const hls = document.createElement('video').canPlayType('application/vnd.apple.mpegurl') !== '';
+  el.innerHTML = `<b style="font-size:14px">Xem lại</b>
+    <input type="date" value="${today}" max="${today}" aria-label="Chọn ngày xem lại" style="margin-left:10px;color:inherit;background:var(--glass2);border:0;border-radius:8px;padding:6px 8px;font:inherit;color-scheme:dark">
+    ${hls ? `<div data-rbar role="button" aria-label="Thanh 24 giờ, chạm để xem" style="position:relative;height:34px;margin-top:10px;border-radius:8px;background:var(--glass2);overflow:hidden;cursor:pointer;touch-action:manipulation"></div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);margin-top:4px">${[0, 6, 12, 18, 24].map(h => `<span>${h}</span>`).join('')}</div>` : ''}
+    <p class="note" data-rmsg style="margin:8px 0 0">${hls ? '' : 'Xem lại chạy trên Safari (iPad, iPhone, Mac).'}</p>
+    <div data-rvid></div>`;
+  if (!hls) return;
+  const inp = el.querySelector('input'), bar = el.querySelector('[data-rbar]'), msg = el.querySelector('[data-rmsg]'), vid = el.querySelector('[data-rvid]');
+  let spans = [], t0 = 0;
+  const load = async () => {
+    t0 = Date.parse(inp.value + 'T00:00:00+07:00');
+    if (isNaN(t0)) return;
+    msg.textContent = ''; vid.replaceChildren();
+    if (DEMO) spans = [[t0 + 7 * H, t0 + 9.5 * H], [t0 + 13 * H, t0 + 18 * H]];   // đoạn ghi giả, không gọi API
+    else {
+      try { const r = await api(`/api/cam/${encodeURIComponent(id)}/rec?day=${inp.value}`); spans = r.ok ? (await r.json()).spans || [] : []; }
+      catch (_) { spans = []; }
+    }
+    bar.innerHTML = spans.map(([a, b]) => `<i style="position:absolute;top:0;bottom:0;left:${(a - t0) / DAY * 100}%;width:${Math.max((b - a) / DAY * 100, .4)}%;background:var(--blue);opacity:.85"></i>`).join('');
+    if (!spans.length) msg.textContent = 'Ngày này không có hình.';
+  };
+  inp.onchange = load;
+  bar.onclick = e => {
+    const r = bar.getBoundingClientRect(), t = t0 + (e.clientX - r.left) / r.width * DAY, sp = spans.find(([a, b]) => t >= a && t < b);
+    if (!sp) { msg.textContent = 'Giờ này không có hình'; return; }
+    if (DEMO) { msg.textContent = 'Dữ liệu mẫu: chưa có hình ghi thật.'; return; }
+    msg.textContent = '';
+    let v = vid.querySelector('video');
+    if (!v) { v = document.createElement('video'); v.controls = true; v.playsInline = true; v.style.cssText = 'display:block;width:100%;aspect-ratio:16/9;margin-top:10px;border-radius:12px;background:#000'; vid.append(v); }
+    v.src = `/api/cam/${encodeURIComponent(id)}/rec.m3u8?from=${Math.floor(t)}&to=${sp[1]}`;
+    v.play().catch(() => {});
+  };
+  load();
 }
 // Trang Camera (#/camera): lưới như app xem camera, mỗi ô một luồng phụ trực tiếp. Chạm một ô để phóng to hết khung
 // (các ô khác bị ẩn nên tự ngắt luồng), chạm lần nữa về lưới. Camera đầu ghi báo mất kết nối thì không mở luồng.

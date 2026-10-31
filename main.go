@@ -200,6 +200,7 @@ func newMuxCams(hub *Hub, auth *Auth, cm *cams) *http.ServeMux {
 	mountNodes(mux, hub, auth)
 	mountNotify(mux, hub, auth)
 	mountRecStorage(mux, hub.db, auth, func() recDisk { return recDiskCheck(os.Getenv("HUBD_REC_DIR"), configPath()) })
+	mountRecPlay(mux, hub.db, auth)
 	if hub.tg != nil {
 		mountTelegram(mux, hub.tg, auth)
 	}
