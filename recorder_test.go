@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -500,25 +501,60 @@ func TestRecorderFailedAttemptWaitsForCheck(t *testing.T) {
 	recv(t, reqs, "nối lại ở lần kiểm kế")
 }
 
-func TestRecorderProbeLocksAfter401(t *testing.T) {
+// countRT đếm lượt HTTP tới camera giả (kể cả lượt 401 mở đầu Digest).
+type countRT struct{ n atomic.Int32 }
+
+func (c *countRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.n.Add(1)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func (d *digestCam) goods() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.good
+}
+
+// 5 kênh cùng đầu ghi, mật khẩu sai: thử ISAPI trước khi nối, lần lượt, nên đầu ghi chỉ nhận một lần sai và go2rtc không
+// được nối lần nào (không lần gửi mật khẩu sai nào qua RTSP).
+func TestRecorderProbesBeforeConnect(t *testing.T) {
 	cam := newDigestCam(t, "dung")
-	tr := &isapi.Transport{User: "admin", Pass: "sai"}
+	var rt countRT
+	tr := &isapi.Transport{User: "admin", Pass: "sai", Base: &rt}
+	cl := &http.Client{Transport: tr}
 	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) { http.Error(w, "RTSP 401", 500) })
-	e := startRec(t, g2, []recSource{{"cam_a", "rtsp://admin:sai@x/y", &http.Client{Transport: tr}, cam.URL + "/ISAPI/System/deviceInfo"}},
-		diskOK, nil)
-	recv(t, reqs, "yêu cầu đầu")
-	waitFor(t, "thử ISAPI sau lần nối hỏng làm khoá tài khoản", tr.Locked)
+	var srcs []recSource
+	for ch := 1; ch <= 5; ch++ {
+		srcs = append(srcs, recSource{fmt.Sprintf("cam_ch%d", ch), fmt.Sprintf("rtsp://admin:sai@x/Streaming/Channels/%d01", ch), cl,
+			cam.URL + "/ISAPI/System/deviceInfo"})
+	}
+	e := startRec(t, g2, srcs, diskOK, nil)
+	e.tick <- time.Now()
+	e.tick <- time.Now() // lần kiểm lúc khởi động và lần kế đã chạy xong
 	e.idle(t)
-	e.tick <- time.Now()
-	e.tick <- time.Now()
-	select {
-	case <-reqs:
-		t.Fatal("nối go2rtc khi tài khoản đang bị khoá")
-	case <-time.After(50 * time.Millisecond):
+	e.stop()
+	noneIn(t, reqs, "nối go2rtc với tài khoản sai")
+	if n, k := cam.bads(), rt.n.Load(); n != 1 || k > 2 || !tr.Locked() {
+		t.Fatalf("đầu ghi nhận %d lần sai, %d lượt HTTP, khoá=%v; muốn 1 lần sai, tối đa 2 lượt", n, k, tr.Locked())
+	}
+}
+
+func TestRecorderProbeRightPassword(t *testing.T) {
+	cam := newDigestCam(t, "dung")
+	cl := &http.Client{Transport: &isapi.Transport{User: "admin", Pass: "dung"}}
+	stream := fakeFMP4("hev1", uniformGOPs(1, 3, 500))
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) { sendHold(w, r, stream) })
+	var srcs []recSource
+	for ch := 1; ch <= 5; ch++ {
+		srcs = append(srcs, recSource{fmt.Sprintf("cam_ch%d", ch), "rtsp://x/y", cl, cam.URL + "/ISAPI/System/deviceInfo"})
+	}
+	e := startRec(t, g2, srcs, diskOK, nil)
+	for range 5 {
+		recv(t, reqs, "mở luồng")
 	}
 	e.stop()
-	if n := cam.bads(); n != 1 {
-		t.Fatalf("camera nhận %d lần sai mật khẩu, muốn 1", n)
+	if g, b := cam.goods(), cam.bads(); g != 5 || b != 0 {
+		t.Fatalf("đầu ghi nhận %d lần đúng, %d lần sai; muốn một deviceInfo mỗi lần nối", g, b)
 	}
 }
 

@@ -28,7 +28,7 @@ import (
 type recSource struct {
 	ID, URL string       // URL có mật khẩu, không bao giờ log
 	client  *http.Client // client ISAPI dùng chung với ảnh chụp, Thử kết nối (giữ khoá 15 phút); nil = camera RTSP thường
-	probe   string       // GET qua client sau lần nối không ra file: sai mật khẩu thì 401 bật khoá
+	probe   string       // GET qua client trước mỗi lần nối go2rtc: sai mật khẩu thì 401 bật khoá
 }
 
 // locked: tài khoản vừa bị từ chối; không mở luồng vì go2rtc gửi mật khẩu qua RTSP mỗi lần nối (đầu ghi khoá IP của hub).
@@ -64,8 +64,9 @@ type recorder struct {
 	tick          <-chan time.Time // nil = mỗi 60 giây
 	backoff, idle time.Duration    // chờ nối lại sau luồng đã ra file; hạn không nhận byte nào thì coi luồng đứng
 
-	plan sync.Mutex // kiểm ổ, recPlan + xoá file, đánh dấu giữ: chạy lần lượt (file vừa held không bị xoá theo quyết định cũ)
-	wg   sync.WaitGroup
+	plan    sync.Mutex // kiểm ổ, recPlan + xoá file, đánh dấu giữ: chạy lần lượt (file vừa held không bị xoá theo quyết định cũ)
+	probeMu sync.Mutex // thử ISAPI lần lượt: các kênh cùng đầu ghi gửi tối đa một lần sai mật khẩu, kênh sau gặp khoá
+	wg      sync.WaitGroup
 
 	mu      sync.Mutex
 	runs    map[string]*recRun
@@ -263,9 +264,10 @@ func (r *recorder) sync(ctx context.Context) {
 	}
 }
 
-// stream: nối go2rtc, ghi tới khi luồng hết. Lần nối đã ra file thì chờ 2 giây rồi nối lại. Lần nối không ra file (go2rtc lỗi,
-// sai mật khẩu, camera tắt) thì thử ISAPI một lần rồi chờ lần kiểm 60 giây: mỗi lần nối go2rtc gửi mật khẩu qua RTSP,
-// nối dồn dập với mật khẩu sai thì đầu ghi khoá IP của hub. Lỗi ghi file thì thôi hẳn tới lần kiểm ổ kế tiếp.
+// stream: nối go2rtc, ghi tới khi luồng hết. Mỗi lần go2rtc nối là một lần gửi mật khẩu qua RTSP, sai vài lần thì đầu ghi
+// khoá IP của hub: nguồn có client ISAPI (đầu ghi, camera Hikvision) thử tài khoản qua ISAPI trước mỗi lần nối, bị khoá
+// thì thôi. Lần nối đã ra file thì chờ 2 giây rồi nối lại; không ra file thì chờ lần kiểm 60 giây. Lỗi ghi file thì thôi hẳn
+// tới lần kiểm ổ kế tiếp.
 func (r *recorder) stream(ctx context.Context, s recSource, me *recRun) {
 	defer r.wg.Done()
 	defer func() {
@@ -277,15 +279,18 @@ func (r *recorder) stream(ctx context.Context, s recSource, me *recRun) {
 		r.mu.Unlock()
 	}()
 	for {
+		if s.client != nil {
+			r.probe(ctx, s)
+			if s.locked() {
+				return
+			}
+		}
 		files, bad := r.once(ctx, s)
 		if bad {
 			r.writeFailed()
 			return
 		}
 		if files == 0 {
-			if ctx.Err() == nil {
-				r.probe(ctx, s)
-			}
 			return
 		}
 		t := time.NewTimer(r.backoff)
@@ -298,18 +303,20 @@ func (r *recorder) stream(ctx context.Context, s recSource, me *recRun) {
 		r.mu.Lock()
 		on := r.ok && !r.stopped
 		r.mu.Unlock()
-		if !on || s.locked() {
+		if !on {
 			return
 		}
 	}
 }
 
 // probe: một yêu cầu ISAPI qua client dùng chung; sai mật khẩu thì Transport bật khoá 15 phút và sync bỏ qua nguồn này.
-// Không log lỗi của client (có địa chỉ).
+// Chạy lần lượt (probeMu): Transport chỉ xem khoá lúc bắt đầu yêu cầu, thử song song thì mỗi kênh gửi một lần sai.
+// Không log lỗi của client (có địa chỉ). Giới hạn đã chấp nhận: không tới được ISAPI (hay 401 không phải Digest) thì không
+// khoá, vẫn nối RTSP mỗi lần kiểm.
+// ponytail: một khoá cho mọi camera, thiết bị không trả lời giữ khoá tới 10 giây; khoá theo client nếu nhiều camera chết.
 func (r *recorder) probe(ctx context.Context, s recSource) {
-	if s.client == nil {
-		return
-	}
+	r.probeMu.Lock()
+	defer r.probeMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.probe, nil)
