@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,10 +19,17 @@ import (
 	"time"
 )
 
-// recFx ghi một file ghi hình thật (qua recSplit) vào thư mục tạm rồi thêm vào chỉ mục.
+// recFx ghi một file ghi hình thật (qua recSplit) vào thư mục tạm rồi thêm vào chỉ mục, không kèm chỉ mục GOP (như file
+// nhận nuôi: playlist phải quét file).
 func recFx(t *testing.T, db *DB, cam string, start time.Time, gops [][]int) (recFile, []byte) {
 	t.Helper()
-	files, _, err := runSplit(bytes.NewReader(fakeFMP4("hev1", gops)), 1<<30)
+	return recFxIdx(t, db, cam, start, gops, false)
+}
+
+// recFxIdx như recFx; idx = lưu chỉ mục GOP recSplit trả, như bộ ghi làm khi file xong.
+func recFxIdx(t *testing.T, db *DB, cam string, start time.Time, gops [][]int, idx bool) (recFile, []byte) {
+	t.Helper()
+	files, segs, err := runSplit(bytes.NewReader(fakeFMP4("hev1", gops)), 1<<30)
 	if err != nil || len(files) != 1 {
 		t.Fatal(err, len(files))
 	}
@@ -33,6 +42,9 @@ func recFx(t *testing.T, db *DB, cam string, start time.Time, gops [][]int) (rec
 		n += len(g)
 	}
 	f := recFile{Cam: cam, Path: p, Start: start, End: start.Add(time.Duration(n) * time.Second / 30), Bytes: int64(len(files[0]))}
+	if idx {
+		f.Index = &segs[0].Index
+	}
 	id, err := recAdd(db, f)
 	if err != nil {
 		t.Fatal(err)
@@ -288,5 +300,115 @@ func TestRecScanTruncatedMidGOP(t *testing.T) {
 	}
 	if end := gops[1].Off + gops[1].Len; end != int64(len(files[0]))-last || math.Abs(gops[1].Dur-2*3000.0/90000) > 1e-9 {
 		t.Errorf("GOP cuối kết thúc %d (muốn %d), Dur %v (muốn 2 khung)", end, int64(len(files[0]))-last, gops[1].Dur)
+	}
+}
+
+// splitIndexMatchesScan: mỗi file recSplit ghi ra có chỉ mục GOP (recSeg.Index) trùng hệt kết quả quét file.
+func splitIndexMatchesScan(t *testing.T, name string, in []byte, max int64, wantFiles int) {
+	t.Helper()
+	files, segs, err := runSplit(bytes.NewReader(in), max)
+	if err != nil || len(files) != wantFiles || len(segs) != wantFiles {
+		t.Fatalf("%s: err=%v files=%d, muốn %d", name, err, len(files), wantFiles)
+	}
+	for i, f := range files {
+		p := filepath.Join(t.TempDir(), "f.mp4")
+		os.WriteFile(p, f, 0o600)
+		init, gops, err := recScan(p)
+		if err != nil || len(gops) == 0 {
+			t.Fatalf("%s file %d: quét %v %d GOP", name, i, err, len(gops))
+		}
+		if segs[i].Index.Init != init || !reflect.DeepEqual(segs[i].Index.GOPs, gops) {
+			t.Errorf("%s file %d: chỉ mục lúc ghi %d %+v, quét %d %+v", name, i, segs[i].Index.Init, segs[i].Index.GOPs, init, gops)
+		}
+	}
+}
+
+func TestRecSplitIndexMatchesScan(t *testing.T) {
+	for _, src := range []string{"tfhd", "trun", "trex"} { // ba nguồn thời lượng mẫu
+		head := fmp4Head("hev1")
+		if src == "trex" {
+			head = fmp4HeadTrexDur("hev1", 4500)
+		}
+		in := head
+		for i := 0; i < 9; i++ {
+			in = append(in, trunFrame(src, uint64(i)*4500, i%3 == 0, 4500)...)
+		}
+		splitIndexMatchesScan(t, src, in, 1<<30, 1)
+		splitIndexMatchesScan(t, src+" cắt nhiều file", in, int64(len(head)+3*len(trunFrame(src, 0, true, 4500))), 3)
+	}
+	// âm thanh xen giữa: GOP kết thúc ở cặp hình cuối, như recScan
+	in := fmp4Head("hev1")
+	dts := uint64(0)
+	for g := 0; g < 3; g++ {
+		for i := 0; i < 4; i++ {
+			in = append(in, fmp4Frame(1, dts, i == 0, 1000, 1)...)
+			in = append(in, fmp4Frame(2, dts, true, 100, 1)...)
+			dts += 3000
+		}
+	}
+	splitIndexMatchesScan(t, "âm thanh", in, 9_000, 3)
+	// GOP vượt recGopCap (ghi bớt giữa GOP, sang file mới)
+	huge := make([]int, 20)
+	for i := range huge {
+		huge[i] = 1_000_000
+	}
+	splitIndexMatchesScan(t, "GOP lớn", fakeFMP4("hev1", [][]int{{1000, 1000}, huge, {1000}}), 5_000_000, 3)
+}
+
+// Playlist dựng từ chỉ mục lưu trùng playlist quét file; có chỉ mục thì không mở file (xoá file vẫn ra playlist).
+func TestRecPlaylistStoredIndex(t *testing.T) {
+	mux, db, ck := playMux(t)
+	t0 := time.Date(2026, 10, 30, 10, 0, 0, 0, tgICT)
+	f1, _ := recFxIdx(t, db, "cam1", t0, uniformGOPs(3, 30, 100), true)
+	f2, _ := recFxIdx(t, db, "cam1", t0.Add(3*time.Second), uniformGOPs(2, 30, 100), true)
+	u := fmt.Sprintf("/api/cam/cam1/rec.m3u8?from=%d&to=%d", t0.UnixMilli(), f2.End.UnixMilli())
+	stored := call(mux, "GET", u, "", "", ck...)
+	if stored.Code != 200 || strings.Count(stored.Body.String(), "#EXTINF") != 5 {
+		t.Fatalf("%d\n%s", stored.Code, stored.Body)
+	}
+	var keep []string
+	for _, f := range []recFile{f1, f2} {
+		var raw string
+		db.sql.QueryRow(`SELECT gops FROM recordings WHERE id = ?`, f.ID).Scan(&raw)
+		keep = append(keep, raw)
+	}
+	db.sql.Exec(`UPDATE recordings SET gops = NULL`)
+	if scanned := call(mux, "GET", u, "", "", ck...).Body.String(); scanned != stored.Body.String() {
+		t.Fatalf("playlist quét khác playlist từ chỉ mục:\n%s\n---\n%s", scanned, stored.Body)
+	}
+	for i, f := range []recFile{f1, f2} {
+		db.sql.Exec(`UPDATE recordings SET gops = ? WHERE id = ?`, keep[i], f.ID)
+		os.Remove(f.Path)
+	}
+	if w := call(mux, "GET", u, "", "", ck...); w.Code != 200 || w.Body.String() != stored.Body.String() {
+		t.Fatalf("có chỉ mục mà vẫn đọc file: %d\n%s", w.Code, w.Body)
+	}
+}
+
+// DB cũ (bảng recordings chưa có cột gops) mở lại được: thêm cột, dòng cũ không có chỉ mục; mở lần nữa không lỗi.
+func TestOpenDBAddsGOPColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cu.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE recordings(id INTEGER PRIMARY KEY, cam TEXT NOT NULL, path TEXT NOT NULL UNIQUE, start INTEGER NOT NULL, end INTEGER NOT NULL, bytes INTEGER NOT NULL, held INTEGER NOT NULL DEFAULT 0);
+INSERT INTO recordings(cam, path, start, end, bytes) VALUES('c', 'p', 1, 2, 3);`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+	for range 2 {
+		db, err := OpenDB(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := recIndexOf(db, 1); ok {
+			t.Fatal("dòng cũ không được có chỉ mục")
+		}
+		id, err := recAdd(db, recFile{Cam: "c", Path: fmt.Sprint("q", time.Now().UnixNano()), Index: &recIndex{Init: 7, GOPs: []recGOP{{7, 9, 2.5}}}})
+		if x, ok := recIndexOf(db, id); err != nil || !ok || x.Init != 7 || len(x.GOPs) != 1 || x.GOPs[0] != (recGOP{7, 9, 2.5}) {
+			t.Fatalf("dòng mới: %v %v %+v", err, ok, x)
+		}
+		db.sql.Close()
 	}
 }

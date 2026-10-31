@@ -691,3 +691,41 @@ func TestCamPolicies(t *testing.T) {
 		t.Fatalf("%+v", p["cam_cu"])
 	}
 }
+
+// rec_since do hub đặt: lúc thêm camera và mỗi lần đổi chế độ hoặc khung giờ; sửa trường khác giữ nguyên; giá trị trình
+// duyệt gửi lên bị bỏ qua. camPolicies mang nó vào Since.
+func TestCamSaveStampsRecSince(t *testing.T) {
+	d, ok := camTestDB(t), zoneIs("z1")
+	t0 := time.Now().UnixMilli()
+	c, err := camSave(d, goodCam(), ok)
+	if err != nil || c.RecSince < t0 {
+		t.Fatalf("thêm mới: %v rec_since=%d", err, c.RecSince)
+	}
+	s1 := c.RecSince
+	time.Sleep(5 * time.Millisecond)
+	c.Name, c.RecLimitGB, c.RecSince = "Cổng mới", 2, 5
+	if c, err = camSave(d, c, ok); err != nil || c.RecSince != s1 {
+		t.Fatalf("sửa tên/giới hạn phải giữ rec_since %d: %v %d", s1, err, c.RecSince)
+	}
+	steps := []func(*camRec){
+		func(c *camRec) { c.RecMode, c.RecWindows = "schedule", []recWindow{{"22:00", "06:00"}} },
+		func(c *camRec) { c.RecWindows = []recWindow{{"21:00", "06:00"}} },
+		func(c *camRec) { c.RecMode, c.RecWindows = "off", nil },
+	}
+	prev := s1
+	for i, m := range steps {
+		time.Sleep(5 * time.Millisecond)
+		m(&c)
+		c.RecSince = 5
+		if c, err = camSave(d, c, ok); err != nil || c.RecSince <= prev {
+			t.Fatalf("bước %d: %v rec_since=%d, muốn > %d", i, err, c.RecSince, prev)
+		}
+		prev = c.RecSince
+	}
+	if g, _, _ := camGet(d, c.ID); g.RecSince != prev || c.view()["rec_since"] != prev {
+		t.Fatalf("lưu %d, view %v, muốn %d", g.RecSince, c.view()["rec_since"], prev)
+	}
+	if p := camPolicies(d)[c.ID]; !p.Since.Equal(time.UnixMilli(prev)) {
+		t.Fatalf("camPolicies Since %v", p.Since)
+	}
+}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +16,13 @@ type recFile struct {
 	Start, End time.Time
 	Bytes      int64
 	Held       bool
+	Index      *recIndex // chỉ ghi qua recAdd; recQuery không đọc (nặng). nil = file nhận nuôi
+}
+
+// recIndex: chỉ mục GOP của một file (vị trí tính từ đầu file), lưu cùng dòng lúc ghi để playlist không phải quét file.
+type recIndex struct {
+	Init int64    `json:"init"`
+	GOPs []recGOP `json:"gops"`
 }
 
 type recWindow struct {
@@ -25,6 +34,7 @@ type recPolicy struct {
 	Mode       string
 	Windows    []recWindow
 	LimitBytes int64
+	Since      time.Time // lúc đổi chế độ/khung giờ: quy tắc 1 chỉ xét file bắt đầu từ lúc này
 }
 
 // Tập đóng các chế độ ghi; Task 5 kiểm hợp lệ và test quét sinh từ đây.
@@ -44,10 +54,15 @@ type recDecision struct {
 const recCols = `id, cam, path, start, end, bytes, held`
 
 func recAdd(db *DB, f recFile) (int64, error) {
+	var gops any // NULL: không có chỉ mục GOP
+	if f.Index != nil {
+		b, _ := json.Marshal(f.Index)
+		gops = string(b)
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	r, err := db.sql.Exec(`INSERT INTO recordings(cam, path, start, end, bytes, held) VALUES(?,?,?,?,?,?)`,
-		f.Cam, f.Path, f.Start.UnixMilli(), f.End.UnixMilli(), f.Bytes, f.Held)
+	r, err := db.sql.Exec(`INSERT INTO recordings(cam, path, start, end, bytes, held, gops) VALUES(?,?,?,?,?,?,?)`,
+		f.Cam, f.Path, f.Start.UnixMilli(), f.End.UnixMilli(), f.Bytes, f.Held, gops)
 	if err != nil {
 		return 0, err
 	}
@@ -75,6 +90,19 @@ func recQuery(db *DB, where string, args ...any) ([]recFile, error) {
 	return out, rows.Err()
 }
 
+// recIndexOf: chỉ mục GOP lưu lúc ghi; false khi dòng không có (file nhận nuôi) hoặc hỏng.
+func recIndexOf(db *DB, id int64) (recIndex, bool) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	var raw sql.NullString
+	var x recIndex
+	if db.sql.QueryRow(`SELECT gops FROM recordings WHERE id = ?`, id).Scan(&raw) != nil || !raw.Valid ||
+		json.Unmarshal([]byte(raw.String), &x) != nil {
+		return recIndex{}, false
+	}
+	return x, true
+}
+
 func recAll(db *DB) ([]recFile, error) { return recQuery(db, "") }
 
 // recRange: file của camera có phần nằm trong [from, to].
@@ -82,16 +110,21 @@ func recRange(db *DB, cam string, from, to time.Time) ([]recFile, error) {
 	return recQuery(db, `WHERE cam = ? AND start <= ? AND end >= ?`, cam, to.UnixMilli(), from.UnixMilli())
 }
 
-// recRemove chỉ xoá dòng; xoá file là việc của bên gọi.
+// recRemove chỉ xoá dòng; xoá file là việc của bên gọi. Một giao dịch cho cả lô (một lần fsync).
 func recRemove(db *DB, ids []int64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, id := range ids {
-		if _, err := db.sql.Exec(`DELETE FROM recordings WHERE id = ?`, id); err != nil {
+		if _, err := tx.Exec(`DELETE FROM recordings WHERE id = ?`, id); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func recHoldRange(db *DB, cam string, from, to time.Time) (int, error) {
@@ -145,7 +178,8 @@ func recWanted(p recPolicy, f recFile) bool {
 	return true
 }
 
-// recPlan: quyết định xoá theo thứ tự 4 quy tắc; file held không bao giờ bị xoá.
+// recPlan: quyết định xoá theo thứ tự 4 quy tắc; file held không bao giờ bị xoá. Tổng dung lượng giữ sẵn, mỗi quy tắc
+// duyệt file từ cũ tới mới một lượt: O(file × camera), không tính lại sau mỗi lần xoá.
 func recPlan(files []recFile, pol map[string]recPolicy, d recDisk, normalPct int) recDecision {
 	var dec recDecision
 	if !d.OK || d.Total <= 0 {
@@ -154,35 +188,41 @@ func recPlan(files []recFile, pol map[string]recPolicy, d recDisk, normalPct int
 	sorted := append([]recFile(nil), files...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Start.Before(sorted[j].Start) })
 	newest := map[string]int64{} // cam -> ID file Start lớn nhất (kể cả held)
+	sum := map[string]int64{}    // cam -> tổng byte file thường còn lại
+	var total int64              // tổng byte file thường còn lại, mọi cam
 	for _, f := range sorted {
 		newest[f.Cam] = f.ID
+		if !f.Held {
+			sum[f.Cam] += f.Bytes
+			total += f.Bytes
+		}
 	}
 	gone := map[int64]bool{}
 	var freed int64
 	del := func(f recFile) {
 		gone[f.ID] = true
 		freed += f.Bytes
+		sum[f.Cam] -= f.Bytes
+		total -= f.Bytes
 		dec.Delete = append(dec.Delete, f.ID)
 	}
-	// oldest: file thường còn lại cũ nhất thoả cam ("" = mọi cam) và điều kiện bỏ file mới nhất.
-	oldest := func(cam string, keepNewest bool) (recFile, bool) {
-		for _, f := range sorted {
-			if f.Held || gone[f.ID] || cam != "" && f.Cam != cam || keepNewest && newest[f.Cam] == f.ID {
-				continue
+	// cursor: lần lượt file thường còn lại từ cũ tới mới thoả cam ("" = mọi cam), bỏ file mới nhất nếu keepNewest.
+	// Chỉ đi tới: trong một quy tắc, file đã bỏ qua không đổi trạng thái (gone chỉ tăng).
+	cursor := func(cam string, keepNewest bool) func() (recFile, bool) {
+		i := 0
+		return func() (recFile, bool) {
+			for ; i < len(sorted); i++ {
+				f := sorted[i]
+				if f.Held || gone[f.ID] || cam != "" && f.Cam != cam || keepNewest && newest[f.Cam] == f.ID {
+					continue
+				}
+				i++
+				return f, true
 			}
-			return f, true
+			return recFile{}, false
 		}
-		return recFile{}, false
 	}
-	normalSum := func(cam string) (n int64) {
-		for _, f := range sorted {
-			if !f.Held && !gone[f.ID] && (cam == "" || f.Cam == cam) {
-				n += f.Bytes
-			}
-		}
-		return
-	}
-	// 1. không còn được muốn
+	// 1. không còn được muốn: chỉ file bắt đầu từ lúc đổi chế độ (đổi chế độ không xoá hình đã ghi trước đó)
 	cams := []string{}
 	for c := range newest {
 		cams = append(cams, c)
@@ -190,15 +230,16 @@ func recPlan(files []recFile, pol map[string]recPolicy, d recDisk, normalPct int
 	sort.Strings(cams)
 	for _, f := range sorted {
 		p, ok := pol[f.Cam]
-		if !f.Held && newest[f.Cam] != f.ID && ok && !recWanted(p, f) {
+		if !f.Held && newest[f.Cam] != f.ID && ok && !f.Start.Before(p.Since) && !recWanted(p, f) {
 			del(f)
 		}
 	}
 	// 2. hạn mức từng camera
 	for _, c := range cams {
 		if lim := pol[c].LimitBytes; lim > 0 {
-			for normalSum(c) > lim {
-				f, ok := oldest(c, true)
+			next := cursor(c, true)
+			for sum[c] > lim {
+				f, ok := next()
 				if !ok {
 					break
 				}
@@ -207,16 +248,18 @@ func recPlan(files []recFile, pol map[string]recPolicy, d recDisk, normalPct int
 		}
 	}
 	// 3. phần trăm ổ cho file thường
-	for normalSum("")*100 > int64(normalPct)*d.Total {
-		f, ok := oldest("", true)
+	next := cursor("", true)
+	for total*100 > int64(normalPct)*d.Total {
+		f, ok := next()
 		if !ok {
 			break
 		}
 		del(f)
 	}
 	// 4. ổ gần đầy: xoá cả file mới nhất
+	next = cursor("", false)
 	for (d.Free+freed)*100 < 2*d.Total {
-		f, ok := oldest("", false)
+		f, ok := next()
 		if !ok {
 			dec.Stop = true
 			break

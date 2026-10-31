@@ -39,6 +39,7 @@ type camRec struct {
 	RecMode    string      `json:"rec_mode"`
 	RecWindows []recWindow `json:"rec_windows,omitempty"`
 	RecLimitGB float64     `json:"rec_limit_gb"`
+	RecSince   int64       `json:"rec_since"` // mili giây Unix lúc đổi chế độ/khung giờ; hub tự đặt, giao diện không sửa
 }
 
 var (
@@ -191,13 +192,16 @@ func camGet(db *DB, id string) (camRec, bool, error) {
 
 // camSave: id rỗng = thêm mới (id sinh từ tên), có id = sửa. zoneOK kiểm khu vực theo cấu hình đang chạy.
 // Pass rỗng khi sửa = giữ mật khẩu cũ, trừ khi đổi Host (cùng quy tắc nvrPatch: không gửi mật khẩu cũ tới máy khác).
+// RecSince do hub đặt (bỏ giá trị gửi lên): lúc thêm và mỗi lần đổi chế độ hoặc khung giờ ghi.
 func camSave(db *DB, c camRec, zoneOK func(string) bool) (camRec, error) {
 	if err := c.validate(zoneOK); err != nil {
 		return c, err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	now := time.Now().UnixMilli()
 	if c.ID == "" {
+		c.RecSince = now
 		base := "cam_" + camSlug(c.Name)
 		if base == "cam_" || nvrCamID.MatchString(base) {
 			base += "_cam"
@@ -230,6 +234,10 @@ func camSave(db *DB, c camRec, zoneOK func(string) bool) (camRec, error) {
 	if c.Pass == "" && c.Host == old.Host {
 		c.Pass = old.Pass
 	}
+	c.RecSince = old.RecSince
+	if c.RecMode != old.RecMode || !slices.Equal(c.RecWindows, old.RecWindows) {
+		c.RecSince = now
+	}
 	raw, _ := json.Marshal(c)
 	_, err = db.sql.Exec(`UPDATE cameras SET data = ? WHERE id = ?`, string(raw), c.ID)
 	return c, err
@@ -252,7 +260,7 @@ func (c camRec) view() map[string]any {
 		"id": c.ID, "name": c.Name, "zone": c.Zone, "kind": c.Kind, "host": c.Host,
 		"http_port": c.HTTPPort, "rtsp_port": c.RTSPPort, "user": c.User,
 		"main_path": c.MainPath, "sub_path": c.SubPath, "pass_set": c.Pass != "",
-		"rec_mode": c.RecMode, "rec_windows": c.RecWindows, "rec_limit_gb": c.RecLimitGB,
+		"rec_mode": c.RecMode, "rec_windows": c.RecWindows, "rec_limit_gb": c.RecLimitGB, "rec_since": c.RecSince,
 	}
 }
 
@@ -490,7 +498,7 @@ func camPolicies(db *DB) map[string]recPolicy {
 	out := map[string]recPolicy{}
 	cams, _ := camList(db)
 	for _, c := range cams {
-		p := recPolicy{Mode: c.RecMode, Windows: c.RecWindows, LimitBytes: int64(c.RecLimitGB * 1e9)}
+		p := recPolicy{Mode: c.RecMode, Windows: c.RecWindows, LimitBytes: int64(c.RecLimitGB * 1e9), Since: time.UnixMilli(c.RecSince)}
 		if p.Mode == "" {
 			p.Mode = "always"
 		}

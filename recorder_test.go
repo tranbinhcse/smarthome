@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -159,6 +160,14 @@ func TestRecorderWritesAndIndexes(t *testing.T) {
 	all, _ := filepath.Glob(filepath.Join(e.dir, "*", "*", "*.mp4"))
 	if len(all) != len(files) || sum != onDisk || mdat != 6*5*1000 {
 		t.Fatalf("trên đĩa %d file %d byte, chỉ mục %d file %d byte, mdat %d", len(all), onDisk, len(files), sum, mdat)
+	}
+	// chỉ mục GOP lưu lúc ghi trùng với quét file
+	for _, f := range files {
+		idx, ok := recIndexOf(e.db, f.ID)
+		init, gops, err := recScan(f.Path)
+		if !ok || err != nil || idx.Init != init || !reflect.DeepEqual(idx.GOPs, gops) {
+			t.Fatalf("%s: chỉ mục lưu %v %+v, quét %d %+v (%v)", f.Path, ok, idx, init, gops, err)
+		}
 	}
 }
 
@@ -626,4 +635,120 @@ func TestRecorderWriteFailsMidFile(t *testing.T) {
 	recv(t, reqs, "ghi lại sau lần kiểm ổ")
 	e.stop()
 	noneIn(t, e.notes, "báo thêm")
+}
+
+// recUnit: bộ ghi không chạy vòng kiểm, để gọi thẳng finished/retain/KeepAround.
+func recUnit(t *testing.T, disk func() recDisk) *recorder {
+	return newRecorder(newDB(t), nil, t.TempDir(), disk, func() []recSource { return nil },
+		func() map[string]recPolicy { return nil }, func(string, string, string) {})
+}
+
+func (r *recorder) pending() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.holds)
+}
+
+// Camera ghi chậm (file 50 MB dài hơn 10 phút): báo động lúc t, camera khác ghi xong file suốt 11 phút sau đó; file
+// đang ghi của camera báo động vẫn phải được giữ khi xong. Lệnh giữ chỉ bỏ khi chính camera đó có file kết thúc sau
+// t+30 s, hoặc quá 6 giờ.
+func TestRecorderPendingHoldSurvivesOtherCameras(t *testing.T) {
+	r := recUnit(t, diskOK)
+	alarm := time.Now()
+	r.KeepAround("cam_a", alarm)
+	r.mu.Lock()
+	r.holds[0].at = alarm.Add(-11 * time.Minute) // báo động đã 11 phút
+	r.mu.Unlock()
+	for i := range 3 {
+		s := alarm.Add(time.Duration(i) * 4 * time.Minute)
+		r.finished("cam_b", recSeg{Path: fmt.Sprint("b", i), Start: s, End: s.Add(4 * time.Minute), Bytes: 1})
+	}
+	r.finished("cam_a", recSeg{Path: "a_dai", Start: alarm.Add(-5 * time.Minute), End: alarm.Add(12 * time.Minute), Bytes: 1})
+	files, _ := recAll(r.db)
+	for _, f := range files {
+		if f.Held != (f.Path == "a_dai") {
+			t.Errorf("%s held=%v", f.Path, f.Held)
+		}
+	}
+	if n := r.pending(); n != 0 {
+		t.Fatalf("còn %d lệnh giữ sau khi file của camera đã qua t+30 s", n)
+	}
+	// quá 6 giờ thì bỏ, kể cả khi camera đó chưa ghi xong file nào
+	r.KeepAround("cam_c", alarm)
+	r.mu.Lock()
+	r.holds[0].at = alarm.Add(-7 * time.Hour)
+	r.mu.Unlock()
+	r.finished("cam_b", recSeg{Path: "b_sau", Start: alarm.Add(time.Hour), End: alarm.Add(time.Hour + time.Minute), Bytes: 1})
+	if n := r.pending(); n != 0 {
+		t.Fatalf("lệnh giữ 7 giờ chưa bỏ: %d", n)
+	}
+}
+
+// Mỗi lần dọn xoá tối đa 100 file (lần sau làm tiếp): 400 file 10 byte, ổ 3125 byte, 80% = 2500 byte, cần xoá 150.
+func TestRecRetainCapsDeletions(t *testing.T) {
+	r := recUnit(t, func() recDisk { return recDisk{OK: true, Total: 3125, Free: 2000} })
+	b := time.Unix(1_000_000, 0)
+	var paths []string
+	for i := range 400 {
+		p := filepath.Join(r.dir, fmt.Sprintf("%03d.mp4", i))
+		os.WriteFile(p, []byte("x"), 0o644)
+		paths = append(paths, p)
+		if _, err := recAdd(r.db, recFile{Cam: "cam_a", Path: p, Start: b.Add(time.Duration(i) * time.Second), End: b.Add(time.Duration(i+1) * time.Second), Bytes: 10}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for pass, left := range []int{300, 250} {
+		r.retain()
+		files, _ := recAll(r.db)
+		if len(files) != left || files[0].Path != paths[400-left] {
+			t.Fatalf("lần %d: còn %d dòng (muốn %d), cũ nhất %s", pass+1, len(files), left, files[0].Path)
+		}
+		for i, p := range paths {
+			if _, err := os.Stat(p); (err == nil) != (i >= 400-left) {
+				t.Fatalf("lần %d: file %s còn=%v", pass+1, p, err == nil)
+			}
+		}
+	}
+}
+
+// Ghi chỉ mục và dọn ổ lâu hơn hạn luồng đứng (ổ chậm, xoá nhiều file) không được tính là luồng đứng.
+func TestRecorderSlowFinishedNotStalled(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	slow := func() recDisk { time.Sleep(300 * time.Millisecond); return diskOK() }
+	stream := fakeFMP4("hev1", uniformGOPs(2, 3, 500))
+	g2, reqs := fakeG2(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		if n == 1 {
+			w.Write(stream) // luồng hết gọn: file cuối xong, finished chạy 300 ms
+			return
+		}
+		http.Error(w, "thôi", 500) // không ra file: chờ lần kiểm, không nối dồn
+	})
+	e := startRec(t, g2, []recSource{{ID: "cam_a", URL: "rtsp://x/y"}}, slow, func(r *recorder) { r.idle = 100 * time.Millisecond })
+	recv(t, reqs, "yêu cầu đầu")
+	recv(t, reqs, "nối lại sau khi file xong")
+	e.stop()
+	if files, _ := recAll(e.db); len(files) != 1 {
+		t.Fatalf("muốn 1 file: %+v", files)
+	}
+	if strings.Contains(buf.String(), "luồng đứng") {
+		t.Fatalf("finished chậm bị tính là luồng đứng: %q", buf.String())
+	}
+}
+
+// Khởi động mà ổ không đạt nhưng chỉ mục đã có file (ổ USB chưa gắn sau mất điện): báo một lần. Chỉ mục trống thì
+// không báo (TestRecorderDiskNotOKNoRequests).
+func TestRecorderStartupDiskMissingWithFootage(t *testing.T) {
+	disk := func() recDisk { return recDisk{Reason: recOnSys} }
+	e := startRec(t, &url.URL{Scheme: "http", Host: "127.0.0.1:1"}, nil, disk, func(r *recorder) {
+		recAdd(r.db, recFile{Cam: "cam_a", Path: "/khong/co.mp4", Start: time.Unix(1000, 0), End: time.Unix(1100, 0), Bytes: 1})
+	})
+	if n := recv(t, e.notes, "báo mất ổ lúc khởi động"); n != "warn|luu_tru|"+recOnSys {
+		t.Fatalf("báo %q", n)
+	}
+	e.tick <- time.Now()
+	e.tick <- time.Now()
+	e.stop()
+	noneIn(t, e.notes, "báo lại")
 }

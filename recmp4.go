@@ -20,6 +20,7 @@ type recSeg struct {
 	Path       string
 	Start, End time.Time
 	Bytes      int64
+	Index      recIndex // chỉ mục GOP của file, khớp recScan
 }
 
 type box struct {
@@ -233,7 +234,9 @@ type recWriter struct {
 	head  []byte // ftyp+moov (đã sửa hvc1)
 	video uint32
 	trex  map[uint32]uint32
-	seen  bool // đã gặp keyframe hình
+	scale float64           // timescale track hình (moovInfo)
+	tdur  map[uint32]uint32 // default_sample_duration của trex
+	seen  bool              // đã gặp keyframe hình
 
 	w     io.WriteCloser // file đang mở
 	seg   recSeg
@@ -245,6 +248,10 @@ type recWriter struct {
 	in    bool              // đang trong một GOP
 	spill bool              // GOP này đã ghi bớt vì vượt recGopCap
 	err   error             // lỗi ghi: dừng hẳn
+
+	// chỉ mục GOP đang mở, tính như recScan: gopN byte đã nhận, gopEnd = cuối cặp hình gần nhất, gopDur giây
+	gopN, gopEnd int64
+	gopDur       float64
 }
 
 func (s *recWriter) pair(moof, mdat []byte) error {
@@ -272,6 +279,13 @@ func (s *recWriter) pair(moof, mdat []byte) error {
 		}
 	}
 	s.buf = append(append(s.buf, moof...), mdat...)
+	s.gopN += int64(len(moof) + len(mdat))
+	for _, t := range ts {
+		if t.track == s.video {
+			s.gopEnd = s.gopN
+			s.gopDur += float64(moofDur(moof, s.video, s.tdur[s.video])) / s.scale
+		}
+	}
 	if len(s.buf) > recGopCap {
 		// lần ghi bớt đầu tiên: chưa biết GOP sẽ dài tới đâu, nên file đã có dữ liệu thì đóng, GOP sang file mới
 		if !s.spill && s.w != nil && s.data {
@@ -301,6 +315,9 @@ func (s *recWriter) endGOP(t time.Time) error {
 			return err
 		}
 	}
+	// cả GOP đã nằm liền trong file đang mở (GOP ghi bớt không đổi file giữa chừng)
+	s.seg.Index.GOPs = append(s.seg.Index.GOPs, recGOP{Off: s.seg.Bytes - s.gopN, Len: s.gopEnd, Dur: s.gopDur})
+	s.gopN, s.gopEnd, s.gopDur = 0, 0, 0
 	s.spill = false
 	return nil
 }
@@ -321,7 +338,7 @@ func (s *recWriter) write() (err error) {
 			return err
 		}
 		s.w, s.base, s.data = w, map[uint32]uint64{}, false
-		s.seg = recSeg{Path: path, Start: s.gop}
+		s.seg = recSeg{Path: path, Start: s.gop, Index: recIndex{Init: int64(len(s.head))}}
 		n, err := w.Write(s.head)
 		s.seg.Bytes += int64(n)
 		if err != nil {
@@ -404,6 +421,7 @@ func (s *recWriter) run(r io.Reader) error {
 			s.head = append(s.head, b...)
 		case "moov":
 			s.video, s.trex = rewriteMoov(b)
+			s.scale, s.tdur = moovInfo(b, s.video)
 			s.head = append(s.head, b...)
 		case "moof":
 			moof = b

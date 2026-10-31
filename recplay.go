@@ -14,8 +14,9 @@ import (
 // Xem lại: quét file fMP4 thành các GOP, dựng playlist HLS byte range và đoạn đã ghi theo ngày.
 
 type recGOP struct {
-	Off, Len int64
-	Dur      float64 // giây
+	Off int64   `json:"o"`
+	Len int64   `json:"l"`
+	Dur float64 `json:"d"` // giây
 }
 
 // recScan đọc đầu box của file, không đọc mdat. init = ftyp+moov; mỗi GOP là các cặp moof+mdat liền nhau từ một
@@ -236,9 +237,14 @@ func mountRecPlay(mux *http.ServeMux, db *DB, a *Auth) {
 		var sb strings.Builder
 		longest, n := 0.0, 0
 		for _, f := range files {
-			initLen, gops, err := recScan(f.Path) // file mất hay hỏng thì bỏ qua
-			if err != nil {
-				continue
+			// chỉ mục lưu lúc ghi; chỉ file nhận nuôi (không có chỉ mục) mới phải quét. File mất hay hỏng thì bỏ qua
+			idx, ok := recIndexOf(db, f.ID)
+			initLen, gops := idx.Init, idx.GOPs
+			if !ok {
+				var err error
+				if initLen, gops, err = recScan(f.Path); err != nil {
+					continue
+				}
 			}
 			t, first := f.Start.UnixMilli(), true
 			for _, g := range gops {

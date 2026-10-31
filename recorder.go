@@ -116,8 +116,12 @@ func (r *recorder) run(ctx context.Context) {
 		defer t.Stop()
 		tick = t.C
 	}
-	for {
-		r.check(ctx)
+	for first := true; ; first = false {
+		// khởi động mà ổ không đạt nhưng đã từng ghi (ổ USB chưa gắn sau mất điện): báo một lần; chưa ghi bao giờ thì thôi
+		if d := r.check(ctx); first && !d.OK && r.hasFiles() {
+			log.Print("ghi hình: ổ không đạt lúc khởi động")
+			r.notify("warn", "luu_tru", d.Reason)
+		}
 		select {
 		case <-ctx.Done():
 			r.wg.Wait()
@@ -158,9 +162,16 @@ func (r *recorder) adopt() {
 	}
 }
 
+func (r *recorder) hasFiles() bool {
+	var n int
+	r.db.mu.Lock()
+	defer r.db.mu.Unlock()
+	return r.db.sql.QueryRow(`SELECT EXISTS(SELECT 1 FROM recordings)`).Scan(&n) == nil && n == 1
+}
+
 // check: lần kiểm 60 giây. Ổ không đạt thì dừng mọi luồng (báo khi vừa chuyển từ đạt), đang dừng vì đầy thì thôi,
 // còn lại mở luồng thiếu và đóng luồng thừa.
-func (r *recorder) check(ctx context.Context) {
+func (r *recorder) check(ctx context.Context) recDisk {
 	d := r.retain()
 	r.mu.Lock()
 	was := r.ok
@@ -177,10 +188,15 @@ func (r *recorder) check(ctx context.Context) {
 	if open {
 		r.sync(ctx)
 	}
+	return d
 }
 
-// retain: kiểm ổ, chạy recPlan, xoá file trong Delete (không xoá được thì giữ dòng). Stop thì dừng mọi luồng và báo
-// một lần; đang dừng mà ổ còn trống từ 3% thì cho ghi lại.
+// recDelMax: số file xoá tối đa mỗi lần dọn; phần còn lại để lần sau (mỗi file xong và mỗi lần kiểm 60 giây đều dọn),
+// để các luồng chờ r.plan không bị chặn lâu khi phải xoá hàng nghìn file (hạ % dùng tối đa, đặt giới hạn GB nhỏ).
+const recDelMax = 100
+
+// retain: kiểm ổ, chạy recPlan, xoá tối đa recDelMax file trong Delete (không xoá được thì giữ dòng). Stop thì dừng mọi
+// luồng và báo một lần; đang dừng mà ổ còn trống từ 3% thì cho ghi lại.
 func (r *recorder) retain() recDisk {
 	r.plan.Lock()
 	defer r.plan.Unlock()
@@ -198,6 +214,9 @@ func (r *recorder) retain() recDisk {
 		path[f.ID] = f.Path
 	}
 	dec := recPlan(files, r.policies(), d, recNormalPct(r.db))
+	if len(dec.Delete) > recDelMax {
+		dec.Delete = dec.Delete[:recDelMax]
+	}
 	var gone []int64
 	for _, id := range dec.Delete {
 		if err := os.Remove(path[id]); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -367,7 +386,9 @@ func (r *recorder) once(ctx context.Context, s recSource) (files int, bad bool) 
 		return recOut{w, &bad}, p, nil
 	}, time.Now, func(seg recSeg) {
 		files++
+		idle.Stop() // ghi chỉ mục, chờ r.plan và dọn ổ không phải luồng đứng
 		r.finished(s.ID, seg)
+		idle.Reset(r.idle)
 	})
 	switch {
 	case bad:
@@ -445,11 +466,12 @@ func (r *recorder) writeFailed() {
 	}
 }
 
-// finished: file xong thì vào chỉ mục và áp lệnh giữ đang chờ phủ file này (cùng dưới r.plan: quy tắc xoá không chen vào
-// giữa), rồi chạy quy tắc xoá. Lệnh giữ bỏ khi đã có file của camera kết thúc sau khoảng giữ, hoặc sau 10 phút.
+// finished: file xong thì vào chỉ mục (kèm chỉ mục GOP) và áp lệnh giữ đang chờ phủ file này (cùng dưới r.plan: quy tắc
+// xoá không chen vào giữa), rồi chạy quy tắc xoá. Lệnh giữ chỉ bỏ khi chính camera đó có file kết thúc sau khoảng giữ
+// (file camera khác không tính: camera ghi chậm có file dài hơn 10 phút), hoặc sau 6 giờ.
 func (r *recorder) finished(cam string, s recSeg) {
 	r.plan.Lock()
-	if _, err := recAdd(r.db, recFile{Cam: cam, Path: s.Path, Start: s.Start, End: s.End, Bytes: s.Bytes}); err != nil {
+	if _, err := recAdd(r.db, recFile{Cam: cam, Path: s.Path, Start: s.Start, End: s.End, Bytes: s.Bytes, Index: &s.Index}); err != nil {
 		log.Printf("ghi hình %s: không ghi được chỉ mục", cam) // file mồ côi: lần khởi động sau sẽ thêm lại
 	}
 	now := time.Now()
@@ -460,7 +482,7 @@ func (r *recorder) finished(cam string, s recSeg) {
 		if h.cam == cam && !s.Start.After(h.to) && !s.End.Before(h.from) {
 			apply = append(apply, h)
 		}
-		if h.cam == cam && s.End.After(h.to) || now.Sub(h.at) > 10*time.Minute {
+		if h.cam == cam && s.End.After(h.to) || now.Sub(h.at) > 6*time.Hour {
 			continue
 		}
 		keep = append(keep, h)

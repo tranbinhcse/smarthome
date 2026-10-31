@@ -33,6 +33,16 @@ CREATE INDEX IF NOT EXISTS recordings_cam_start ON recordings(cam, start);`)
 	if err != nil {
 		return nil, err
 	}
+	// cột thêm sau: DB cũ chưa có thì thêm (chỉ mục GOP của file ghi hình, JSON; NULL = phải quét file)
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name = 'gops'`).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		if _, err := d.Exec(`ALTER TABLE recordings ADD COLUMN gops TEXT`); err != nil {
+			return nil, err
+		}
+	}
 	return &DB{sql: d, lt: map[string]time.Time{}}, nil
 }
 
