@@ -106,7 +106,8 @@ func TestRecPlanSweepNeverDeletesHeld(t *testing.T) {
 		name string
 		at   time.Time
 	}
-	sinces := []since{{"truoc", recT(2, 0)}, {"giua", recT(3, 0).Add(150 * time.Second)}, {"sau", recT(4, 0)}}
+	// "bang": since trùng đúng Start của file 2, file đó tính là "từ since" (biên của !Start.Before(Since))
+	sinces := []since{{"truoc", recT(2, 0)}, {"giua", recT(3, 0).Add(150 * time.Second)}, {"bang", recT(3, 0).Add(200 * time.Second)}, {"sau", recT(4, 0)}}
 	n, stops := 0, 0
 	for _, mode := range recModes {
 		for _, held := range heldSet {

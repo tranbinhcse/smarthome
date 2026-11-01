@@ -369,46 +369,95 @@ func TestRecPlaylistStoredIndex(t *testing.T) {
 	var keep []string
 	for _, f := range []recFile{f1, f2} {
 		var raw string
-		db.sql.QueryRow(`SELECT gops FROM recordings WHERE id = ?`, f.ID).Scan(&raw)
+		db.sql.QueryRow(`SELECT gops FROM recording_gops WHERE id = ?`, f.ID).Scan(&raw)
 		keep = append(keep, raw)
 	}
-	db.sql.Exec(`UPDATE recordings SET gops = NULL`)
+	db.sql.Exec(`DELETE FROM recording_gops`)
 	if scanned := call(mux, "GET", u, "", "", ck...).Body.String(); scanned != stored.Body.String() {
 		t.Fatalf("playlist quét khác playlist từ chỉ mục:\n%s\n---\n%s", scanned, stored.Body)
 	}
+	// file còn nhưng nội dung hỏng: có chỉ mục thì không quét file, playlist vẫn y như cũ
 	for i, f := range []recFile{f1, f2} {
-		db.sql.Exec(`UPDATE recordings SET gops = ? WHERE id = ?`, keep[i], f.ID)
-		os.Remove(f.Path)
+		db.sql.Exec(`INSERT INTO recording_gops(id, gops) VALUES(?, ?)`, f.ID, keep[i])
+		os.WriteFile(f.Path, []byte("hỏng"), 0o600)
 	}
 	if w := call(mux, "GET", u, "", "", ck...); w.Code != 200 || w.Body.String() != stored.Body.String() {
 		t.Fatalf("có chỉ mục mà vẫn đọc file: %d\n%s", w.Code, w.Body)
 	}
 }
 
-// DB cũ (bảng recordings chưa có cột gops) mở lại được: thêm cột, dòng cũ không có chỉ mục; mở lần nữa không lỗi.
-func TestOpenDBAddsGOPColumn(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cu.db")
-	old, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
+// File đã mất khỏi đĩa (ổ thay, chưa gắn) thì playlist bỏ qua nó, vẫn phát các file còn lại; mất hết thì 404.
+func TestRecPlaylistSkipsMissingFile(t *testing.T) {
+	mux, db, ck := playMux(t)
+	t0 := time.Date(2026, 10, 30, 10, 0, 0, 0, tgICT)
+	f1, _ := recFxIdx(t, db, "cam1", t0, uniformGOPs(3, 30, 100), true)
+	f2, _ := recFxIdx(t, db, "cam1", t0.Add(3*time.Second), uniformGOPs(2, 30, 100), true)
+	u := fmt.Sprintf("/api/cam/cam1/rec.m3u8?from=%d&to=%d", t0.UnixMilli(), f2.End.UnixMilli())
+	os.Remove(f1.Path)
+	w := call(mux, "GET", u, "", "", ck...)
+	b := w.Body.String()
+	if w.Code != 200 || strings.Count(b, "#EXT-X-MAP") != 1 || strings.Contains(b, fmt.Sprintf("rec/%d.mp4", f1.ID)) ||
+		strings.Count(b, fmt.Sprintf("rec/%d.mp4", f2.ID)) != 3 || strings.Contains(b, "#EXT-X-DISCONTINUITY") {
+		t.Fatalf("%d\n%s", w.Code, b)
 	}
-	if _, err := old.Exec(`CREATE TABLE recordings(id INTEGER PRIMARY KEY, cam TEXT NOT NULL, path TEXT NOT NULL UNIQUE, start INTEGER NOT NULL, end INTEGER NOT NULL, bytes INTEGER NOT NULL, held INTEGER NOT NULL DEFAULT 0);
-INSERT INTO recordings(cam, path, start, end, bytes) VALUES('c', 'p', 1, 2, 3);`); err != nil {
-		t.Fatal(err)
+	os.Remove(f2.Path)
+	if w := call(mux, "GET", u, "", "", ck...); w.Code != 404 {
+		t.Fatalf("mất hết file: %d, muốn 404", w.Code)
 	}
-	old.Close()
-	for range 2 {
-		db, err := OpenDB(path)
+}
+
+// Chỉ mục GOP nằm ở bảng riêng recording_gops (bảng recordings giữ hẹp cho lượt dọn file). Mở được cả hai dạng DB cũ:
+// recordings chưa có cột gops (trước 2B), và có cột gops (bản 2B đầu, 24a0b16): chuyển chỉ mục sang bảng riêng, bỏ cột.
+// Mở lần nữa không lỗi; recRemove xoá cả chỉ mục.
+func TestOpenDBMovesGOPIndex(t *testing.T) {
+	const tbl = `CREATE TABLE recordings(id INTEGER PRIMARY KEY, cam TEXT NOT NULL, path TEXT NOT NULL UNIQUE, start INTEGER NOT NULL, end INTEGER NOT NULL, bytes INTEGER NOT NULL, held INTEGER NOT NULL DEFAULT 0`
+	cases := []struct {
+		name, schema string
+		want         bool // dòng 1 có chỉ mục sau khi mở
+	}{
+		{"chua-co-cot", tbl + `);
+INSERT INTO recordings(cam, path, start, end, bytes) VALUES('c', 'p', 1, 2, 3);`, false},
+		{"co-cot-gops", tbl + `, gops TEXT);
+INSERT INTO recordings(cam, path, start, end, bytes, gops) VALUES('c', 'p', 1, 2, 3, '{"init":5,"gops":[{"o":5,"l":8,"d":2}]}');
+INSERT INTO recordings(cam, path, start, end, bytes, gops) VALUES('c', 'p2', 4, 5, 6, NULL);`, true},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "cu.db")
+		old, err := sql.Open("sqlite", path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := recIndexOf(db, 1); ok {
-			t.Fatal("dòng cũ không được có chỉ mục")
+		if _, err := old.Exec(c.schema); err != nil {
+			t.Fatal(c.name, err)
 		}
-		id, err := recAdd(db, recFile{Cam: "c", Path: fmt.Sprint("q", time.Now().UnixNano()), Index: &recIndex{Init: 7, GOPs: []recGOP{{7, 9, 2.5}}}})
-		if x, ok := recIndexOf(db, id); err != nil || !ok || x.Init != 7 || len(x.GOPs) != 1 || x.GOPs[0] != (recGOP{7, 9, 2.5}) {
-			t.Fatalf("dòng mới: %v %v %+v", err, ok, x)
+		old.Close()
+		for range 2 {
+			db, err := OpenDB(path)
+			if err != nil {
+				t.Fatal(c.name, err)
+			}
+			x, ok := recIndexOf(db, 1)
+			if ok != c.want || ok && (x.Init != 5 || len(x.GOPs) != 1 || x.GOPs[0] != (recGOP{5, 8, 2})) {
+				t.Fatalf("%s: chỉ mục dòng cũ %v %+v", c.name, ok, x)
+			}
+			var cols int
+			db.sql.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name = 'gops'`).Scan(&cols)
+			if cols != 0 {
+				t.Fatalf("%s: recordings vẫn còn cột gops", c.name)
+			}
+			id, err := recAdd(db, recFile{Cam: "c", Path: fmt.Sprint("q", time.Now().UnixNano()), Index: &recIndex{Init: 7, GOPs: []recGOP{{7, 9, 2.5}}}})
+			if x, ok := recIndexOf(db, id); err != nil || !ok || x.Init != 7 || len(x.GOPs) != 1 || x.GOPs[0] != (recGOP{7, 9, 2.5}) {
+				t.Fatalf("%s: dòng mới: %v %v %+v", c.name, err, ok, x)
+			}
+			if err := recRemove(db, []int64{id}); err != nil {
+				t.Fatal(err)
+			}
+			var left int
+			db.sql.QueryRow(`SELECT COUNT(*) FROM recording_gops WHERE id = ?`, id).Scan(&left)
+			if _, ok := recIndexOf(db, id); ok || left != 0 {
+				t.Fatalf("%s: recRemove để sót chỉ mục", c.name)
+			}
+			db.sql.Close()
 		}
-		db.sql.Close()
 	}
 }

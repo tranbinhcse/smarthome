@@ -19,7 +19,7 @@ type recFile struct {
 	Index      *recIndex // chỉ ghi qua recAdd; recQuery không đọc (nặng). nil = file nhận nuôi
 }
 
-// recIndex: chỉ mục GOP của một file (vị trí tính từ đầu file), lưu cùng dòng lúc ghi để playlist không phải quét file.
+// recIndex: chỉ mục GOP của một file (vị trí tính từ đầu file), lưu lúc ghi ở bảng recording_gops để playlist không phải quét file.
 type recIndex struct {
 	Init int64    `json:"init"`
 	GOPs []recGOP `json:"gops"`
@@ -61,12 +61,26 @@ func recAdd(db *DB, f recFile) (int64, error) {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	r, err := db.sql.Exec(`INSERT INTO recordings(cam, path, start, end, bytes, held, gops) VALUES(?,?,?,?,?,?,?)`,
-		f.Cam, f.Path, f.Start.UnixMilli(), f.End.UnixMilli(), f.Bytes, f.Held, gops)
+	tx, err := db.sql.Begin()
 	if err != nil {
 		return 0, err
 	}
-	return r.LastInsertId()
+	defer tx.Rollback()
+	r, err := tx.Exec(`INSERT INTO recordings(cam, path, start, end, bytes, held) VALUES(?,?,?,?,?,?)`,
+		f.Cam, f.Path, f.Start.UnixMilli(), f.End.UnixMilli(), f.Bytes, f.Held)
+	if err != nil {
+		return 0, err
+	}
+	id, err := r.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if gops != nil {
+		if _, err := tx.Exec(`INSERT INTO recording_gops(id, gops) VALUES(?, ?)`, id, gops); err != nil {
+			return 0, err
+		}
+	}
+	return id, tx.Commit()
 }
 
 func recQuery(db *DB, where string, args ...any) ([]recFile, error) {
@@ -96,7 +110,7 @@ func recIndexOf(db *DB, id int64) (recIndex, bool) {
 	defer db.mu.Unlock()
 	var raw sql.NullString
 	var x recIndex
-	if db.sql.QueryRow(`SELECT gops FROM recordings WHERE id = ?`, id).Scan(&raw) != nil || !raw.Valid ||
+	if db.sql.QueryRow(`SELECT gops FROM recording_gops WHERE id = ?`, id).Scan(&raw) != nil || !raw.Valid ||
 		json.Unmarshal([]byte(raw.String), &x) != nil {
 		return recIndex{}, false
 	}
@@ -121,6 +135,9 @@ func recRemove(db *DB, ids []int64) error {
 	defer tx.Rollback()
 	for _, id := range ids {
 		if _, err := tx.Exec(`DELETE FROM recordings WHERE id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM recording_gops WHERE id = ?`, id); err != nil {
 			return err
 		}
 	}

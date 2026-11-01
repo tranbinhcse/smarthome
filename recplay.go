@@ -237,7 +237,11 @@ func mountRecPlay(mux *http.ServeMux, db *DB, a *Auth) {
 		var sb strings.Builder
 		longest, n := 0.0, 0
 		for _, f := range files {
-			// chỉ mục lưu lúc ghi; chỉ file nhận nuôi (không có chỉ mục) mới phải quét. File mất hay hỏng thì bỏ qua
+			// chỉ mục lưu lúc ghi; chỉ file nhận nuôi (không có chỉ mục) mới phải quét. File mất (ổ thay, chưa gắn) hay
+			// hỏng thì bỏ qua, để giờ đó vẫn phát được các file còn lại
+			if _, err := os.Stat(f.Path); err != nil {
+				continue
+			}
 			idx, ok := recIndexOf(db, f.ID)
 			initLen, gops := idx.Init, idx.GOPs
 			if !ok {

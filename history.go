@@ -29,17 +29,28 @@ CREATE TABLE IF NOT EXISTS settings(ns TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS telegram_chats(id INTEGER PRIMARY KEY, name TEXT NOT NULL, added INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS cameras(id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS recordings(id INTEGER PRIMARY KEY, cam TEXT NOT NULL, path TEXT NOT NULL UNIQUE, start INTEGER NOT NULL, end INTEGER NOT NULL, bytes INTEGER NOT NULL, held INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS recordings_cam_start ON recordings(cam, start);`)
+CREATE INDEX IF NOT EXISTS recordings_cam_start ON recordings(cam, start);
+CREATE TABLE IF NOT EXISTS recording_gops(id INTEGER PRIMARY KEY, gops TEXT NOT NULL);`)
 	if err != nil {
 		return nil, err
 	}
-	// cột thêm sau: DB cũ chưa có thì thêm (chỉ mục GOP của file ghi hình, JSON; NULL = phải quét file)
+	// Chỉ mục GOP (JSON) ở bảng riêng để bảng recordings hẹp: lượt dọn file đọc cả bảng mỗi phút. Bản 2B đầu để chỉ mục
+	// ở cột recordings.gops: còn cột đó thì chuyển sang bảng riêng rồi bỏ cột, trong một giao dịch.
 	var n int
 	if err := d.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('recordings') WHERE name = 'gops'`).Scan(&n); err != nil {
 		return nil, err
 	}
-	if n == 0 {
-		if _, err := d.Exec(`ALTER TABLE recordings ADD COLUMN gops TEXT`); err != nil {
+	if n > 0 {
+		tx, err := d.Begin()
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO recording_gops(id, gops) SELECT id, gops FROM recordings WHERE gops IS NOT NULL;
+ALTER TABLE recordings DROP COLUMN gops;`); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
 	}
