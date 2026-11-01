@@ -155,7 +155,7 @@ Hub từ chối ghi khi thư mục ghi hình nằm trên ổ hệ thống, và k
 
 **Xem lại.** Bấm camera → bảng camera → **Xem lại**: chọn ngày, thanh 24 giờ tô các đoạn đã ghi; chạm vào đoạn tô thì phát từ giờ đó, tối đa 1 giờ mỗi lần chạm (chạm tiếp để xem tiếp). Chạm chỗ trống báo "Giờ này không có hình". Chạy trên Safari (iPad, iPhone, Mac: HLS có sẵn); trình duyệt không có HLS sẵn (Chrome máy tính) chỉ hiện lời nhắc dùng Safari.
 
-Tải đo được: (đo khi triển khai)
+Tải đo được (máy thử Ryzen 7 5700G, bản 24a0b16, 2026-11-01; 5 camera Hikvision nối thẳng, luồng chính H.265 2560×1440, tổng ~3,4 Mbit/s, ổ thử loop 20 GB): `hubd` 54 → 54,5–57 MiB RAM, CPU 1,3% → 1,4–2,5% (mỗi camera ~0,6 MiB, ~0,2%); `hub-go2rtc` 96 → 128–131 MiB (mỗi camera ~7 MiB), CPU 1,3–2,6%; ghi đĩa 412 KiB/s. File đầu: 49 568 225 byte, 263,9 giây, khung đầu là keyframe, nhãn `hvc1`.
 
 
 ## Luật tự động
